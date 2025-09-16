@@ -68,7 +68,7 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
           </Avatar>
           <div>
             <p className="text-sm text-muted-foreground">Good morning</p>
-            <h1 className="text-xl font-semibold">Cristian Daron 👋</h1>
+            <h1 className="text-xl font-semibold">Kenneth Caducoy 👋</h1>
           </div>
         </div>
         <Button variant="outline" onClick={() => onPageChange("collect")}> 
