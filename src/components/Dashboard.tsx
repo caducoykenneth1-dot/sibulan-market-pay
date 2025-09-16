@@ -53,8 +53,8 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
   ];
 
   const recentPayments = [
-    { id: "001", vendor: "Maria Santos", stall: "A-15", amount: "₱500", time: "9:30 AM" },
-    { id: "001A", vendor: "Cristian Daron", stall: "F-09", amount: "₱550", time: "9:20 AM" },
+    { id: "001", vendor: "Cristian Daron", stall: "A-15", amount: "₱500", time: "9:30 AM" },
+    { id: "001A", vendor: "Xtian Dev", stall: "F-09", amount: "₱550", time: "9:20 AM" },
     { id: "002", vendor: "Juan Dela Cruz", stall: "B-08", amount: "₱750", time: "9:15 AM" },
   ];
 
