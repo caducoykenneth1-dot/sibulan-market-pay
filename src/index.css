@@ -106,6 +106,12 @@ All colors MUST be HSL.
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
   }
+}
+
+/* App-like helpers */
+@layer utilities {
+  .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 5rem); }
+  .safe-top { padding-top: env(safe-area-inset-top); }
 }

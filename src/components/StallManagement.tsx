@@ -25,7 +25,7 @@ export const StallManagement = () => {
   const stalls = [
     {
       id: "A-15",
-      vendor: "Maria Santos",
+      vendor: "Xtian Daron",
       contact: "09123456789",
       type: "Vegetables",
       monthlyRent: 500,
@@ -36,7 +36,7 @@ export const StallManagement = () => {
     },
     {
       id: "B-08",
-      vendor: "Juan Dela Cruz",
+      vendor: "Cristian Dev",
       contact: "09987654321",
       type: "Meat",
       monthlyRent: 750,
@@ -54,6 +54,18 @@ export const StallManagement = () => {
       lastPayment: "2023-12-20",
       nextDue: "2024-01-20",
       status: "overdue",
+      occupied: true
+    },
+    // Dummy stall for Cristian Daron
+    {
+      id: "F-09",
+      vendor: "Cristian Daron",
+      contact: "09112223333",
+      type: "Fruits",
+      monthlyRent: 550,
+      lastPayment: "2024-01-25",
+      nextDue: "2024-02-25",
+      status: "current",
       occupied: true
     },
     {

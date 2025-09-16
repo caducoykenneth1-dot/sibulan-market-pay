@@ -29,8 +29,31 @@ export const Navigation = ({ currentPage, onPageChange }: NavigationProps) => {
 
   return (
     <>
-      {/* Mobile Menu Button */}
-      <div className="md:hidden fixed top-4 left-4 z-50">
+      {/* Mobile Bottom Tab Bar */}
+      <div className="md:hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[92%]">
+        <div className="backdrop-blur supports-[backdrop-filter]:bg-white/70 bg-card/90 border shadow-lg rounded-2xl px-2 py-2">
+          <div className="grid grid-cols-5 gap-1">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const active = currentPage === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onPageChange(item.id)}
+                  className={`flex flex-col items-center justify-center py-2 rounded-xl transition-colors ${
+                    active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  <Icon className="h-5 w-5" />
+                  <span className="text-[11px] mt-1 font-medium">{item.label.split(' ')[0]}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      {/* Mobile Menu Button (left) */}
+      <div className="md:hidden fixed top-4 left-4 z-40">
         <Button
           variant="outline"
           size="icon"

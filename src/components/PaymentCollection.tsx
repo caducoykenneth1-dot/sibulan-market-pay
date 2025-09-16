@@ -56,6 +56,16 @@ export const PaymentCollection = () => {
       monthlyRent: 600,
       lastPayment: "2024-01-20",
       status: "overdue"
+    },
+    // Dummy stall for Cristian Daron
+    { 
+      id: "F-09", 
+      vendor: "Cristian Daron", 
+      contact: "09112223333",
+      type: "Fruits",
+      monthlyRent: 550,
+      lastPayment: "2024-01-25",
+      status: "current"
     }
   ];
 

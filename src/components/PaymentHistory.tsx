@@ -31,6 +31,19 @@ export const PaymentHistory = () => {
       status: "completed",
       collector: "Juan Collector"
     },
+    // New dummy payment for Cristian Daron
+    {
+      id: "DPM-001233A",
+      date: "2024-01-20",
+      time: "9:20 AM",
+      stallId: "F-09",
+      vendor: "Cristian Daron",
+      amount: 550,
+      type: "Monthly Rent",
+      method: "Cash",
+      status: "completed",
+      collector: "Juan Collector"
+    },
     {
       id: "DPM-001233",
       date: "2024-01-20",

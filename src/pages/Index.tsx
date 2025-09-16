@@ -27,11 +27,13 @@ const Index = () => {
   };
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <Navigation currentPage={currentPage} onPageChange={setCurrentPage} />
-      <main className="flex-1 md:ml-0 p-6">
-        {renderCurrentPage()}
-      </main>
+    <div className="min-h-screen bg-gradient-to-b from-primary/10 via-secondary/30 to-background">
+      <div className="flex max-w-5xl mx-auto px-4 md:px-6">
+        <Navigation currentPage={currentPage} onPageChange={setCurrentPage} />
+        <main className="flex-1 md:ml-0 p-4 md:p-6 pb-24">
+          {renderCurrentPage()}
+        </main>
+      </div>
     </div>
   );
 };
