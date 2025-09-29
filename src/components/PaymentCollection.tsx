@@ -1,78 +1,52 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { createInitialStalls, StallRecord } from "@/data/stalls";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { 
-  Search, 
-  Calendar, 
-  DollarSign, 
-  Receipt, 
+import {
+  Search,
+  Calendar,
+  DollarSign,
+  Receipt,
   User,
   Building2,
   CheckCircle,
   PrinterIcon
 } from "lucide-react";
 
+type PaymentData = {
+  amount: string;
+  paymentType: string;
+  notes: string;
+};
+
+const getStatusBadge = (status: StallRecord["status"]) =>
+  status === "current" ? "default" : status === "due" ? "secondary" : "destructive";
+
 export const PaymentCollection = () => {
   const { toast } = useToast();
-  const [selectedStall, setSelectedStall] = useState<any>(null);
-  const [paymentData, setPaymentData] = useState({
-    amount: '',
-    paymentType: '',
-    notes: ''
+  const [selectedStall, setSelectedStall] = useState<StallRecord | null>(null);
+  const [paymentData, setPaymentData] = useState<PaymentData>({
+    amount: "",
+    paymentType: "",
+    notes: ""
   });
   const [showReceipt, setShowReceipt] = useState(false);
 
-  // Mock stall data
-  const stalls = [
-    { 
-      id: "A-15", 
-      vendor: "Maria Santos", 
-      contact: "09123456789",
-      type: "Vegetables",
-      monthlyRent: 500,
-      lastPayment: "2024-01-15",
-      status: "current"
-    },
-    { 
-      id: "B-08", 
-      vendor: "Juan Dela Cruz", 
-      contact: "09987654321",
-      type: "Meat",
-      monthlyRent: 750,
-      lastPayment: "2024-01-10",
-      status: "due"
-    },
-    { 
-      id: "C-22", 
-      vendor: "Ana Reyes", 
-      contact: "09555666777",
-      type: "Fish",
-      monthlyRent: 600,
-      lastPayment: "2024-01-20",
-      status: "overdue"
-    },
-    // Dummy stall for Cristian Daron
-    { 
-      id: "F-09", 
-      vendor: "Cristian Daron", 
-      contact: "09112223333",
-      type: "Fruits",
-      monthlyRent: 550,
-      lastPayment: "2024-01-25",
-      status: "current"
-    }
-  ];
+  const stalls = useMemo<StallRecord[]>(() => createInitialStalls(), []);
 
   const handleStallSelect = (stallId: string) => {
-    const stall = stalls.find(s => s.id === stallId);
+    const stall = stalls.find((s) => s.id === stallId) ?? null;
     setSelectedStall(stall);
-    setPaymentData({ ...paymentData, amount: stall?.monthlyRent.toString() || '' });
+    setPaymentData((prev) => ({
+      ...prev,
+      amount: stall ? String(stall.monthlyRent) : ""
+    }));
   };
 
   const handlePaymentSubmit = () => {
@@ -88,7 +62,7 @@ export const PaymentCollection = () => {
     setShowReceipt(true);
     toast({
       title: "Payment Recorded",
-      description: `Payment of ₱${paymentData.amount} recorded for ${selectedStall.vendor}`,
+      description: `Payment of PHP ${paymentData.amount} recorded for ${selectedStall.vendor || "No vendor assigned"}`,
       variant: "default"
     });
   };
@@ -101,12 +75,12 @@ export const PaymentCollection = () => {
     });
   };
 
-  if (showReceipt) {
+  if (showReceipt && selectedStall) {
     return (
       <div className="space-y-6">
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setShowReceipt(false)}>
-            ← Back
+            <span>&lt; Back</span>
           </Button>
           <h1 className="text-2xl font-bold">Payment Receipt</h1>
         </div>
@@ -120,50 +94,53 @@ export const PaymentCollection = () => {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="text-center space-y-2">
-              <div className="text-3xl font-bold">₱{paymentData.amount}</div>
+              <div className="text-3xl font-bold">PHP {paymentData.amount}</div>
               <Badge variant="outline">Receipt #DPM-{Date.now().toString().slice(-6)}</Badge>
             </div>
 
             <div className="space-y-3 pt-4 border-t">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Stall:</span>
-                <span className="font-medium">{selectedStall?.id}</span>
+                <span className="text-muted-foreground">Stall</span>
+                <span className="font-medium text-right">
+                  {selectedStall.name}
+                  <span className="block text-xs text-muted-foreground">{selectedStall.id}</span>
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Vendor:</span>
-                <span className="font-medium">{selectedStall?.vendor}</span>
+                <span className="text-muted-foreground">Vendor</span>
+                <span className="font-medium">{selectedStall.vendor || "No vendor assigned"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Payment Type:</span>
+                <span className="text-muted-foreground">Payment Type</span>
                 <span className="font-medium">{paymentData.paymentType}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Date:</span>
-                <span className="font-medium">{new Date().toLocaleDateString()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Time:</span>
-                <span className="font-medium">{new Date().toLocaleTimeString()}</span>
+                <span className="text-muted-foreground">Processed On</span>
+                <span>{new Date().toLocaleString()}</span>
               </div>
               {paymentData.notes && (
-                <div className="flex justify-between">
+                <div className="text-sm">
                   <span className="text-muted-foreground">Notes:</span>
-                  <span className="font-medium text-right flex-1 ml-2">{paymentData.notes}</span>
+                  <span className="ml-1">{paymentData.notes}</span>
                 </div>
               )}
             </div>
 
-            <div className="flex gap-2 pt-4">
-              <Button onClick={handlePrintReceipt} className="flex-1">
+            <div className="flex gap-2">
+              <Button className="flex-1" onClick={handlePrintReceipt}>
                 <PrinterIcon className="mr-2 h-4 w-4" />
                 Print Receipt
               </Button>
-              <Button variant="outline" onClick={() => {
-                setShowReceipt(false);
-                setSelectedStall(null);
-                setPaymentData({ amount: '', paymentType: '', notes: '' });
-              }}>
-                New Payment
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => {
+                  setSelectedStall(null);
+                  setPaymentData({ amount: "", paymentType: "", notes: "" });
+                  setShowReceipt(false);
+                }}
+              >
+                Record Another
               </Button>
             </div>
           </CardContent>
@@ -190,7 +167,7 @@ export const PaymentCollection = () => {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <Label>Search by Stall ID or Vendor Name</Label>
+              <Label>Search by stall name, vendor, or ID</Label>
               <Select onValueChange={handleStallSelect}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a stall..." />
@@ -198,17 +175,15 @@ export const PaymentCollection = () => {
                 <SelectContent>
                   {stalls.map((stall) => (
                     <SelectItem key={stall.id} value={stall.id}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{stall.id}</span>
-                        <span>-</span>
-                        <span>{stall.vendor}</span>
-                        <Badge 
-                          variant={stall.status === 'current' ? 'default' : 
-                                   stall.status === 'due' ? 'secondary' : 'destructive'}
-                          className="ml-auto"
-                        >
-                          {stall.status}
-                        </Badge>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{stall.name}</span>
+                          <span className="text-sm text-muted-foreground">{stall.vendor || "No vendor assigned"}</span>
+                          <Badge variant={getStatusBadge(stall.status)} className="ml-auto">
+                            {stall.status}
+                          </Badge>
+                        </div>
+                        <span className="text-xs text-muted-foreground">{stall.id}</span>
                       </div>
                     </SelectItem>
                   ))}
@@ -220,23 +195,23 @@ export const PaymentCollection = () => {
               <Card className="bg-muted/50">
                 <CardContent className="pt-4">
                   <div className="space-y-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3">
                       <Building2 className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-medium">Stall {selectedStall.id}</span>
-                      <Badge variant={
-                        selectedStall.status === 'current' ? 'default' :
-                        selectedStall.status === 'due' ? 'secondary' : 'destructive'
-                      }>
+                      <div className="flex flex-col">
+                        <span className="font-medium">{selectedStall.name}</span>
+                        <span className="text-xs text-muted-foreground">{selectedStall.id}</span>
+                      </div>
+                      <Badge variant={getStatusBadge(selectedStall.status)} className="ml-auto">
                         {selectedStall.status}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-2">
                       <User className="h-4 w-4 text-muted-foreground" />
-                      <span>{selectedStall.vendor}</span>
+                      <span>{selectedStall.vendor || "No vendor assigned"}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <DollarSign className="h-4 w-4 text-muted-foreground" />
-                      <span>Monthly Rent: ₱{selectedStall.monthlyRent}</span>
+                      <span>Monthly Rent: PHP {selectedStall.monthlyRent}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <Calendar className="h-4 w-4 text-muted-foreground" />
@@ -259,7 +234,7 @@ export const PaymentCollection = () => {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <Label htmlFor="amount">Amount (₱)</Label>
+              <Label htmlFor="amount">Amount (PHP)</Label>
               <Input
                 id="amount"
                 type="number"
@@ -295,7 +270,7 @@ export const PaymentCollection = () => {
               />
             </div>
 
-            <Button 
+            <Button
               onClick={handlePaymentSubmit}
               className="w-full"
               disabled={!selectedStall || !paymentData.amount || !paymentData.paymentType}

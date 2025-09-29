@@ -76,7 +76,7 @@ export const Navigation = ({ currentPage, onPageChange }: NavigationProps) => {
       `}>
         <div className="p-6">
           <div className="mb-8">
-            <h2 className="text-xl font-bold text-primary">Dumaguete Public Market</h2>
+            <h2 className="text-xl font-bold text-primary">Sibulan Public Market</h2>
             <p className="text-sm text-muted-foreground">Stall Rental System</p>
           </div>
           
