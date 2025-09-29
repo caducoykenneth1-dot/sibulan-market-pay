@@ -10,7 +10,7 @@ export type StallRecord = {
   lastPayment: string;
   nextDue: string;
   status: StallStatus;
-  occupied: boolean;
+  occupied: boolean;  
 };
 
 export const BASE_TYPE_OPTIONS: string[] = [
@@ -107,7 +107,7 @@ export const formatStallDisplay = (stall: StallRecord): string => {
   return `${stall.name}${vendor}`;
 };
 
-export const getNextStallNumbers = (stalls: StallRecord[]) => {
+export const getNextStallNumbers = (stalls: StallRecord[], type?: string) => {
   const nextIdNumber =
     stalls.reduce((highest, stall) => {
       const match = /stall-(\d+)/.exec(stall.id);
@@ -117,8 +117,16 @@ export const getNextStallNumbers = (stalls: StallRecord[]) => {
       return Math.max(highest, Number(match[1]));
     }, 0) + 1;
 
+  const normalizedType = type?.trim().toLowerCase() ?? null;
+
   const nextNameNumber =
     stalls.reduce((highest, stall) => {
+      if (normalizedType !== null) {
+        const stallTypeNormalized = stall.type.trim().toLowerCase();
+        if (stallTypeNormalized !== normalizedType) {
+          return highest;
+        }
+      }
       const match = /Stall\s+(\d+)/i.exec(stall.name);
       if (!match) {
         return highest;
@@ -128,3 +136,4 @@ export const getNextStallNumbers = (stalls: StallRecord[]) => {
 
   return { nextIdNumber, nextNameNumber };
 };
+

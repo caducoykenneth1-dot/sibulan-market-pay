@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -12,9 +12,11 @@ import {
   Play,
   User
 } from "lucide-react";
+import { type StallRecord } from "@/data/stalls";
 
 interface ScheduledCollectionsProps {
   onNavigate: (page: string) => void;
+  stalls: StallRecord[];
 }
 
 type ScheduledCollectionStatus = "confirmed" | "pending" | "completed";
@@ -22,7 +24,8 @@ type ScheduledCollectionStatus = "confirmed" | "pending" | "completed";
 type ScheduledCollection = {
   id: string;
   vendor: string;
-  stall: string;
+  stallId: string;
+  stallName: string;
   type: string;
   date: string;
   time: string;
@@ -31,62 +34,101 @@ type ScheduledCollection = {
   notes?: string;
 };
 
-const INITIAL_COLLECTIONS: ScheduledCollection[] = [
-  {
-    id: "SCH-202401",
-    vendor: "Maria Santos",
-    stall: "A-15",
-    type: "Monthly Rent",
-    date: "2024-01-22",
-    time: "09:00 AM",
-    collector: "Juan Collector",
-    status: "confirmed",
-    notes: "Bring January invoice copy."
-  },
-  {
-    id: "SCH-202402",
-    vendor: "Cristian Daron",
-    stall: "F-09",
-    type: "Monthly Rent",
-    date: "2024-01-22",
-    time: "10:30 AM",
-    collector: "Maria Collector",
-    status: "pending",
-    notes: "Confirm newly assigned stall paperwork."
-  },
-  {
-    id: "SCH-202403",
-    vendor: "Ana Reyes",
-    stall: "C-22",
-    type: "Daily Fee",
-    date: "2024-01-23",
-    time: "08:30 AM",
-    collector: "Juan Collector",
-    status: "confirmed"
-  },
-  {
-    id: "SCH-202404",
-    vendor: "Pedro Garcia",
-    stall: "D-05",
-    type: "Penalty",
-    date: "2024-01-24",
-    time: "01:15 PM",
-    collector: "Maria Collector",
-    status: "pending"
-  }
-];
-
 const STATUS_META: Record<ScheduledCollectionStatus, { label: string; badge: "default" | "secondary" | "outline" }> = {
   confirmed: { label: "Confirmed", badge: "default" },
   pending: { label: "Pending", badge: "secondary" },
   completed: { label: "Completed", badge: "outline" }
 };
 
-export const ScheduledCollections = ({ onNavigate }: ScheduledCollectionsProps) => {
-  const { toast } = useToast();
-  const [collections, setCollections] = useState<ScheduledCollection[]>(INITIAL_COLLECTIONS);
+const COLLECTION_TIME_SLOTS = [
+  "09:00 AM",
+  "09:45 AM",
+  "10:30 AM",
+  "11:15 AM",
+  "01:00 PM",
+  "01:45 PM",
+  "02:30 PM"
+];
 
-  const today = "2024-01-22";
+const COLLECTOR_POOL = ["Juan Collector", "Maria Collector", "Alex Rivera", "Kim Santos"];
+
+const formatISODate = (date: Date): string => date.toISOString().split("T")[0];
+
+const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
+  const counters = new Map<string, number>();
+  const names = new Map<string, string>();
+
+  stalls.forEach((stall) => {
+    const typeKey = stall.type.trim().toLowerCase() || "uncategorised";
+    const nextNumber = (counters.get(typeKey) ?? 0) + 1;
+    counters.set(typeKey, nextNumber);
+    names.set(stall.id, `Stall ${nextNumber}`);
+  });
+
+  return names;
+};
+
+const buildCollectionsFromStalls = (
+  stalls: StallRecord[],
+  displayNameById: Map<string, string>
+): ScheduledCollection[] => {
+  const today = new Date();
+
+  return stalls
+    .filter((stall) => stall.occupied || stall.status !== "vacant")
+    .map((stall, index) => {
+      const visitDate = new Date(today);
+      visitDate.setDate(today.getDate() + (index % 5));
+      const status: ScheduledCollectionStatus = stall.status === "current" ? "confirmed" : "pending";
+      const notes =
+        stall.status === "overdue"
+          ? "Follow up on overdue balance."
+          : stall.status === "due"
+          ? "Payment due soon."
+          : undefined;
+      const stallDisplayName = displayNameById.get(stall.id) ?? stall.name;
+
+      return {
+        id: `SCH-${stall.id.replace("stall-", "").padStart(4, "0")}`,
+        vendor: stall.vendor || "No vendor assigned",
+        stallId: stall.id,
+        stallName: stallDisplayName,
+        type: stall.type || "Monthly Rent",
+        date: formatISODate(visitDate),
+        time: COLLECTION_TIME_SLOTS[index % COLLECTION_TIME_SLOTS.length],
+        collector: COLLECTOR_POOL[index % COLLECTOR_POOL.length],
+        status,
+        notes
+      };
+    });
+};
+
+export const ScheduledCollections = ({ onNavigate, stalls }: ScheduledCollectionsProps) => {
+  const { toast } = useToast();
+  const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
+  const [collections, setCollections] = useState<ScheduledCollection[]>(() =>
+    buildCollectionsFromStalls(stalls, displayNameById)
+  );
+
+  useEffect(() => {
+    setCollections((previous) => {
+      const nextFromStalls = buildCollectionsFromStalls(stalls, displayNameById);
+      const previousById = new Map(previous.map((item) => [item.id, item]));
+
+      return nextFromStalls.map((item) => {
+        const existing = previousById.get(item.id);
+        return existing
+          ? {
+              ...item,
+              status: existing.status,
+              notes: existing.notes ?? item.notes
+            }
+          : item;
+      });
+    });
+  }, [stalls, displayNameById]);
+
+  const today = formatISODate(new Date());
 
   const todaysSchedules = useMemo(
     () => collections.filter((item) => item.date === today),
@@ -101,6 +143,22 @@ export const ScheduledCollections = ({ onNavigate }: ScheduledCollectionsProps) 
   const recommendations = useMemo(
     () => collections.filter((item) => item.status !== "completed").slice(0, 3),
     [collections]
+  );
+
+  const stallDirectory = useMemo(
+    () =>
+      stalls.map((stall) => {
+        const displayName = displayNameById.get(stall.id) ?? stall.name;
+        return {
+          id: stall.id,
+          name: displayName,
+          vendor: stall.vendor || "No vendor assigned",
+          status: stall.status,
+          type: stall.type,
+          monthlyRent: stall.monthlyRent
+        };
+      }),
+    [stalls, displayNameById]
   );
 
   const handleMarkCompleted = (id: string) => {
@@ -126,10 +184,9 @@ export const ScheduledCollections = ({ onNavigate }: ScheduledCollectionsProps) 
 
   const handleStartCollection = (schedule: ScheduledCollection) => {
     toast({
-      title: "Opening payment collection",
-      description: `Preparing collection for ${schedule.vendor} at stall ${schedule.stall}.`
+      title: "Collection launched",
+      description: `Starting collection for ${schedule.vendor} at ${schedule.stallName}.`
     });
-    onNavigate("collect");
   };
 
   const renderScheduleRow = (item: ScheduledCollection) => {
@@ -138,25 +195,25 @@ export const ScheduledCollections = ({ onNavigate }: ScheduledCollectionsProps) 
     return (
       <div
         key={item.id}
-        className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/20 p-3"
       >
-        <div className="space-y-1">
-          <div className="font-semibold">{item.vendor}</div>
-          <div className="text-sm text-muted-foreground">
-            {item.type} • {item.id}
+        <div className="flex items-center gap-3">
+          <div className="rounded-full bg-primary/10 p-2 text-primary">
+            <CalendarDays className="h-4 w-4" />
           </div>
-          {item.notes && <div className="text-xs text-muted-foreground">Notes: {item.notes}</div>}
+          <div>
+            <p className="font-medium">{item.vendor}</p>
+            <p className="text-xs text-muted-foreground">
+              {item.type} • {item.date} at {item.time}
+            </p>
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <MapPin className="h-3 w-3" /> {item.stallName}
+            </p>
+            {item.notes ? <p className="text-xs text-amber-600">{item.notes}</p> : null}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <MapPin className="h-4 w-4" />
-            <span>Stall {item.stall}</span>
-          </div>
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Clock className="h-4 w-4" />
-            <span>{item.time}</span>
-          </div>
-          <div className="flex items-center gap-1 text-muted-foreground">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 text-sm text-muted-foreground">
             <User className="h-4 w-4" />
             <span>{item.collector}</span>
           </div>
@@ -181,7 +238,7 @@ export const ScheduledCollections = ({ onNavigate }: ScheduledCollectionsProps) 
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Scheduled Collections</h1>
-          <p className="text-muted-foreground">Review upcoming collection visits and follow-up reminders.</p>
+          <p className="text-muted-foreground">Live schedule derived from current stall assignments.</p>
         </div>
         <Button variant="ghost" onClick={() => onNavigate("dashboard")}>
           <ArrowLeft className="mr-2 h-4 w-4" />
@@ -228,6 +285,7 @@ export const ScheduledCollections = ({ onNavigate }: ScheduledCollectionsProps) 
       <Card className="border-dashed">
         <CardHeader>
           <CardTitle>Recommended Actions</CardTitle>
+          <CardDescription>Focus on pending and overdue stalls.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {recommendations.length === 0 ? (
@@ -281,6 +339,43 @@ export const ScheduledCollections = ({ onNavigate }: ScheduledCollectionsProps) 
             : upcomingSchedules.map(renderScheduleRow)}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Live Stall Directory</CardTitle>
+          <CardDescription>Shared stall information from Stall Management.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {stallDirectory.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No stalls available.</p>
+          ) : (
+            stallDirectory.map((stall) => (
+              <div
+                key={stall.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3"
+              >
+                <div>
+                  <p className="font-medium">{stall.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {stall.vendor} - PHP {stall.monthlyRent.toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={stall.status === "vacant" ? "outline" : "default"} className="capitalize">
+                    {stall.status}
+                  </Badge>
+                  {stall.type ? (
+                    <Badge variant="secondary" className="capitalize">
+                      {stall.type}
+                    </Badge>
+                  ) : null}
+                </div>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 };
+

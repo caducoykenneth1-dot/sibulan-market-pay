@@ -19,13 +19,13 @@ const Index = () => {
       case "collect":
         return <PaymentCollection stalls={stalls} />;
       case "history":
-        return <PaymentHistory />;
+        return <PaymentHistory stalls={stalls} />;
       case "stalls":
         return <StallManagement stalls={stalls} onStallsChange={setStalls} />;
       case "reports":
         return <Reports />;
       case "scheduled":
-        return <ScheduledCollections onNavigate={setCurrentPage} />;
+        return <ScheduledCollections onNavigate={setCurrentPage} stalls={stalls} />;
       default:
         return <Dashboard onPageChange={setCurrentPage} />;
     }
@@ -44,3 +44,5 @@ const Index = () => {
 };
 
 export default Index;
+
+

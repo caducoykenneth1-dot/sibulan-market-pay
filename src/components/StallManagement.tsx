@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { BASE_TYPE_OPTIONS, getNextStallNumbers, type StallRecord, type StallStatus } from "@/data/stalls";
-import { Building2, Calendar, DollarSign, Filter, Phone, Plus, Search, Trash2, User } from "lucide-react";
+import { Building2, DollarSign, Filter, Pencil, Phone, Plus, Search, Trash2, User } from "lucide-react";
 
 interface StallManagementProps {
   stalls: StallRecord[];
@@ -60,6 +60,8 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
   const [statusFilter, setStatusFilter] = useState<"all" | StallStatus>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [stallBeingEdited, setStallBeingEdited] = useState<StallRecord | null>(null);
   const [formState, setFormState] = useState<StallFormState>(createEmptyForm());
   const [stallToDelete, setStallToDelete] = useState<StallRecord | null>(null);
 
@@ -91,14 +93,29 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     ];
   }, [stalls]);
 
+  const displayNameById = useMemo(() => {
+    const counters = new Map<string, number>();
+    const names = new Map<string, string>();
+    stalls.forEach((stall) => {
+      const normalizedType = stall.type.trim().toLowerCase();
+      const typeKey = normalizedType || "uncategorised";
+      const nextNumber = (counters.get(typeKey) ?? 0) + 1;
+      counters.set(typeKey, nextNumber);
+      names.set(stall.id, `Stall ${nextNumber}`);
+    });
+    return names;
+  }, [stalls]);
+
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
   const filteredStalls = useMemo(() => {
     return stalls.filter((stall) => {
       const matchesStatus = statusFilter === "all" || stall.status === statusFilter;
       const matchesType = typeFilter === "all" || stall.type === typeFilter;
+      const displayName = displayNameById.get(stall.id) ?? stall.name;
       const matchesSearch =
         !normalizedSearch ||
+        displayName.toLowerCase().includes(normalizedSearch) ||
         stall.name.toLowerCase().includes(normalizedSearch) ||
         stall.id.toLowerCase().includes(normalizedSearch) ||
         stall.vendor.toLowerCase().includes(normalizedSearch) ||
@@ -106,18 +123,41 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
 
       return matchesStatus && matchesType && matchesSearch;
     });
-  }, [stalls, statusFilter, typeFilter, normalizedSearch]);
+  }, [stalls, statusFilter, typeFilter, normalizedSearch, displayNameById]);
 
   const openCreateDialog = () => {
     setFormState(createEmptyForm());
+    setStallBeingEdited(null);
+    setIsEditMode(false);
     setIsCreateOpen(true);
+  };
+  const openEditDialog = (stall: StallRecord) => {
+    setFormState({
+      vendor: stall.vendor,
+      contact: stall.contact,
+      type: stall.type,
+      monthlyRent: String(stall.monthlyRent),
+      status: stall.status,
+      lastPayment: stall.lastPayment,
+      nextDue: stall.nextDue
+    });
+    setStallBeingEdited(stall);
+    setIsEditMode(true);
+    setIsCreateOpen(true);
+  };
+
+  const closeFormDialog = () => {
+    setIsCreateOpen(false);
+    setIsEditMode(false);
+    setStallBeingEdited(null);
+    setFormState(createEmptyForm());
   };
 
   const handleFormChange = (field: keyof StallFormState, value: string) => {
     setFormState((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleCreate = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleFormSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedType = formState.type.trim();
     const rent = Number(formState.monthlyRent);
@@ -126,8 +166,33 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
       return;
     }
 
-    const { nextIdNumber, nextNameNumber } = getNextStallNumbers(stalls);
     const isVacant = formState.status === "vacant";
+
+    if (isEditMode && stallBeingEdited) {
+      onStallsChange((prev) =>
+        prev.map((stall) => {
+          if (stall.id !== stallBeingEdited.id) {
+            return stall;
+          }
+
+          return {
+            ...stall,
+            vendor: isVacant ? "" : formState.vendor.trim(),
+            contact: isVacant ? "" : formState.contact.trim(),
+            type: trimmedType,
+            monthlyRent: rent,
+            lastPayment: isVacant ? "" : formState.lastPayment,
+            nextDue: isVacant ? "" : formState.nextDue,
+            status: formState.status,
+            occupied: !isVacant
+          };
+        })
+      );
+      closeFormDialog();
+      return;
+    }
+
+    const { nextIdNumber, nextNameNumber } = getNextStallNumbers(stalls, trimmedType);
 
     const newStall: StallRecord = {
       id: `stall-${nextIdNumber}`,
@@ -143,8 +208,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     };
 
     onStallsChange((prev) => [...prev, newStall]);
-    setIsCreateOpen(false);
-    setFormState(createEmptyForm());
+    closeFormDialog();
   };
 
   const handleDelete = () => {
@@ -250,7 +314,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
               <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <Building2 className="h-5 w-5 text-muted-foreground" />
-                  {stall.name}
+                  {displayNameById.get(stall.id) ?? stall.name}
                 </CardTitle>
                 <Badge variant={getStatusBadge(stall.status)} className="capitalize">
                   {stall.status}
@@ -277,6 +341,9 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
                   </div>
                 </div>
                 <div className="flex gap-2 pt-2">
+                  <Button variant="outline" size="sm" onClick={() => openEditDialog(stall)}>
+                    <Pencil className="mr-2 h-4 w-4" /> Edit stall
+                  </Button>
                   <Button variant="destructive" size="sm" onClick={() => setStallToDelete(stall)}>
                     <Trash2 className="mr-2 h-4 w-4" /> Delete stall
                   </Button>
@@ -287,12 +354,17 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
         </div>
       )}
 
-      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+      <Dialog open={isCreateOpen} onOpenChange={(open) => (open ? setIsCreateOpen(true) : closeFormDialog())}>
         <DialogContent>
-          <form onSubmit={handleCreate} className="space-y-5">
+          <form onSubmit={handleFormSubmit} className="space-y-5">
             <DialogHeader>
-              <DialogTitle>Add a new stall</DialogTitle>
-              <DialogDescription>Fill in stall information. Leave vendor fields blank for vacant stalls.</DialogDescription>
+              <DialogTitle>{isEditMode ? "Edit stall" : "Add a new stall"}</DialogTitle>
+              <DialogDescription>
+                {isEditMode
+                  ? "Update stall information. Leave vendor fields blank for vacant stalls."
+                  : "Fill in stall information. Leave vendor fields blank for vacant stalls."
+                }
+              </DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -380,11 +452,11 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
             </div>
 
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>
+              <Button type="button" variant="outline" onClick={closeFormDialog}>
                 Cancel
               </Button>
               <Button type="submit" disabled={!formState.type.trim() || !formState.monthlyRent.trim()}>
-                Save stall
+                {isEditMode ? "Save changes" : "Save stall"}
               </Button>
             </DialogFooter>
           </form>
@@ -410,4 +482,22 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     </div>
   );
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

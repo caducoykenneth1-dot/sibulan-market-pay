@@ -32,6 +32,20 @@ interface PaymentCollectionProps {
 const getStatusBadge = (status: StallRecord["status"]) =>
   status === "current" ? "default" : status === "due" ? "secondary" : "destructive";
 
+const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
+  const counters = new Map<string, number>();
+  const names = new Map<string, string>();
+
+  stalls.forEach((stall) => {
+    const typeKey = stall.type.trim().toLowerCase() || "uncategorised";
+    const nextNumber = (counters.get(typeKey) ?? 0) + 1;
+    counters.set(typeKey, nextNumber);
+    names.set(stall.id, `Stall ${nextNumber}`);
+  });
+
+  return names;
+};
+
 export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
   const { toast } = useToast();
   const [selectedType, setSelectedType] = useState<string>("");
@@ -42,6 +56,8 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
     notes: ""
   });
   const [showReceipt, setShowReceipt] = useState(false);
+
+  const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
   const stallTypeOptions = useMemo(
     () =>
@@ -80,10 +96,8 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
     }
   }, [filteredStalls, selectedStallId]);
 
-  const selectedStall = useMemo(
-    () => stalls.find((stall) => stall.id === selectedStallId) ?? null,
-    [stalls, selectedStallId]
-  );
+  const selectedStall = useMemo(() => stalls.find((stall) => stall.id === selectedStallId) ?? null, [stalls, selectedStallId]);
+  const selectedStallDisplayName = selectedStall ? displayNameById.get(selectedStall.id) ?? selectedStall.name : "";
 
   useEffect(() => {
     if (!selectedStall) {
@@ -142,7 +156,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
               </div>
               <div className="flex justify-between text-sm">
                 <span>Stall</span>
-                <span className="font-medium">{selectedStall.name}</span>
+                <span className="font-medium">{selectedStallDisplayName} ({selectedStall.id})</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span>Collected amount</span>
@@ -214,19 +228,22 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {filteredStalls.map((stall) => (
-                    <SelectItem key={stall.id} value={stall.id}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{stall.name}</span>
-                        <span className="text-sm text-muted-foreground">
-                          {stall.vendor || "No vendor"}
-                        </span>
-                        <Badge variant={getStatusBadge(stall.status)} className="ml-auto capitalize">
-                          {stall.status}
-                        </Badge>
-                      </div>
-                    </SelectItem>
-                  ))}
+                  {filteredStalls.map((stall) => {
+                    const displayName = displayNameById.get(stall.id) ?? stall.name;
+                    return (
+                      <SelectItem key={stall.id} value={stall.id}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{displayName}</span>
+                          <span className="text-sm text-muted-foreground">
+                            {stall.vendor || "No vendor"}
+                          </span>
+                          <Badge variant={getStatusBadge(stall.status)} className="ml-auto capitalize">
+                            {stall.status}
+                          </Badge>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -238,7 +255,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="flex items-center gap-2 text-sm">
                     <Building2 className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">{selectedStall.name}</span>
+                    <span className="font-medium">{selectedStallDisplayName}</span>
                   </div>
                   <div className="flex items-center gap-2 text-sm">
                     <User className="h-4 w-4 text-muted-foreground" />
