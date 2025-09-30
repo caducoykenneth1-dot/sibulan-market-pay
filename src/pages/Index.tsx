@@ -5,8 +5,11 @@ import { PaymentCollection } from "@/components/PaymentCollection";
 import { PaymentHistory } from "@/components/PaymentHistory";
 import { StallManagement } from "@/components/StallManagement";
 import { Reports } from "@/components/Reports";
+import { ScheduledCollections } from "@/components/ScheduledCollections";
+import { createInitialStalls, type StallRecord } from "@/data/stalls";
 
 const Index = () => {
+  const [stalls, setStalls] = useState<StallRecord[]>(createInitialStalls());
   const [currentPage, setCurrentPage] = useState("dashboard");
 
   const renderCurrentPage = () => {
@@ -14,13 +17,15 @@ const Index = () => {
       case "dashboard":
         return <Dashboard onPageChange={setCurrentPage} />;
       case "collect":
-        return <PaymentCollection />;
+        return <PaymentCollection stalls={stalls} />;
       case "history":
         return <PaymentHistory />;
       case "stalls":
-        return <StallManagement />;
+        return <StallManagement stalls={stalls} onStallsChange={setStalls} />;
       case "reports":
         return <Reports />;
+      case "scheduled":
+        return <ScheduledCollections onNavigate={setCurrentPage} />;
       default:
         return <Dashboard onPageChange={setCurrentPage} />;
     }
