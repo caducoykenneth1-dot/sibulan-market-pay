@@ -5,7 +5,16 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { BASE_TYPE_OPTIONS, getNextStallNumbers, type StallRecord, type StallStatus } from "@/data/stalls";
 import { Building2, DollarSign, Filter, Pencil, Phone, Plus, Search, Trash2, User } from "lucide-react";
@@ -96,13 +105,14 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
   const displayNameById = useMemo(() => {
     const counters = new Map<string, number>();
     const names = new Map<string, string>();
+
     stalls.forEach((stall) => {
-      const normalizedType = stall.type.trim().toLowerCase();
-      const typeKey = normalizedType || "uncategorised";
+      const typeKey = stall.type.trim().toLowerCase() || "uncategorised";
       const nextNumber = (counters.get(typeKey) ?? 0) + 1;
       counters.set(typeKey, nextNumber);
       names.set(stall.id, `Stall ${nextNumber}`);
     });
+
     return names;
   }, [stalls]);
 
@@ -131,6 +141,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     setIsEditMode(false);
     setIsCreateOpen(true);
   };
+
   const openEditDialog = (stall: StallRecord) => {
     setFormState({
       vendor: stall.vendor,
@@ -362,8 +373,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
               <DialogDescription>
                 {isEditMode
                   ? "Update stall information. Leave vendor fields blank for vacant stalls."
-                  : "Fill in stall information. Leave vendor fields blank for vacant stalls."
-                }
+                  : "Fill in stall information. Leave vendor fields blank for vacant stalls."}
               </DialogDescription>
             </DialogHeader>
 
@@ -482,22 +492,3 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     </div>
   );
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

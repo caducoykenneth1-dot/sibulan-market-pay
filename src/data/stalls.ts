@@ -10,7 +10,7 @@ export type StallRecord = {
   lastPayment: string;
   nextDue: string;
   status: StallStatus;
-  occupied: boolean;  
+  occupied: boolean;
 };
 
 export const BASE_TYPE_OPTIONS: string[] = [
@@ -136,4 +136,3 @@ export const getNextStallNumbers = (stalls: StallRecord[], type?: string) => {
 
   return { nextIdNumber, nextNameNumber };
 };
-

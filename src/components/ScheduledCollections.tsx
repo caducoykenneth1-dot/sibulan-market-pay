@@ -59,7 +59,7 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   const names = new Map<string, string>();
 
   stalls.forEach((stall) => {
-    const typeKey = stall.type.trim().toLowerCase() || "uncategorised";
+    const typeKey = stall.type?.trim().toLowerCase() || "uncategorised";
     const nextNumber = (counters.get(typeKey) ?? 0) + 1;
     counters.set(typeKey, nextNumber);
     names.set(stall.id, `Stall ${nextNumber}`);
@@ -378,4 +378,3 @@ export const ScheduledCollections = ({ onNavigate, stalls }: ScheduledCollection
     </div>
   );
 };
-
