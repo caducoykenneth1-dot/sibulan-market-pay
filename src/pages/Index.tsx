@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { Navigation } from "@/components/Navigation";
 import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection";
@@ -6,13 +6,14 @@ import { PaymentHistory } from "@/components/PaymentHistory";
 import { StallManagement } from "@/components/StallManagement";
 import { Reports } from "@/components/Reports";
 import { ScheduledCollections } from "@/components/ScheduledCollections";
-import { createInitialStalls, type StallRecord } from "@/data/stalls";
+import { createInitialStalls, type StallRecord, type StallStatus } from "@/data/stalls";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Eye, EyeOff } from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
 
 const ACCOUNTS_KEY = "smp-accounts";
 const CURRENT_USER_KEY = "smp-current-user";
@@ -26,6 +27,17 @@ type AccountRecord = {
   password: string;
   role: AccountRole;
   createdAt: string;
+};
+
+type VendorRow = {
+  id: number | string | null;
+  vendor: string | null;
+  contact: string | null;
+  type: string | null;
+  monthly_rent: number | string | null;
+  last_payment: string | null;
+  next_due: string | null;
+  status: string | null;
 };
 
 const DEFAULT_ACCOUNTS: AccountRecord[] = [
@@ -147,6 +159,72 @@ const Index = () => {
     }
 
     setAuthReady(true);
+  }, []);
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadStalls = async () => {
+      const { data, error } = await supabase
+        .from("vendors")
+        .select("id,vendor,contact,type,monthly_rent,last_payment,next_due,status")
+        .order("id", { ascending: true });
+
+      if (isCancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error("Failed to load stalls from Supabase", error);
+        return;
+      }
+
+      const rows = (data ?? []) as VendorRow[];
+
+      if (rows.length === 0) {
+        return;
+      }
+
+      const mapped: StallRecord[] = rows.map((row, index) => {
+        const numericId = typeof row.id === "number" ? row.id : Number.parseInt(String(row.id ?? ""), 10);
+        const safeId = Number.isFinite(numericId) && numericId > 0 ? numericId : Date.now() + index;
+
+        const rawMonthlyRent = row.monthly_rent;
+        let monthlyRentValue = 0;
+
+        if (typeof rawMonthlyRent === "number") {
+          monthlyRentValue = rawMonthlyRent;
+        } else if (typeof rawMonthlyRent === "string") {
+          const parsed = Number.parseFloat(rawMonthlyRent);
+          monthlyRentValue = Number.isNaN(parsed) ? 0 : parsed;
+        }
+
+        const statusValue: StallStatus =
+          typeof row.status === "string" && row.status.trim().length > 0
+            ? (row.status as StallStatus)
+            : "vacant";
+
+        return {
+          id: `stall-${safeId}`,
+          name: `Stall ${safeId}`,
+          vendor: row.vendor ?? "",
+          contact: row.contact ?? "",
+          type: row.type ?? "",
+          monthlyRent: monthlyRentValue,
+          lastPayment: row.last_payment ?? "",
+          nextDue: row.next_due ?? "",
+          status: statusValue,
+          occupied: statusValue !== "vacant"
+        };
+      });
+
+      setStalls(mapped);
+    };
+
+    loadStalls();
+
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   const persistAccounts = (nextAccounts: AccountRecord[]) => {
@@ -460,6 +538,10 @@ const Index = () => {
 };
 
 export default Index;
+
+
+
+
 
 
 
