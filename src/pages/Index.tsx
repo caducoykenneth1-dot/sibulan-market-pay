@@ -289,14 +289,25 @@ const Index = () => {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="login-password">Password</Label>
-                  <Input
-                    id="login-password"
-                    type="password"
-                    autoComplete="current-password"
-                    value={loginForm.password}
-                    onChange={(event) => setLoginForm((prev) => ({ ...prev, password: event.target.value }))}
-                    required
-                  />
+                  <div className="relative">
+                    <Input
+                      id="login-password"
+                      type={loginPasswordVisible ? "text" : "password"}
+                      autoComplete="current-password"
+                      value={loginForm.password}
+                      onChange={(event) => setLoginForm((prev) => ({ ...prev, password: event.target.value }))}
+                      className="pr-10"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setLoginPasswordVisible((prev) => !prev)}
+                      className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
+                      aria-label={loginPasswordVisible ? "Hide password" : "Show password"}
+                    >
+                      {loginPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
                 {authError && <p className="text-sm text-destructive">{authError}</p>}
                 <Button type="submit" className="w-full">
@@ -354,27 +365,49 @@ const Index = () => {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="register-password">Password</Label>
-                  <Input
-                    id="register-password"
-                    type="password"
-                    autoComplete="new-password"
-                    value={registerForm.password}
-                    onChange={(event) => setRegisterForm((prev) => ({ ...prev, password: event.target.value }))}
-                    required
-                  />
+                  <div className="relative">
+                    <Input
+                      id="register-password"
+                      type={registerPasswordVisible ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={registerForm.password}
+                      onChange={(event) => setRegisterForm((prev) => ({ ...prev, password: event.target.value }))}
+                      className="pr-10"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRegisterPasswordVisible((prev) => !prev)}
+                      className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
+                      aria-label={registerPasswordVisible ? "Hide password" : "Show password"}
+                    >
+                      {registerPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="register-confirm">Confirm password</Label>
-                  <Input
-                    id="register-confirm"
-                    type="password"
-                    autoComplete="new-password"
-                    value={registerForm.confirmPassword}
-                    onChange={(event) =>
-                      setRegisterForm((prev) => ({ ...prev, confirmPassword: event.target.value }))
-                    }
-                    required
-                  />
+                  <div className="relative">
+                    <Input
+                      id="register-confirm"
+                      type={registerConfirmVisible ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={registerForm.confirmPassword}
+                      onChange={(event) =>
+                        setRegisterForm((prev) => ({ ...prev, confirmPassword: event.target.value }))
+                      }
+                      className="pr-10"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRegisterConfirmVisible((prev) => !prev)}
+                      className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
+                      aria-label={registerConfirmVisible ? "Hide password" : "Show password"}
+                    >
+                      {registerConfirmVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
                 {authError && <p className="text-sm text-destructive">{authError}</p>}
                 <Button type="submit" className="w-full">
@@ -427,6 +460,12 @@ const Index = () => {
 };
 
 export default Index;
+
+
+
+
+
+
 
 
 
