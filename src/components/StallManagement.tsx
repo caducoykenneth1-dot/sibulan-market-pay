@@ -170,91 +170,94 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
   };
 
   const handleFormSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-  event.preventDefault();
-  const trimmedType = formState.type.trim();
-  const rent = Number(formState.monthlyRent);
+    event.preventDefault();
+    const trimmedType = formState.type.trim();
+    const rent = Number(formState.monthlyRent);
 
-  if (!trimmedType || Number.isNaN(rent)) {
-    return;
-  }
+    if (!trimmedType || Number.isNaN(rent)) {
+      return;
+    }
 
-  const isVacant = formState.status === "vacant";
+    const isVacant = formState.status === "vacant";
 
-  if (isEditMode && stallBeingEdited) {
-    onStallsChange((prev) =>
-      prev.map((stall) => {
-        if (stall.id !== stallBeingEdited.id) {
-          return stall;
-        }
+    if (isEditMode && stallBeingEdited) {
+      onStallsChange((prev) =>
+        prev.map((stall) => {
+          if (stall.id !== stallBeingEdited.id) {
+            return stall;
+          }
 
-        return {
-          ...stall,
-          vendor: isVacant ? "" : formState.vendor.trim(),
-          contact: isVacant ? "" : formState.contact.trim(),
-          type: trimmedType,
-          monthlyRent: rent,
-          lastPayment: isVacant ? "" : formState.lastPayment,
-          nextDue: isVacant ? "" : formState.nextDue,
-          status: formState.status,
-          occupied: !isVacant,
-        };
-      })
-    );
+          return {
+            ...stall,
+            vendor: isVacant ? "" : formState.vendor.trim(),
+            contact: isVacant ? "" : formState.contact.trim(),
+            type: trimmedType,
+            monthlyRent: rent,
+            lastPayment: isVacant ? "" : formState.lastPayment,
+            nextDue: isVacant ? "" : formState.nextDue,
+            status: formState.status,
+            occupied: !isVacant
+          };
+        })
+      );
+      closeFormDialog();
+      return;
+    }
+
+    const { nextIdNumber, nextNameNumber } = getNextStallNumbers(stalls, trimmedType);
+
+    const payload = {
+      vendor: isVacant ? null : formState.vendor.trim() || null,
+      contact: isVacant ? null : formState.contact.trim() || null,
+      type: trimmedType,
+      monthly_rent: rent,
+      last_payment: isVacant || !formState.lastPayment ? null : formState.lastPayment,
+      next_due: isVacant || !formState.nextDue ? null : formState.nextDue,
+      status: formState.status
+    };
+
+    const { data, error } = await supabase.from("vendors").insert([payload]).select().single();
+
+    if (error) {
+      console.error("Failed to create stall in Supabase", error);
+      return;
+    }
+
+    const supabaseId = typeof data?.id === "number" ? data.id : nextIdNumber;
+    const vendorValue = typeof data?.vendor === "string" ? data.vendor : (payload.vendor ?? "");
+    const contactValue = typeof data?.contact === "string" ? data.contact : (payload.contact ?? "");
+    const rawMonthlyRent = data?.monthly_rent;
+    let normalizedMonthlyRent = rent;
+
+    if (typeof rawMonthlyRent === "number") {
+      normalizedMonthlyRent = rawMonthlyRent;
+    } else if (typeof rawMonthlyRent === "string") {
+      const parsed = Number.parseFloat(rawMonthlyRent);
+      normalizedMonthlyRent = Number.isNaN(parsed) ? rent : parsed;
+    }
+
+    const lastPaymentValue =
+      typeof data?.last_payment === "string" ? data.last_payment : (payload.last_payment ?? "");
+    const nextDueValue =
+      typeof data?.next_due === "string" ? data.next_due : (payload.next_due ?? "");
+    const statusValue = typeof data?.status === "string" ? (data.status as StallStatus) : formState.status;
+
+    const newStall: StallRecord = {
+      id: `stall-${supabaseId}`,
+      name: `Stall ${nextNameNumber}`,
+      vendor: vendorValue,
+      contact: contactValue,
+      type: trimmedType,
+      monthlyRent: normalizedMonthlyRent,
+      lastPayment: lastPaymentValue,
+      nextDue: nextDueValue,
+      status: statusValue,
+      occupied: !isVacant
+    };
+
+    onStallsChange((prev) => [...prev, newStall]);
     closeFormDialog();
-    return;
-  }
-
-  const { nextIdNumber, nextNameNumber } = getNextStallNumbers(stalls, trimmedType);
-
-  const payload = {
-    vendor: isVacant ? null : formState.vendor.trim() || null,
-    contact: isVacant ? null : formState.contact.trim() || null,
-    type: trimmedType,
-    monthly_rent: rent,
-    last_payment: isVacant || !formState.lastPayment ? null : formState.lastPayment,
-    next_due: isVacant || !formState.nextDue ? null : formState.nextDue,
-    status: formState.status,
   };
-
-  const { data, error } = await supabase.from("vendors").insert(payload).select().single();
-
-  if (error) {
-    console.error("Failed to create stall in Supabase", error);
-    return;
-  }
-
-  const supabaseId = typeof data?.id === "number" ? data.id : nextIdNumber;
-  const vendorValue = typeof data?.vendor === "string" ? data.vendor : (payload.vendor ?? "");
-  const contactValue = typeof data?.contact === "string" ? data.contact : (payload.contact ?? "");
-  const rawMonthlyRent = data?.monthly_rent;
-  let normalizedMonthlyRent = rent;
-  if (typeof rawMonthlyRent === "number") {
-    normalizedMonthlyRent = rawMonthlyRent;
-  } else if (typeof rawMonthlyRent === "string") {
-    const parsed = Number.parseFloat(rawMonthlyRent);
-    normalizedMonthlyRent = Number.isNaN(parsed) ? rent : parsed;
-  }
-  const lastPaymentValue =
-    typeof data?.last_payment === "string" ? data.last_payment : (payload.last_payment ?? "");
-  const nextDueValue = typeof data?.next_due === "string" ? data.next_due : (payload.next_due ?? "");
-  const statusValue = typeof data?.status === "string" ? (data.status as StallStatus) : formState.status;
-
-  const newStall: StallRecord = {
-    id: `stall-${supabaseId}`,
-    name: `Stall ${nextNameNumber}`,
-    vendor: vendorValue,
-    contact: contactValue,
-    type: trimmedType,
-    monthlyRent: normalizedMonthlyRent,
-    lastPayment: lastPaymentValue,
-    nextDue: nextDueValue,
-    status: statusValue,
-    occupied: !isVacant,
-  };
-
-  onStallsChange((prev) => [...prev, newStall]);
-  closeFormDialog();
-};
 
   const handleDelete = () => {
     if (!stallToDelete) {
