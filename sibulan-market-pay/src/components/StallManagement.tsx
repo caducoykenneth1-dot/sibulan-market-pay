@@ -217,7 +217,27 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
       status: formState.status
     };
 
-    const { data, error } = await supabase.from("vendors").insert([payload]).select().single();
+    if (!supabaseClient) {
+      console.info("Supabase is not configured. Creating stall locally.");
+      const fallbackStall: StallRecord = {
+        id: `stall-${nextIdNumber}`,
+        name: `Stall ${nextNameNumber}`,
+        vendor: payload.vendor ?? "",
+        contact: payload.contact ?? "",
+        type: trimmedType,
+        monthlyRent: rent,
+        lastPayment: payload.last_payment ?? "",
+        nextDue: payload.next_due ?? "",
+        status: formState.status,
+        occupied: !isVacant
+      };
+
+      onStallsChange((prev) => [...prev, fallbackStall]);
+      closeFormDialog();
+      return;
+    }
+
+    const { data, error } = await supabaseClient.from("vendors").insert([payload]).select().single();
 
     if (error) {
       console.error("Failed to create stall in Supabase", error);
