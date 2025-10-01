@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Eye, EyeOff } from "lucide-react";
 
 const ACCOUNTS_KEY = "smp-accounts";
 const CURRENT_USER_KEY = "smp-current-user";
@@ -94,12 +95,16 @@ const Index = () => {
   const [authError, setAuthError] = useState<string>("");
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [registerForm, setRegisterForm] = useState({
+
     name: "",
     username: "",
     password: "",
     confirmPassword: "",
     role: "collector" as AccountRole
   });
+  const [loginPasswordVisible, setLoginPasswordVisible] = useState(false);
+  const [registerPasswordVisible, setRegisterPasswordVisible] = useState(false);
+  const [registerConfirmVisible, setRegisterConfirmVisible] = useState(false);
 
   useEffect(() => {
     const storedAccountsRaw = localStorage.getItem(ACCOUNTS_KEY);
@@ -422,5 +427,8 @@ const Index = () => {
 };
 
 export default Index;
+
+
+
 
 
