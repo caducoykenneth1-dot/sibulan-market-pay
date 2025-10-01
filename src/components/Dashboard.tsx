@@ -1,4 +1,5 @@
-﻿import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+﻿import { useMemo } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -13,12 +14,28 @@ import {
   CalendarDays,
   PieChart
 } from "lucide-react";
+import { type StallRecord } from "@/data/stalls";
 
 interface DashboardProps {
   onPageChange: (page: string) => void;
+  stalls: StallRecord[];
 }
 
-export const Dashboard = ({ onPageChange }: DashboardProps) => {
+const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
+  const counters = new Map<string, number>();
+  const names = new Map<string, string>();
+
+  stalls.forEach((stall) => {
+    const typeKey = stall.type?.trim().toLowerCase() || "uncategorised";
+    const nextNumber = (counters.get(typeKey) ?? 0) + 1;
+    counters.set(typeKey, nextNumber);
+    names.set(stall.id, `Stall ${nextNumber}`);
+  });
+
+  return names;
+};
+
+export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
   const stats = [
     {
       title: "Today's Collections",
@@ -28,52 +45,67 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
     },
     {
       title: "Total Stalls",
-      value: "156",
-      change: "2 vacant",
+      value: String(stalls.length),
+      change: `${stalls.filter((stall) => !stall.occupied).length} vacant`,
       icon: Building2
     },
     {
       title: "Active Vendors",
-      value: "154",
-      change: "98.7%",
+      value: String(stalls.filter((stall) => stall.occupied).length),
+      change: "Active assignments",
       icon: Users
     },
     {
       title: "Pending Payments",
-      value: "8",
-      change: "Due today",
+      value: String(stalls.filter((stall) => stall.status === "due" || stall.status === "overdue").length),
+      change: "Needs follow-up",
       icon: AlertCircle
     }
   ];
 
-  const recentPayments = [
-    { id: "001", vendor: "Cristian Daron", stall: "A-15", amount: "PHP 500", time: "9:30 AM" },
-    { id: "001A", vendor: "Xtian Dev", stall: "F-09", amount: "PHP 550", time: "9:20 AM" },
-    { id: "002", vendor: "Juan Dela Cruz", stall: "B-08", amount: "PHP 750", time: "9:15 AM" }
-  ];
+  const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
+
+  const recentPayments = useMemo(() => {
+    if (stalls.length === 0) {
+      return [] as Array<{ id: string; vendor: string; stallName: string; amount: string; time: string }>;
+    }
+
+    const referenceTimes = ["9:30 AM", "9:20 AM", "9:15 AM", "9:00 AM"];
+
+    return stalls
+      .filter((stall) => stall.occupied)
+      .slice(0, 4)
+      .map((stall, index) => ({
+        id: `TX-${index + 1}`,
+        vendor: stall.vendor || "No vendor assigned",
+        stallName: displayNameById.get(stall.id) ?? stall.name,
+        amount: `PHP ${stall.monthlyRent.toLocaleString()}`,
+        time: referenceTimes[index % referenceTimes.length]
+      }));
+  }, [stalls, displayNameById]);
 
   const marketStatus = [
     {
       label: "Occupancy",
-      value: "98.7%",
+      value: `${Math.round((stalls.filter((stall) => stall.occupied).length / Math.max(stalls.length, 1)) * 100)}%`,
       description: "Stalls currently filled",
       icon: Building2
     },
     {
       label: "Monthly Collections",
-      value: "PHP 45,280",
-      description: "Collected this month",
+      value: `PHP ${stalls.reduce((total, stall) => total + (stall.occupied ? stall.monthlyRent : 0), 0).toLocaleString()}`,
+      description: "Collected this month (projected)",
       icon: DollarSign
     },
     {
       label: "Overdue Payments",
-      value: "5 stalls",
+      value: `${stalls.filter((stall) => stall.status === "overdue").length} stalls`,
       description: "Stalls needing attention",
       icon: AlertCircle
     },
     {
       label: "Active Vendors",
-      value: "154",
+      value: String(stalls.filter((stall) => stall.occupied).length),
       description: "Registered vendors",
       icon: Users
     }
@@ -85,11 +117,11 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Avatar>
-            <AvatarFallback>CD</AvatarFallback>
+            <AvatarFallback>SM</AvatarFallback>
           </Avatar>
           <div>
-            <p className="text-sm text-muted-foreground">Good morning</p>
-            <h1 className="text-xl font-semibold">Kenneth Caducoy</h1>
+            <p className="text-sm text-muted-foreground">Welcome back</p>
+            <h1 className="text-xl font-semibold">Sibulan Market Team</h1>
           </div>
         </div>
         <Button variant="outline" onClick={() => onPageChange("collect")}>
@@ -109,7 +141,6 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between">
             Shortcuts
-            <Button variant="ghost" size="sm">Edit</Button>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -141,6 +172,13 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
             >
               <PieChart className="h-5 w-5" />
               <span className="text-xs">Insights</span>
+            </button>
+            <button
+              onClick={() => onPageChange("stalls")}
+              className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
+            >
+              <Building2 className="h-5 w-5" />
+              <span className="text-xs">Add Stall</span>
             </button>
           </div>
         </CardContent>
@@ -178,26 +216,30 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {recentPayments.map((payment) => (
-                <div
-                  key={payment.id}
-                  className="flex items-center justify-between rounded-xl border bg-card p-4 transition hover:bg-muted/50"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-                      <Receipt className="h-4 w-4 text-primary" />
+              {recentPayments.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No recent transactions available.</p>
+              ) : (
+                recentPayments.map((payment) => (
+                  <div
+                    key={payment.id}
+                    className="flex items-center justify-between rounded-xl border bg-card p-4 transition hover:bg-muted/50"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+                        <Receipt className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="font-medium">{payment.vendor}</p>
+                        <p className="text-sm text-muted-foreground">{payment.stallName}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium">{payment.vendor}</p>
-                      <p className="text-sm text-muted-foreground">Stall {payment.stall}</p>
+                    <div className="text-right">
+                      <p className="font-medium text-success">{payment.amount}</p>
+                      <p className="text-xs text-muted-foreground">{payment.time}</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-medium text-success">{payment.amount}</p>
-                    <p className="text-xs text-muted-foreground">{payment.time}</p>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </CardContent>
         </Card>
@@ -232,4 +274,3 @@ export const Dashboard = ({ onPageChange }: DashboardProps) => {
     </div>
   );
 };
-

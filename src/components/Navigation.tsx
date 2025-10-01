@@ -9,15 +9,27 @@ import {
   Building2,
   BarChart3,
   Menu,
-  X
+  X,
+  LogOut
 } from "lucide-react";
 
 interface NavigationProps {
   currentPage: string;
   onPageChange: (page: string) => void;
+  onLogout?: () => void;
+  userName?: string;
+  userRole?: string;
+  userUsername?: string;
 }
 
-export const Navigation = ({ currentPage, onPageChange }: NavigationProps) => {
+export const Navigation = ({
+  currentPage,
+  onPageChange,
+  onLogout,
+  userName,
+  userRole,
+  userUsername
+}: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const navItems = [
@@ -29,10 +41,23 @@ export const Navigation = ({ currentPage, onPageChange }: NavigationProps) => {
     { id: "reports", label: "Reports", icon: BarChart3 }
   ];
 
+  const handleMobileNav = (page: string) => {
+    onPageChange(page);
+    setIsMenuOpen(false);
+  };
+
+  const handleLogout = () => {
+    if (!onLogout) {
+      return;
+    }
+    onLogout();
+    setIsMenuOpen(false);
+  };
+
   return (
     <>
-      <div className="md:hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[92%]">
-        <div className="backdrop-blur supports-[backdrop-filter]:bg-white/70 bg-card/90 border shadow-lg rounded-2xl px-2 py-2">
+      <div className="md:hidden fixed bottom-4 left-1/2 z-50 w-[92%] -translate-x-1/2">
+        <div className="rounded-2xl border bg-card/90 px-2 py-2 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-white/70">
           <div className="grid grid-cols-6 gap-1">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -40,17 +65,26 @@ export const Navigation = ({ currentPage, onPageChange }: NavigationProps) => {
               return (
                 <button
                   key={item.id}
-                  onClick={() => onPageChange(item.id)}
-                  className={`flex flex-col items-center justify-center py-2 rounded-xl transition-colors ${
+                  onClick={() => handleMobileNav(item.id)}
+                  className={`flex flex-col items-center justify-center rounded-xl py-2 text-[11px] font-medium transition-colors ${
                     active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
                   }`}
                 >
                   <Icon className="h-5 w-5" />
-                  <span className="text-[11px] mt-1 font-medium">{item.label.split(" ")[0]}</span>
+                  <span className="mt-1">{item.label.split(" ")[0]}</span>
                 </button>
               );
             })}
           </div>
+          {onLogout && (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-destructive/10 py-2 text-xs font-medium text-destructive transition hover:bg-destructive/20"
+            >
+              <LogOut className="h-4 w-4" /> Log out
+            </button>
+          )}
         </div>
       </div>
 
@@ -58,29 +92,27 @@ export const Navigation = ({ currentPage, onPageChange }: NavigationProps) => {
         <Button
           variant="outline"
           size="icon"
-          onClick={() => setIsMenuOpen(!isMenuOpen)}
+          onClick={() => setIsMenuOpen((prev) => !prev)}
           className="bg-card shadow-lg"
         >
           {isMenuOpen ? <X /> : <Menu />}
         </Button>
       </div>
 
-      {isMenuOpen && (
-        <div className="md:hidden fixed inset-0 bg-black/50 z-40" onClick={() => setIsMenuOpen(false)} />
-      )}
+      {isMenuOpen && <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setIsMenuOpen(false)} />}
 
       <Card
-        className={`fixed md:relative h-full w-64 bg-card border-r z-40 transition-transform duration-300 ${
+        className={`fixed z-40 h-full w-64 border-r bg-card transition-transform duration-300 md:relative ${
           isMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >
-        <div className="p-6">
+        <div className="flex h-full flex-col p-6">
           <div className="mb-8">
             <h2 className="text-xl font-bold text-primary">Sibulan Public Market</h2>
             <p className="text-sm text-muted-foreground">Stall Rental System</p>
           </div>
 
-          <nav className="space-y-2">
+          <nav className="flex-1 space-y-2">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = currentPage === item.id;
@@ -100,6 +132,21 @@ export const Navigation = ({ currentPage, onPageChange }: NavigationProps) => {
               );
             })}
           </nav>
+
+          {onLogout && (
+            <div className="mt-8 space-y-3 border-t pt-4 text-xs text-muted-foreground">
+              {(userName || userRole || userUsername) && (
+                <div>
+                  {userName && <p className="text-sm font-semibold text-foreground">{userName}</p>}
+                  {userUsername && <p className="truncate">Username: {userUsername}</p>}
+                  {userRole && <p className="capitalize">Role: {userRole}</p>}
+                </div>
+              )}
+              <Button variant="outline" className="w-full justify-start" onClick={handleLogout}>
+                <LogOut className="mr-2 h-4 w-4" /> Log out
+              </Button>
+            </div>
+          )}
         </div>
       </Card>
     </>
