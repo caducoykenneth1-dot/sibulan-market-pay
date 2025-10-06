@@ -7,17 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Calendar,
-  CheckCircle,
-  DollarSign,
-  PrinterIcon,
-  Receipt,
-  Search,
-  User,
-  Building2
-} from "lucide-react";
 import { type StallRecord } from "@/data/stalls";
+
+// 🧩 PDF generation imports
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 type PaymentData = {
   amount: string;
@@ -127,54 +121,118 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
     });
   };
 
-  const handlePrintReceipt = () => {
-    toast({ title: "Receipt generated", description: "Digital receipt ready for printing." });
-  };
+  // ✅ Fixed thermal PDF (proper width & upright orientation)
+  const handlePrintReceipt = async () => {
+  const receipt = document.getElementById("receipt-content");
+  if (!receipt) return;
+
+  try {
+    // Capture the receipt at high quality
+    const canvas = await html2canvas(receipt, {
+      scale: 2,
+      backgroundColor: "#ffffff",
+      useCORS: true,
+      windowWidth: receipt.scrollWidth,
+    });
+
+    const imgData = canvas.toDataURL("image/png");
+
+    // Real-world scaling logic (1mm ≈ 3.779528 px)
+    const pxPerMm = 3.779528;
+    const pdfWidth = 80; // 80mm thermal width
+    const pdfHeight = canvas.height / pxPerMm; // convert actual pixel height to mm
+
+    // Create portrait PDF with proper aspect ratio
+    const pdf = new jsPDF({
+      orientation: "portrait",
+      unit: "mm",
+      format: [pdfWidth, pdfHeight],
+    });
+
+    // Calculate image height to preserve proportions
+    const imgWidth = pdfWidth;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+    pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
+    pdf.save(`receipt-${Date.now()}.pdf`);
+
+    toast({
+      title: "Receipt generated",
+      description: "Properly scaled PDF created.",
+    });
+  } catch (error) {
+    console.error("PDF generation failed:", error);
+    toast({
+      title: "Error",
+      description: "Something went wrong while generating the receipt.",
+      variant: "destructive",
+    });
+  }
+};
+
 
   if (showReceipt && selectedStall) {
     return (
       <div className="space-y-6">
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setShowReceipt(false)}>
-            <span>&lt; Back</span>
+            &lt; Back
           </Button>
           <h1 className="text-2xl font-bold">Payment Receipt</h1>
         </div>
 
-        <Card className="max-w-md mx-auto">
-          <CardHeader className="text-center">
-            <CardTitle className="text-green-600 flex items-center justify-center gap-2">
-              <CheckCircle className="h-6 w-6" /> Payment successful
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="text-center space-y-2">
-              <div className="text-3xl font-bold">PHP {paymentData.amount}</div>
-              <Badge variant="outline">Receipt #DPM-{Date.now().toString().slice(-6)}</Badge>
-            </div>
-            <div className="space-y-3 pt-4 border-t">
-              <div className="flex justify-between text-sm">
-                <span>Vendor</span>
-                <span className="font-medium">{selectedStall.vendor || "No vendor assigned"}</span>
+        <div id="receipt-content">
+          <Card className="mx-auto w-[300px] text-sm p-2">
+            <CardHeader className="text-center">
+              <CardTitle className="text-lg font-semibold">
+                PAYMENT RECEIPT
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-center">
+                <div className="text-2xl font-bold">PHP {paymentData.amount}</div>
+                <div>Receipt No: DPM-{Date.now().toString().slice(-6)}</div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span>Stall</span>
-                <span className="font-medium">{selectedStallDisplayName} ({selectedStall.id})</span>
+              <div className="border-t pt-2 space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span>Vendor:</span>
+                  <span className="font-medium">{selectedStall.vendor || "No vendor"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Stall:</span>
+                  <span className="font-medium">
+                    {selectedStallDisplayName} ({selectedStall.id})
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Amount:</span>
+                  <span className="font-medium">PHP {paymentData.amount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Payment Type:</span>
+                  <span className="font-medium">{paymentData.paymentType}</span>
+                </div>
+                {paymentData.notes && (
+                  <div className="flex justify-between">
+                    <span>Notes:</span>
+                    <span className="font-medium">{paymentData.notes}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>Date:</span>
+                  <span>{new Date().toLocaleString()}</span>
+                </div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span>Collected amount</span>
-                <span className="font-medium">PHP {paymentData.amount}</span>
+              <div className="text-center text-xs pt-2 border-t mt-2">
+                Thank you for your payment.
               </div>
-              <div className="flex justify-between text-sm">
-                <span>Payment type</span>
-                <span className="font-medium">{paymentData.paymentType}</span>
-              </div>
-            </div>
-            <Button className="w-full" onClick={handlePrintReceipt}>
-              <PrinterIcon className="mr-2 h-4 w-4" /> Print receipt
-            </Button>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Button className="w-full" onClick={handlePrintReceipt}>
+          Print Receipt
+        </Button>
       </div>
     );
   }
@@ -184,24 +242,25 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Payment Collection</h1>
-          <p className="text-muted-foreground">Capture stall payments and generate receipts instantly.</p>
+          <p className="text-muted-foreground">
+            Capture stall payments and generate receipts instantly.
+          </p>
         </div>
-        <Button variant="outline" onClick={() => setShowReceipt(false)} disabled>
-          <Receipt className="mr-2 h-4 w-4" /> Recent receipts
-        </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base font-semibold">
-            <Search className="h-5 w-5" /> Select stall
-          </CardTitle>
+          <CardTitle className="text-base font-semibold">Select Stall</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="stall-type">Stall type</Label>
-              <Select value={selectedType || undefined} onValueChange={setSelectedType} disabled={stallTypeOptions.length === 0}>
+            <div>
+              <Label htmlFor="stall-type">Stall Type</Label>
+              <Select
+                value={selectedType || undefined}
+                onValueChange={setSelectedType}
+                disabled={stallTypeOptions.length === 0}
+              >
                 <SelectTrigger id="stall-type">
                   <SelectValue placeholder="Select stall type" />
                 </SelectTrigger>
@@ -214,36 +273,22 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
+            <div>
               <Label htmlFor="stall-select">Stall</Label>
               <Select
                 value={selectedStallId || undefined}
                 onValueChange={setSelectedStallId}
                 disabled={filteredStalls.length === 0}
               >
-                <SelectTrigger id="stall-select" disabled={filteredStalls.length === 0}>
-                  <SelectValue
-                    placeholder={
-                      filteredStalls.length === 0
-                        ? "No stalls available"
-                        : "Choose stall"
-                    }
-                  />
+                <SelectTrigger id="stall-select">
+                  <SelectValue placeholder="Choose stall" />
                 </SelectTrigger>
                 <SelectContent>
                   {filteredStalls.map((stall) => {
                     const displayName = displayNameById.get(stall.id) ?? stall.name;
                     return (
                       <SelectItem key={stall.id} value={stall.id}>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{displayName}</span>
-                          <span className="text-sm text-muted-foreground">
-                            {stall.vendor || "No vendor"}
-                          </span>
-                          <Badge variant={getStatusBadge(stall.status)} className="ml-auto capitalize">
-                            {stall.status}
-                          </Badge>
-                        </div>
+                        {displayName} — {stall.vendor || "No vendor"}
                       </SelectItem>
                     );
                   })}
@@ -252,40 +297,28 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
             </div>
           </div>
 
-          {selectedStall ? (
-            <Card className="bg-muted/40">
-              <CardContent className="pt-4">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="flex items-center gap-2 text-sm">
-                    <Building2 className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">{selectedStallDisplayName}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    <User className="h-4 w-4 text-muted-foreground" />
-                    <span>{selectedStall.vendor || "No vendor assigned"}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    <span>Monthly rent: PHP {selectedStall.monthlyRent}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
-                    <span>Last payment: {selectedStall.lastPayment || "--"}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <p className="text-sm text-muted-foreground">Select a stall to see details.</p>
+          {selectedStall && (
+            <div className="bg-muted/40 p-3 rounded-md text-sm space-y-1">
+              <div>
+                <strong>Stall:</strong> {selectedStallDisplayName}
+              </div>
+              <div>
+                <strong>Vendor:</strong> {selectedStall.vendor || "No vendor"}
+              </div>
+              <div>
+                <strong>Monthly Rent:</strong> PHP {selectedStall.monthlyRent}
+              </div>
+              <div>
+                <strong>Last Payment:</strong> {selectedStall.lastPayment || "--"}
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Receipt className="h-5 w-5" /> Payment details
-          </CardTitle>
+          <CardTitle>Payment Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
@@ -301,7 +334,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
               />
             </div>
             <div>
-              <Label htmlFor="payment-type">Payment type</Label>
+              <Label htmlFor="payment-type">Payment Type</Label>
               <Select
                 value={paymentData.paymentType || undefined}
                 onValueChange={(value) => setPaymentData({ ...paymentData, paymentType: value })}
@@ -310,15 +343,16 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
                   <SelectValue placeholder="Select payment type" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="monthly-rent">Monthly rent</SelectItem>
-                  <SelectItem value="daily-fee">Daily fee</SelectItem>
+                  <SelectItem value="monthly-rent">Monthly Rent</SelectItem>
+                  <SelectItem value="daily-fee">Daily Fee</SelectItem>
                   <SelectItem value="penalty">Penalty</SelectItem>
-                  <SelectItem value="deposit">Security deposit</SelectItem>
+                  <SelectItem value="deposit">Security Deposit</SelectItem>
                   <SelectItem value="other">Other</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
+
           <div>
             <Label htmlFor="notes">Notes (optional)</Label>
             <Textarea
@@ -328,12 +362,13 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
               placeholder="Additional information about this payment"
             />
           </div>
+
           <Button
             className="w-full"
             onClick={handlePaymentSubmit}
             disabled={!selectedStall || !paymentData.amount || !paymentData.paymentType}
           >
-            Record payment
+            Record Payment
           </Button>
         </CardContent>
       </Card>
