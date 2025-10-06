@@ -204,7 +204,7 @@ export const ScheduledCollections = ({ onNavigate, stalls }: ScheduledCollection
           <div>
             <p className="font-medium">{item.vendor}</p>
             <p className="text-xs text-muted-foreground">
-              {item.type} • {item.date} at {item.time}
+              {item.type} ï¿½ {item.date} at {item.time}
             </p>
             <p className="text-xs text-muted-foreground flex items-center gap-1">
               <MapPin className="h-3 w-3" /> {item.stallName}
@@ -299,7 +299,7 @@ export const ScheduledCollections = ({ onNavigate, stalls }: ScheduledCollection
                 <div>
                   <p className="font-medium">Follow up with {item.vendor}</p>
                   <p className="text-xs text-muted-foreground">
-                    {item.type} • {item.date} at {item.time}
+                    {item.type} ï¿½ {item.date} at {item.time}
                   </p>
                 </div>
                 <div className="flex gap-2">

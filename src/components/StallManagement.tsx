@@ -4,7 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,10 +23,21 @@ import {
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
+import {
+  BASE_TYPE_OPTIONS,
+  createStall,
+  deleteStall,
+  updateStall,
+  type StallRecord,
+  type StallStatus
+} from "@/data/stalls";
 import { supabase } from "@/lib/supabaseClient";
-import { BASE_TYPE_OPTIONS, getNextStallNumbers, type StallRecord, type StallStatus } from "@/data/stalls";
+import { useToast } from "@/hooks/use-toast";
 import { Building2, DollarSign, Filter, Pencil, Phone, Plus, Search, Trash2, User } from "lucide-react";
 
+/* ----------------------------------------------------------
+   MAIN COMPONENT
+---------------------------------------------------------- */
 interface StallManagementProps {
   stalls: StallRecord[];
   onStallsChange: Dispatch<SetStateAction<StallRecord[]>>;
@@ -65,7 +83,11 @@ const getStatusBadge = (status: StallStatus) => {
   }
 };
 
+/* ----------------------------------------------------------
+   COMPONENT
+---------------------------------------------------------- */
 export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps) => {
+  const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | StallStatus>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -75,6 +97,9 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
   const [formState, setFormState] = useState<StallFormState>(createEmptyForm());
   const [stallToDelete, setStallToDelete] = useState<StallRecord | null>(null);
 
+  /* ----------------------------------------------------------
+     HELPERS
+  ---------------------------------------------------------- */
   const typeOptions = useMemo(
     () =>
       Array.from(new Set([...BASE_TYPE_OPTIONS, ...stalls.map((stall) => stall.type).filter(Boolean)])).sort((a, b) =>
@@ -90,11 +115,9 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
       overdue: 0,
       vacant: 0
     };
-
     stalls.forEach((stall) => {
       counts[stall.status] += 1;
     });
-
     return [
       { label: "Total Stalls", value: stalls.length, description: `${counts.current + counts.due + counts.overdue} occupied` },
       { label: "Current", value: counts.current, description: "Up to date" },
@@ -103,38 +126,53 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     ];
   }, [stalls]);
 
-  const displayNameById = useMemo(() => {
-    const counters = new Map<string, number>();
-    const names = new Map<string, string>();
-
-    stalls.forEach((stall) => {
-      const typeKey = stall.type.trim().toLowerCase() || "uncategorised";
-      const nextNumber = (counters.get(typeKey) ?? 0) + 1;
-      counters.set(typeKey, nextNumber);
-      names.set(stall.id, `Stall ${nextNumber}`);
-    });
-
-    return names;
-  }, [stalls]);
-
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
   const filteredStalls = useMemo(() => {
     return stalls.filter((stall) => {
       const matchesStatus = statusFilter === "all" || stall.status === statusFilter;
       const matchesType = typeFilter === "all" || stall.type === typeFilter;
-      const displayName = displayNameById.get(stall.id) ?? stall.name;
       const matchesSearch =
         !normalizedSearch ||
-        displayName.toLowerCase().includes(normalizedSearch) ||
-        stall.name.toLowerCase().includes(normalizedSearch) ||
-        stall.id.toLowerCase().includes(normalizedSearch) ||
         stall.vendor.toLowerCase().includes(normalizedSearch) ||
-        stall.type.toLowerCase().includes(normalizedSearch);
-
+        stall.type.toLowerCase().includes(normalizedSearch) ||
+        String(stall.dbId).includes(normalizedSearch);
       return matchesStatus && matchesType && matchesSearch;
     });
-  }, [stalls, statusFilter, typeFilter, normalizedSearch, displayNameById]);
+  }, [stalls, statusFilter, typeFilter, normalizedSearch]);
+
+  /* ----------------------------------------------------------
+     CRUD: CREATE + EDIT + DELETE
+  ---------------------------------------------------------- */
+
+  const reloadStalls = async () => {
+    const { data, error } = await supabase
+      .from("vendors")
+      .select("id,vendor,contact,type,monthly_rent,last_payment,next_due,status")
+      .order("id", { ascending: true });
+
+    if (error) {
+      console.error("Reload error:", error);
+      toast({ title: "Reload failed", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    const mapped: StallRecord[] = (data ?? []).map((row) => ({
+      id: `stall-${row.id}`,
+      dbId: row.id,
+      name: `Stall ${row.id}`,
+      vendor: row.vendor ?? "",
+      contact: row.contact ?? "",
+      type: row.type ?? "",
+      monthlyRent: row.monthly_rent ?? 0,
+      lastPayment: row.last_payment ?? "",
+      nextDue: row.next_due ?? "",
+      status: row.status ?? "vacant",
+      occupied: row.status !== "vacant"
+    }));
+
+    onStallsChange(mapped);
+  };
 
   const openCreateDialog = () => {
     setFormState(createEmptyForm());
@@ -173,112 +211,67 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     event.preventDefault();
     const trimmedType = formState.type.trim();
     const rent = Number(formState.monthlyRent);
-
-    if (!trimmedType || Number.isNaN(rent)) {
-      return;
-    }
-
     const isVacant = formState.status === "vacant";
 
-    if (isEditMode && stallBeingEdited) {
-      onStallsChange((prev) =>
-        prev.map((stall) => {
-          if (stall.id !== stallBeingEdited.id) {
-            return stall;
-          }
+    if (!trimmedType || Number.isNaN(rent)) return;
 
-          return {
-            ...stall,
-            vendor: isVacant ? "" : formState.vendor.trim(),
-            contact: isVacant ? "" : formState.contact.trim(),
-            type: trimmedType,
-            monthlyRent: rent,
-            lastPayment: isVacant ? "" : formState.lastPayment,
-            nextDue: isVacant ? "" : formState.nextDue,
-            status: formState.status,
-            occupied: !isVacant
-          };
-        })
-      );
-      closeFormDialog();
-      return;
-    }
-
-    const { nextIdNumber, nextNameNumber } = getNextStallNumbers(stalls, trimmedType);
-
-    const payload = {
-      vendor: isVacant ? null : formState.vendor.trim() || null,
-      contact: isVacant ? null : formState.contact.trim() || null,
-      type: trimmedType,
-      monthly_rent: rent,
-      last_payment: isVacant || !formState.lastPayment ? null : formState.lastPayment,
-      next_due: isVacant || !formState.nextDue ? null : formState.nextDue,
-      status: formState.status
-    };
-
-    const { data, error } = await supabase.from("vendors").insert([payload]).select().single();
-
-    if (error) {
-      console.error("Failed to create stall in Supabase", error);
-      return;
-    }
-
-    const supabaseId = typeof data?.id === "number" ? data.id : nextIdNumber;
-    const vendorValue = typeof data?.vendor === "string" ? data.vendor : (payload.vendor ?? "");
-    const contactValue = typeof data?.contact === "string" ? data.contact : (payload.contact ?? "");
-    const rawMonthlyRent = data?.monthly_rent;
-    let normalizedMonthlyRent = rent;
-
-    if (typeof rawMonthlyRent === "number") {
-      normalizedMonthlyRent = rawMonthlyRent;
-    } else if (typeof rawMonthlyRent === "string") {
-      const parsed = Number.parseFloat(rawMonthlyRent);
-      normalizedMonthlyRent = Number.isNaN(parsed) ? rent : parsed;
-    }
-
-    const lastPaymentValue =
-      typeof data?.last_payment === "string" ? data.last_payment : (payload.last_payment ?? "");
-    const nextDueValue =
-      typeof data?.next_due === "string" ? data.next_due : (payload.next_due ?? "");
-    const statusValue = typeof data?.status === "string" ? (data.status as StallStatus) : formState.status;
-
-    const newStall: StallRecord = {
-      id: `stall-${supabaseId}`,
-      name: `Stall ${nextNameNumber}`,
-      vendor: vendorValue,
-      contact: contactValue,
-      type: trimmedType,
-      monthlyRent: normalizedMonthlyRent,
-      lastPayment: lastPaymentValue,
-      nextDue: nextDueValue,
-      status: statusValue,
-      occupied: !isVacant
-    };
-
-    onStallsChange((prev) => [...prev, newStall]);
-    closeFormDialog();
-  };
-
-  const handleDelete = () => {
-    if (!stallToDelete) {
-      return;
-    }
-
-    const targetId = stallToDelete.id;
-    const targetType = stallToDelete.type;
-
-    onStallsChange((prev) => prev.filter((stall) => stall.id !== targetId));
-
-    if (typeFilter !== "all" && targetType === typeFilter) {
-      const stillHasType = stalls.some((stall) => stall.id !== targetId && stall.type === targetType);
-      if (!stillHasType) {
-        setTypeFilter("all");
+    try {
+      if (isEditMode && stallBeingEdited) {
+        await updateStall(stallBeingEdited.dbId, {
+          vendor: isVacant ? "" : formState.vendor.trim(),
+          contact: isVacant ? "" : formState.contact.trim(),
+          type: trimmedType,
+          monthlyRent: rent,
+          lastPayment: isVacant ? "" : formState.lastPayment,
+          nextDue: isVacant ? "" : formState.nextDue,
+          status: formState.status,
+          occupied: !isVacant
+        });
+        toast({ title: "Stall updated", description: "Changes saved successfully." });
+      } else {
+        await createStall({
+          vendor: isVacant ? "" : formState.vendor.trim(),
+          contact: isVacant ? "" : formState.contact.trim(),
+          type: trimmedType,
+          monthlyRent: rent,
+          lastPayment: isVacant ? "" : formState.lastPayment,
+          nextDue: isVacant ? "" : formState.nextDue,
+          status: formState.status,
+          occupied: !isVacant
+        });
+        toast({ title: "Stall created", description: "New stall added successfully." });
       }
-    }
 
-    setStallToDelete(null);
+      await reloadStalls();
+      closeFormDialog();
+    } catch (error: any) {
+      toast({
+        title: "Operation failed",
+        description: error.message || "Could not save stall",
+        variant: "destructive"
+      });
+    }
   };
 
+  const handleDelete = async () => {
+    if (!stallToDelete) return;
+    try {
+      await deleteStall(stallToDelete.dbId);
+      toast({ title: "Stall deleted", description: "The stall was removed successfully." });
+      await reloadStalls();
+      setStallToDelete(null);
+    } catch (error: any) {
+      toast({
+        title: "Deletion failed",
+        description: error.message || "Could not delete stall",
+        variant: "destructive"
+      });
+    }
+  };
+
+  /* ----------------------------------------------------------
+     RENDER
+  ---------------------------------------------------------- */
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -291,6 +284,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
         </Button>
       </div>
 
+      {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((item) => (
           <Card key={item.label}>
@@ -305,6 +299,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
         ))}
       </div>
 
+      {/* Search / Filters */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base font-semibold">Search & Filters</CardTitle>
@@ -315,7 +310,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
             <Input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search stall, vendor, or ID"
+              placeholder="Search vendor, type, or ID"
               className="pl-9"
             />
           </div>
@@ -349,20 +344,19 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
         </CardContent>
       </Card>
 
+      {/* Stall list */}
       {filteredStalls.length === 0 ? (
         <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            No stalls match the current filters.
-          </CardContent>
+          <CardContent className="py-12 text-center text-muted-foreground">No stalls match the current filters.</CardContent>
         </Card>
       ) : (
         <div className="grid gap-4">
           {filteredStalls.map((stall) => (
             <Card key={stall.id}>
-              <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <Building2 className="h-5 w-5 text-muted-foreground" />
-                  {displayNameById.get(stall.id) ?? stall.name}
+                  {stall.name}
                 </CardTitle>
                 <Badge variant={getStatusBadge(stall.status)} className="capitalize">
                   {stall.status}
@@ -380,7 +374,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
                   </div>
                   <div className="flex items-center gap-2">
                     <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    <span>Monthly rent: PHP {stall.monthlyRent.toLocaleString()}</span>
+                    <span>Monthly rent: ₱{stall.monthlyRent.toLocaleString()}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge className="capitalize" variant="outline">
@@ -390,10 +384,10 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
                 </div>
                 <div className="flex gap-2 pt-2">
                   <Button variant="outline" size="sm" onClick={() => openEditDialog(stall)}>
-                    <Pencil className="mr-2 h-4 w-4" /> Edit stall
+                    <Pencil className="mr-2 h-4 w-4" /> Edit
                   </Button>
                   <Button variant="destructive" size="sm" onClick={() => setStallToDelete(stall)}>
-                    <Trash2 className="mr-2 h-4 w-4" /> Delete stall
+                    <Trash2 className="mr-2 h-4 w-4" /> Delete
                   </Button>
                 </div>
               </CardContent>
@@ -402,11 +396,12 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
         </div>
       )}
 
+      {/* Create/Edit Dialog */}
       <Dialog open={isCreateOpen} onOpenChange={(open) => (open ? setIsCreateOpen(true) : closeFormDialog())}>
         <DialogContent>
           <form onSubmit={handleFormSubmit} className="space-y-5">
             <DialogHeader>
-              <DialogTitle>{isEditMode ? "Edit stall" : "Add a new stall"}</DialogTitle>
+              <DialogTitle>{isEditMode ? "Edit Stall" : "Add New Stall"}</DialogTitle>
               <DialogDescription>
                 {isEditMode
                   ? "Update stall information. Leave vendor fields blank for vacant stalls."
@@ -416,9 +411,9 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="new-type">Stall type</Label>
+                <Label htmlFor="type">Stall type</Label>
                 <Select value={formState.type} onValueChange={(value) => handleFormChange("type", value)}>
-                  <SelectTrigger id="new-type">
+                  <SelectTrigger id="type">
                     <SelectValue placeholder="Select stall type" />
                   </SelectTrigger>
                   <SelectContent>
@@ -430,10 +425,11 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="new-status">Status</Label>
+                <Label htmlFor="status">Status</Label>
                 <Select value={formState.status} onValueChange={(value) => handleFormChange("status", value)}>
-                  <SelectTrigger id="new-status">
+                  <SelectTrigger id="status">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -445,54 +441,59 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="new-rent">Monthly rent (PHP)</Label>
+                <Label htmlFor="rent">Monthly rent (PHP)</Label>
                 <Input
-                  id="new-rent"
+                  id="rent"
                   type="number"
                   min={0}
                   value={formState.monthlyRent}
-                  onChange={(event) => handleFormChange("monthlyRent", event.target.value)}
+                  onChange={(e) => handleFormChange("monthlyRent", e.target.value)}
                   required
                 />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="new-vendor">Vendor name</Label>
+                <Label htmlFor="vendor">Vendor name</Label>
                 <Input
-                  id="new-vendor"
+                  id="vendor"
                   value={formState.vendor}
-                  onChange={(event) => handleFormChange("vendor", event.target.value)}
+                  onChange={(e) => handleFormChange("vendor", e.target.value)}
                   placeholder="Leave blank if vacant"
                   disabled={formState.status === "vacant"}
                 />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="new-contact">Contact number</Label>
+                <Label htmlFor="contact">Contact number</Label>
                 <Input
-                  id="new-contact"
+                  id="contact"
                   value={formState.contact}
-                  onChange={(event) => handleFormChange("contact", event.target.value)}
+                  onChange={(e) => handleFormChange("contact", e.target.value)}
                   placeholder="09xxxxxxxxx"
                   disabled={formState.status === "vacant"}
                 />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="new-last">Last payment date</Label>
+                <Label htmlFor="last">Last payment date</Label>
                 <Input
-                  id="new-last"
+                  id="last"
                   type="date"
                   value={formState.lastPayment}
-                  onChange={(event) => handleFormChange("lastPayment", event.target.value)}
+                  onChange={(e) => handleFormChange("lastPayment", e.target.value)}
                   disabled={formState.status === "vacant"}
                 />
               </div>
+
               <div className="space-y-2">
-                <Label htmlFor="new-next">Next due date</Label>
+                <Label htmlFor="next">Next due date</Label>
                 <Input
-                  id="new-next"
+                  id="next"
                   type="date"
                   value={formState.nextDue}
-                  onChange={(event) => handleFormChange("nextDue", event.target.value)}
+                  onChange={(e) => handleFormChange("nextDue", e.target.value)}
                   disabled={formState.status === "vacant"}
                 />
               </div>
@@ -510,12 +511,13 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
         </DialogContent>
       </Dialog>
 
+      {/* Delete Confirmation */}
       <AlertDialog open={Boolean(stallToDelete)} onOpenChange={(open) => (!open ? setStallToDelete(null) : null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete stall</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The stall will be removed from payment collection and reports.
+              This action cannot be undone. The stall will be permanently removed.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -529,4 +531,3 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     </div>
   );
 };
-

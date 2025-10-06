@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { type StallRecord } from "@/data/stalls";
 import {
   Calendar,
   CheckCircle,
@@ -18,6 +17,7 @@ import {
   User,
   Building2
 } from "lucide-react";
+import { type StallRecord } from "@/data/stalls";
 
 type PaymentData = {
   amount: string;
@@ -28,9 +28,6 @@ type PaymentData = {
 interface PaymentCollectionProps {
   stalls: StallRecord[];
 }
-
-const getStatusBadge = (status: StallRecord["status"]) =>
-  status === "current" ? "default" : status === "due" ? "secondary" : "destructive";
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   const counters = new Map<string, number>();
@@ -45,6 +42,9 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 
   return names;
 };
+
+const getStatusBadge = (status: StallRecord["status"]) =>
+  status === "current" ? "default" : status === "due" ? "secondary" : "destructive";
 
 export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
   const { toast } = useToast();

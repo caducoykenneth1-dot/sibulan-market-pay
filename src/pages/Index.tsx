@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+﻿﻿import { useEffect, useState } from "react";
 import { Navigation } from "@/components/Navigation";
 import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection";
@@ -6,7 +6,7 @@ import { PaymentHistory } from "@/components/PaymentHistory";
 import { StallManagement } from "@/components/StallManagement";
 import { Reports } from "@/components/Reports";
 import { ScheduledCollections } from "@/components/ScheduledCollections";
-import { createInitialStalls, type StallRecord, type StallStatus } from "@/data/stalls";
+import { type StallRecord, type StallStatus } from "@/data/stalls";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -98,7 +98,8 @@ const normalizeAccounts = (records: unknown[]): AccountRecord[] => {
 };
 
 const Index = () => {
-  const [stalls, setStalls] = useState<StallRecord[]>(createInitialStalls());
+  // ⬇️ Changed: start empty; Supabase will populate
+  const [stalls, setStalls] = useState<StallRecord[]>([]);
   const [currentPage, setCurrentPage] = useState("dashboard");
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [authReady, setAuthReady] = useState(false);
@@ -205,6 +206,7 @@ const Index = () => {
 
         return {
           id: `stall-${safeId}`,
+          dbId: safeId,
           name: `Stall ${safeId}`,
           vendor: row.vendor ?? "",
           contact: row.contact ?? "",
@@ -538,18 +540,3 @@ const Index = () => {
 };
 
 export default Index;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -12,13 +12,12 @@ type PaymentRecord = {
   id: string;
   date: string;
   time: string;
-  stallId: string;
   stallName: string;
   vendor: string;
   amount: number;
   type: string;
   method: string;
-  status: string;
+  status: "completed" | "pending";
   collector: string;
 };
 
@@ -26,25 +25,15 @@ interface PaymentHistoryProps {
   stalls: StallRecord[];
 }
 
-const PAYMENT_TIMES = [
-  "09:00 AM",
-  "09:30 AM",
-  "10:00 AM",
-  "10:30 AM",
-  "11:00 AM",
-  "11:30 AM",
-  "01:00 PM",
-  "02:30 PM"
-];
-
-const COLLECTOR_POOL = ["Juan Collector", "Maria Collector", "Alex Rivera"];
+const getStatusBadge = (status: PaymentRecord["status"]) =>
+  status === "completed" ? "default" : "secondary";
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   const counters = new Map<string, number>();
   const names = new Map<string, string>();
 
   stalls.forEach((stall) => {
-    const typeKey = stall.type.trim().toLowerCase() || "uncategorised";
+    const typeKey = stall.type?.trim().toLowerCase() || "uncategorised";
     const nextNumber = (counters.get(typeKey) ?? 0) + 1;
     counters.set(typeKey, nextNumber);
     names.set(stall.id, `Stall ${nextNumber}`);
@@ -55,38 +44,38 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 
 const formatDate = (date: Date): string => date.toISOString().split("T")[0];
 
+const COLLECTOR_POOL = ["Juan Collector", "Maria Collector", "Alex Rivera"];
+
 const buildPaymentRecords = (stalls: StallRecord[], displayNameById: Map<string, string>): PaymentRecord[] => {
-  const activeStalls = stalls.filter((stall) => stall.occupied || stall.status !== "vacant");
+  const today = new Date();
+  const timeSlots = ["09:30 AM", "10:15 AM", "11:00 AM", "01:30 PM", "02:15 PM"];
 
-  if (activeStalls.length === 0) {
-    return [];
-  }
+  return stalls
+    .filter((stall) => stall.occupied || stall.status !== "vacant")
+    .map((stall, index) => {
+      const paymentDate = new Date(today);
+      paymentDate.setDate(today.getDate() - (index % 10));
+      const status: "completed" | "pending" = stall.status === "overdue" || stall.status === "due" ? "pending" : "completed";
+      const stallDisplayName = displayNameById.get(stall.id) ?? stall.name;
 
-  return activeStalls.map((stall, index) => {
-    const paymentStatus = stall.status === "overdue" || stall.status === "due" ? "pending" : "completed";
-    const paymentDate = new Date();
-    paymentDate.setDate(paymentDate.getDate() - index);
-    const stallDisplayName = displayNameById.get(stall.id) ?? stall.name;
-
-    return {
-      id: `DPM-${(123400 + index).toString().padStart(6, "0")}`,
-      date: formatDate(paymentDate),
-      time: PAYMENT_TIMES[index % PAYMENT_TIMES.length],
-      stallId: stall.id,
-      stallName: stallDisplayName,
-      vendor: stall.vendor || "No vendor assigned",
-      amount: stall.monthlyRent,
-      type: stall.type || "General",
-      method: paymentStatus === "completed" ? "Cash" : "Pending",
-      status: paymentStatus,
-      collector: COLLECTOR_POOL[index % COLLECTOR_POOL.length]
-    };
-  });
+      return {
+        id: `DPM-${(123400 + index).toString().padStart(6, "0")}`,
+        date: formatDate(paymentDate),
+        time: timeSlots[index % timeSlots.length],
+        stallName: stallDisplayName,
+        vendor: stall.vendor || "No vendor assigned",
+        amount: stall.monthlyRent,
+        type: stall.type || "General",
+        method: status === "completed" ? "Cash" : "Pending",
+        status,
+        collector: COLLECTOR_POOL[index % COLLECTOR_POOL.length]
+      };
+    });
 };
 
 export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
-  const [viewedPayment, setViewedPayment] = useState<PaymentRecord | null>(null);
-  const [isViewOpen, setIsViewOpen] = useState(false);
+  const [selectedPayment, setSelectedPayment] = useState<PaymentRecord | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
 
@@ -94,16 +83,16 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
 
   const payments = useMemo(() => buildPaymentRecords(stalls, displayNameById), [stalls, displayNameById]);
 
-  const paymentTypes = useMemo(
-    () => Array.from(new Set(payments.map((payment) => payment.type))).sort((a, b) => a.localeCompare(b)),
+  const typeOptions = useMemo(
+    () => Array.from(new Set(payments.map((p) => p.type))).sort((a, b) => a.localeCompare(b)),
     [payments]
   );
 
   useEffect(() => {
-    if (filterType !== "all" && !paymentTypes.includes(filterType)) {
+    if (filterType !== "all" && !typeOptions.includes(filterType)) {
       setFilterType("all");
     }
-  }, [filterType, paymentTypes]);
+  }, [filterType, typeOptions]);
 
   const filteredPayments = useMemo(() => {
     return payments.filter((payment) => {
@@ -111,43 +100,26 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
       const matchesSearch =
         normalizedSearch.length === 0 ||
         payment.stallName.toLowerCase().includes(normalizedSearch) ||
-        payment.stallId.toLowerCase().includes(normalizedSearch) ||
         payment.vendor.toLowerCase().includes(normalizedSearch) ||
         payment.id.toLowerCase().includes(normalizedSearch);
 
-      const matchesFilter = filterType === "all" || payment.type === filterType;
+      const matchesType = filterType === "all" || payment.type === filterType;
 
-      return matchesSearch && matchesFilter;
+      return matchesSearch && matchesType;
     });
   }, [payments, searchTerm, filterType]);
 
-  const totalAmount = filteredPayments.reduce((sum, payment) => sum + payment.amount, 0);
+  const totalAmount = useMemo(() => filteredPayments.reduce((sum, p) => sum + p.amount, 0), [filteredPayments]);
 
-  const openPaymentDetails = (payment: PaymentRecord) => {
-    setViewedPayment(payment);
-    setIsViewOpen(true);
+  const handleViewDetails = (payment: PaymentRecord) => {
+    setSelectedPayment(payment);
+    setIsDialogOpen(true);
   };
 
-  const closePaymentDetails = () => {
-    setIsViewOpen(false);
-    setViewedPayment(null);
+  const handleCloseDialog = () => {
+    setIsDialogOpen(false);
+    setSelectedPayment(null);
   };
-
-  const stallDirectory = useMemo(
-    () =>
-      stalls.map((stall) => {
-        const displayName = displayNameById.get(stall.id) ?? stall.name;
-        return {
-          id: stall.id,
-          name: displayName,
-          vendor: stall.vendor || "No vendor assigned",
-          status: stall.status,
-          type: stall.type,
-          monthlyRent: stall.monthlyRent
-        };
-      }),
-    [stalls, displayNameById]
-  );
 
   return (
     <div className="space-y-6">
@@ -165,7 +137,7 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
                 <Input
                   placeholder="Search by stall, vendor, or receipt number..."
                   value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
+                  onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
                 />
               </div>
@@ -178,7 +150,7 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All types</SelectItem>
-                  {paymentTypes.map((type) => (
+                  {typeOptions.map((type) => (
                     <SelectItem key={type} value={type}>
                       {type}
                     </SelectItem>
@@ -249,7 +221,6 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
                     </div>
                   </div>
                 </div>
-
                 <div className="flex items-center gap-4">
                   <div className="text-right">
                     <div className="font-medium text-success">PHP {payment.amount.toLocaleString()}</div>
@@ -257,23 +228,15 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
                       {payment.type}
                     </Badge>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openPaymentDetails(payment)}
-                    aria-label="View payment details"
-                  >
+                  <Button variant="ghost" size="sm" onClick={() => handleViewDetails(payment)} aria-label="View payment details">
                     <Eye className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
             ))}
           </div>
-
           {filteredPayments.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">
-              No payments found matching your criteria.
-            </div>
+            <div className="text-center py-8 text-muted-foreground">No payments found matching your criteria.</div>
           )}
         </CardContent>
       </Card>
@@ -284,18 +247,18 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
           <CardDescription>Everyone sees the latest stall information from Stall Management.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {stallDirectory.length === 0 ? (
+          {stalls.length === 0 ? (
             <p className="text-sm text-muted-foreground">No stalls available.</p>
           ) : (
-            stallDirectory.map((stall) => (
+            stalls.map((stall) => (
               <div
                 key={stall.id}
                 className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3"
               >
                 <div>
-                  <p className="font-medium">{stall.name}</p>
+                  <p className="font-medium">{displayNameById.get(stall.id) ?? stall.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {stall.vendor} - PHP {stall.monthlyRent.toLocaleString()}
+                    {stall.vendor || "No vendor assigned"} - PHP {stall.monthlyRent.toLocaleString()}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -314,62 +277,64 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
         </CardContent>
       </Card>
 
-      <Dialog open={isViewOpen} onOpenChange={(open) => (open ? setIsViewOpen(true) : closePaymentDetails())}>
+      <Dialog open={isDialogOpen} onOpenChange={(open) => (open ? setIsDialogOpen(true) : handleCloseDialog())}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Payment receipt</DialogTitle>
-            {viewedPayment ? (
-              <DialogDescription>Receipt #{viewedPayment.id}</DialogDescription>
+            {selectedPayment ? (
+              <DialogDescription>Receipt #{selectedPayment.id}</DialogDescription>
             ) : (
               <DialogDescription>Review payment details.</DialogDescription>
             )}
           </DialogHeader>
-
-          {viewedPayment && (
+          {selectedPayment && (
             <div className="space-y-4 text-sm">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="text-muted-foreground">Vendor</p>
-                  <p className="font-medium">{viewedPayment.vendor}</p>
+                  <p className="font-medium">{selectedPayment.vendor}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Stall</p>
-                  <p className="font-medium">{viewedPayment.stallName} ({viewedPayment.stallId})</p>
+                  <p className="font-medium">{selectedPayment.stallName}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Collected on</p>
-                  <p className="font-medium">{viewedPayment.date} at {viewedPayment.time}</p>
+                  <p className="font-medium">
+                    {selectedPayment.date} at {selectedPayment.time}
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Collector</p>
-                  <p className="font-medium">{viewedPayment.collector}</p>
+                  <p className="font-medium">{selectedPayment.collector}</p>
                 </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="text-muted-foreground">Amount</p>
-                  <p className="text-lg font-semibold text-success">PHP {viewedPayment.amount.toLocaleString()}</p>
+                  <p className="text-lg font-semibold text-success">PHP {selectedPayment.amount.toLocaleString()}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Payment type</p>
-                  <Badge variant="outline" className="w-fit capitalize">{viewedPayment.type}</Badge>
+                  <Badge variant="outline" className="w-fit capitalize">
+                    {selectedPayment.type}
+                  </Badge>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Method</p>
-                  <p className="font-medium">{viewedPayment.method}</p>
+                  <p className="font-medium">{selectedPayment.method}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Status</p>
-                  <Badge variant={viewedPayment.status === "completed" ? "default" : "secondary"} className="capitalize w-fit">
-                    {viewedPayment.status}
+                  <Badge variant={getStatusBadge(selectedPayment.status)} className="capitalize w-fit">
+                    {selectedPayment.status}
                   </Badge>
                 </div>
               </div>
             </div>
           )}
-
           <DialogFooter>
-            <Button type="button" onClick={closePaymentDetails}>
+            <Button type="button" onClick={handleCloseDialog}>
               Close
             </Button>
           </DialogFooter>

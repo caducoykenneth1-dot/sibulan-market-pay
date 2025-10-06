@@ -1,7 +1,10 @@
+import { supabase } from "@/lib/supabaseClient";
+
 export type StallStatus = "current" | "due" | "overdue" | "vacant";
 
-export type StallRecord = {
-  id: string;
+export interface StallRecord {
+  id: string;           // local identifier like "stall-3"
+  dbId: number;         // Supabase ID (numeric)
   name: string;
   vendor: string;
   contact: string;
@@ -11,128 +14,91 @@ export type StallRecord = {
   nextDue: string;
   status: StallStatus;
   occupied: boolean;
-};
+}
 
-export const BASE_TYPE_OPTIONS: string[] = [
+export const BASE_TYPE_OPTIONS = [
+  "Vegetables",
   "Fish",
   "Meat",
-  "Vegetables",
-  "Fruits",
-  "Dry Goods",
-  "General",
-  "Frozen Goods",
-  "Poultry",
-  "Spices"
+  "Rice",
+  "Grocery",
+  "Clothing",
+  "Others",
 ];
 
-const BASE_STALLS: StallRecord[] = [
-  {
-    id: "stall-1",
-    name: "Stall 1",
-    vendor: "Xtian Daron",
-    contact: "09123456789",
-    type: "Vegetables",
-    monthlyRent: 500,
-    lastPayment: "2024-01-15",
-    nextDue: "2024-02-15",
-    status: "current",
-    occupied: true
-  },
-  {
-    id: "stall-2",
-    name: "Stall 2",
-    vendor: "Cristian Dev",
-    contact: "09987654321",
-    type: "Meat",
-    monthlyRent: 750,
-    lastPayment: "2024-01-10",
-    nextDue: "2024-02-10",
-    status: "due",
-    occupied: true
-  },
-  {
-    id: "stall-3",
-    name: "Stall 3",
-    vendor: "Ana Reyes",
-    contact: "09555666777",
-    type: "Fish",
-    monthlyRent: 600,
-    lastPayment: "2023-12-20",
-    nextDue: "2024-01-20",
-    status: "overdue",
-    occupied: true
-  },
-  {
-    id: "stall-4",
-    name: "Stall 4",
-    vendor: "Cristian Daron",
-    contact: "09112223333",
-    type: "Fruits",
-    monthlyRent: 550,
-    lastPayment: "2024-01-25",
-    nextDue: "2024-02-25",
-    status: "current",
-    occupied: true
-  },
-  {
-    id: "stall-5",
-    name: "Stall 5",
-    vendor: "",
-    contact: "",
-    type: "General",
-    monthlyRent: 400,
-    lastPayment: "",
-    nextDue: "",
-    status: "vacant",
-    occupied: false
-  },
-  {
-    id: "stall-6",
-    name: "Stall 6",
-    vendor: "Rosa Silva",
-    contact: "09444333222",
-    type: "Dry Goods",
-    monthlyRent: 450,
-    lastPayment: "2024-01-18",
-    nextDue: "2024-02-18",
-    status: "current",
-    occupied: true
-  }
-];
+/* ----------------------------------------------------------
+   CREATE STALL
+---------------------------------------------------------- */
+export async function createStall(stallData: Partial<StallRecord>) {
+  const { data, error } = await supabase
+    .from("vendors") // ✅ correct table name
+    .insert([
+      {
+        vendor: stallData.vendor || null,
+        contact: stallData.contact || null,
+        type: stallData.type || null,
+        monthly_rent: stallData.monthlyRent || 0,
+        last_payment: stallData.lastPayment || null,
+        next_due: stallData.nextDue || null,
+        status: stallData.status || "vacant",
+      },
+    ])
+    .select()
+    .single();
 
-export const createInitialStalls = (): StallRecord[] => BASE_STALLS.map((stall) => ({ ...stall }));
+  if (error) throw error;
+  return data;
+}
 
-export const formatStallDisplay = (stall: StallRecord): string => {
-  const vendor = stall.vendor ? ` - ${stall.vendor}` : "";
-  return `${stall.name}${vendor}`;
-};
+/* ----------------------------------------------------------
+   UPDATE STALL (safe version)
+---------------------------------------------------------- */
+export async function updateStall(id: number, updatedData: Partial<StallRecord>) {
+  const payload: Record<string, any> = {};
 
-export const getNextStallNumbers = (stalls: StallRecord[], type?: string) => {
+  if (updatedData.vendor !== undefined) payload.vendor = updatedData.vendor;
+  if (updatedData.contact !== undefined) payload.contact = updatedData.contact;
+  if (updatedData.type !== undefined) payload.type = updatedData.type;
+  if (updatedData.monthlyRent !== undefined) payload.monthly_rent = updatedData.monthlyRent;
+  if (updatedData.lastPayment !== undefined) payload.last_payment = updatedData.lastPayment;
+  if (updatedData.nextDue !== undefined) payload.next_due = updatedData.nextDue;
+  if (updatedData.status !== undefined) payload.status = updatedData.status;
+
+  const { data, error } = await supabase
+    .from("vendors")
+    .update(payload)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/* ----------------------------------------------------------
+   DELETE STALL
+---------------------------------------------------------- */
+export async function deleteStall(id: number) {
+  const { data, error } = await supabase
+    .from("vendors") // ✅ correct table name
+    .delete()
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/* ----------------------------------------------------------
+   HELPER: GET NEXT STALL NUMBERS
+---------------------------------------------------------- */
+export function getNextStallNumbers(stalls: StallRecord[], type: string) {
+  const sameType = stalls.filter((stall) => stall.type === type);
   const nextIdNumber =
-    stalls.reduce((highest, stall) => {
-      const match = /stall-(\d+)/.exec(stall.id);
-      if (!match) {
-        return highest;
-      }
-      return Math.max(highest, Number(match[1]));
-    }, 0) + 1;
-
-  const normalizedType = type?.trim().toLowerCase() ?? null;
-
-  const nextNameNumber =
-    stalls.reduce((highest, stall) => {
-      if (normalizedType !== null) {
-        const stallTypeNormalized = stall.type.trim().toLowerCase();
-        if (stallTypeNormalized !== normalizedType) {
-          return highest;
-        }
-      }
-      const match = /Stall\s+(\d+)/i.exec(stall.name);
-      if (!match) {
-        return highest;
-      }
-      return Math.max(highest, Number(match[1]));
-    }, 0) + 1;
-
+    sameType.length > 0
+      ? Math.max(...sameType.map((s) => Number(s.id.replace("stall-", "")) || 0)) + 1
+      : 1;
+  const nextNameNumber = sameType.length + 1;
   return { nextIdNumber, nextNameNumber };
-};
+}
