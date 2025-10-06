@@ -1,4 +1,4 @@
-﻿import { useMemo } from "react";
+import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -36,28 +36,62 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 };
 
 export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
+  const summary = useMemo(() => {
+    let totalCollected = 0;
+    let occupiedCount = 0;
+    let vacantCount = 0;
+    let pendingCount = 0;
+    let overdueCount = 0;
+
+    stalls.forEach((stall) => {
+      const rent = Number.isFinite(stall.monthlyRent) ? stall.monthlyRent : 0;
+
+      if (stall.occupied) {
+        occupiedCount += 1;
+        totalCollected += rent;
+      } else {
+        vacantCount += 1;
+      }
+
+      if (stall.status === "overdue") {
+        overdueCount += 1;
+        pendingCount += 1;
+      } else if (stall.status === "due") {
+        pendingCount += 1;
+      }
+    });
+
+    return { totalCollected, occupiedCount, vacantCount, pendingCount, overdueCount };
+  }, [stalls]);
+
+  const { totalCollected, occupiedCount, vacantCount, pendingCount, overdueCount } = summary;
+  const totalStalls = stalls.length;
+
+  const formattedTotalCollected = useMemo(() => `PHP ${totalCollected.toLocaleString()}`, [totalCollected]);
+  const occupancyRate = totalStalls === 0 ? 0 : Math.round((occupiedCount / totalStalls) * 100);
+
   const stats = [
     {
       title: "Today's Collections",
-      value: "PHP 12,450",
-      change: "+5.2%",
+      value: formattedTotalCollected,
+      change: `${occupiedCount} active stalls`,
       icon: DollarSign
     },
     {
       title: "Total Stalls",
-      value: String(stalls.length),
-      change: `${stalls.filter((stall) => !stall.occupied).length} vacant`,
+      value: String(totalStalls),
+      change: `${vacantCount} vacant`,
       icon: Building2
     },
     {
       title: "Active Vendors",
-      value: String(stalls.filter((stall) => stall.occupied).length),
+      value: String(occupiedCount),
       change: "Active assignments",
       icon: Users
     },
     {
       title: "Pending Payments",
-      value: String(stalls.filter((stall) => stall.status === "due" || stall.status === "overdue").length),
+      value: String(pendingCount),
       change: "Needs follow-up",
       icon: AlertCircle
     }
@@ -87,25 +121,25 @@ export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
   const marketStatus = [
     {
       label: "Occupancy",
-      value: `${Math.round((stalls.filter((stall) => stall.occupied).length / Math.max(stalls.length, 1)) * 100)}%`,
+      value: `${occupancyRate}%`,
       description: "Stalls currently filled",
       icon: Building2
     },
     {
       label: "Monthly Collections",
-      value: `PHP ${stalls.reduce((total, stall) => total + (stall.occupied ? stall.monthlyRent : 0), 0).toLocaleString()}`,
-      description: "Collected this month (projected)",
+      value: formattedTotalCollected,
+      description: "Collected from active stalls",
       icon: DollarSign
     },
     {
       label: "Overdue Payments",
-      value: `${stalls.filter((stall) => stall.status === "overdue").length} stalls`,
+      value: `${overdueCount} stalls`,
       description: "Stalls needing attention",
       icon: AlertCircle
     },
     {
       label: "Active Vendors",
-      value: String(stalls.filter((stall) => stall.occupied).length),
+      value: String(occupiedCount),
       description: "Registered vendors",
       icon: Users
     }
@@ -132,8 +166,8 @@ export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
       {/* Balance card */}
       <div className="rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-400 to-purple-500 p-5 text-white shadow-lg">
         <div className="text-sm/5 opacity-90">Total Collections</div>
-        <div className="mt-1 text-4xl font-bold">PHP 12,450</div>
-        <div className="mt-1 text-xs opacity-90">Period: Sep 2025</div>
+        <div className="mt-1 text-4xl font-bold">{formattedTotalCollected}</div>
+        <div className="mt-1 text-xs opacity-90">Active stalls: {occupiedCount}</div>
       </div>
 
       {/* Shortcuts */}
