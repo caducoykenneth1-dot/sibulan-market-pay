@@ -102,3 +102,17 @@ export function getNextStallNumbers(stalls: StallRecord[], type: string) {
   const nextNameNumber = sameType.length + 1;
   return { nextIdNumber, nextNameNumber };
 }
+
+/* ----------------------------------------------------------
+   HELPER: TYPE-BASED SEQUENCES
+---------------------------------------------------------- */
+export function getNextTypeSequence(
+  counters: Map<string, number>,
+  rawType: string | null | undefined
+) {
+  const typeValue = typeof rawType === "string" ? rawType.trim() : "";
+  const key = typeValue.toLowerCase() || "uncategorised";
+  const sequence = (counters.get(key) ?? 0) + 1;
+  counters.set(key, sequence);
+  return { sequence, typeValue };
+}

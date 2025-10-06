@@ -1,4 +1,4 @@
-﻿import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import {
   BASE_TYPE_OPTIONS,
   createStall,
   deleteStall,
+  getNextTypeSequence,
   updateStall,
   type StallRecord,
   type StallStatus
@@ -157,19 +158,23 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
       return;
     }
 
-    const mapped: StallRecord[] = (data ?? []).map((row) => ({
-      id: `stall-${row.id}`,
-      dbId: row.id,
-      name: `Stall ${row.id}`,
-      vendor: row.vendor ?? "",
-      contact: row.contact ?? "",
-      type: row.type ?? "",
-      monthlyRent: row.monthly_rent ?? 0,
-      lastPayment: row.last_payment ?? "",
-      nextDue: row.next_due ?? "",
-      status: row.status ?? "vacant",
-      occupied: row.status !== "vacant"
-    }));
+    const typeCounters = new Map<string, number>();
+    const mapped: StallRecord[] = (data ?? []).map((row) => {
+      const { sequence: typeSequence, typeValue } = getNextTypeSequence(typeCounters, row.type);
+      return {
+        id: `stall-${row.id}`,
+        dbId: row.id,
+        name: `Stall ${typeSequence}`,
+        vendor: row.vendor ?? "",
+        contact: row.contact ?? "",
+        type: typeValue,
+        monthlyRent: row.monthly_rent ?? 0,
+        lastPayment: row.last_payment ?? "",
+        nextDue: row.next_due ?? "",
+        status: row.status ?? "vacant",
+        occupied: row.status !== "vacant"
+      };
+    });
 
     onStallsChange(mapped);
   };

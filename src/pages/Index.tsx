@@ -1,4 +1,4 @@
-﻿﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigation } from "@/components/Navigation";
 import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection";
@@ -6,7 +6,7 @@ import { PaymentHistory } from "@/components/PaymentHistory";
 import { StallManagement } from "@/components/StallManagement";
 import { Reports } from "@/components/Reports";
 import { ScheduledCollections } from "@/components/ScheduledCollections";
-import { type StallRecord, type StallStatus } from "@/data/stalls";
+import { getNextTypeSequence, type StallRecord, type StallStatus } from "@/data/stalls";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -185,9 +185,11 @@ const Index = () => {
         return;
       }
 
+      const typeCounters = new Map<string, number>();
       const mapped: StallRecord[] = rows.map((row, index) => {
         const numericId = typeof row.id === "number" ? row.id : Number.parseInt(String(row.id ?? ""), 10);
         const safeId = Number.isFinite(numericId) && numericId > 0 ? numericId : Date.now() + index;
+        const { sequence: typeSequence, typeValue } = getNextTypeSequence(typeCounters, row.type);
 
         const rawMonthlyRent = row.monthly_rent;
         let monthlyRentValue = 0;
@@ -207,10 +209,10 @@ const Index = () => {
         return {
           id: `stall-${safeId}`,
           dbId: safeId,
-          name: `Stall ${safeId}`,
+          name: `Stall ${typeSequence}`,
           vendor: row.vendor ?? "",
           contact: row.contact ?? "",
-          type: row.type ?? "",
+          type: typeValue,
           monthlyRent: monthlyRentValue,
           lastPayment: row.last_payment ?? "",
           nextDue: row.next_due ?? "",
