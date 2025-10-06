@@ -8,8 +8,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { type StallRecord } from "@/data/stalls";
-
-// 🧩 PDF generation imports
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 
@@ -37,8 +35,7 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
-const getStatusBadge = (status: StallRecord["status"]) =>
-  status === "current" ? "default" : status === "due" ? "secondary" : "destructive";
+const generateReceiptNo = () => `DPM-${Math.floor(100000 + Math.random() * 900000)}`;
 
 export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
   const { toast } = useToast();
@@ -50,9 +47,9 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
     notes: ""
   });
   const [showReceipt, setShowReceipt] = useState(false);
+  const [receiptNo, setReceiptNo] = useState(generateReceiptNo());
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
-
   const stallTypeOptions = useMemo(
     () =>
       Array.from(new Set(stalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
@@ -74,9 +71,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
   }, [selectedType, stallTypeOptions]);
 
   const filteredStalls = useMemo(() => {
-    if (!selectedType) {
-      return stalls;
-    }
+    if (!selectedType) return stalls;
     return stalls.filter((stall) => stall.type === selectedType);
   }, [stalls, selectedType]);
 
@@ -94,7 +89,9 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
     () => stalls.find((stall) => stall.id === selectedStallId) ?? null,
     [stalls, selectedStallId]
   );
-  const selectedStallDisplayName = selectedStall ? displayNameById.get(selectedStall.id) ?? selectedStall.name : "";
+  const selectedStallDisplayName = selectedStall
+    ? displayNameById.get(selectedStall.id) ?? selectedStall.name
+    : "";
 
   useEffect(() => {
     if (!selectedStall) {
@@ -114,62 +111,61 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
       return;
     }
 
+    setReceiptNo(generateReceiptNo());
     setShowReceipt(true);
     toast({
       title: "Payment recorded",
       description: `Payment of PHP ${paymentData.amount} captured for ${selectedStall.vendor || "No vendor assigned"}.`
     });
+
+    // Optional: Add SMS sending logic here later
+    // await fetch("https://api.semaphore.co/api/v4/messages", {...})
   };
 
-  // ✅ Fixed thermal PDF (proper width & upright orientation)
   const handlePrintReceipt = async () => {
-  const receipt = document.getElementById("receipt-content");
-  if (!receipt) return;
+    const receipt = document.getElementById("receipt-content");
+    if (!receipt) return;
 
-  try {
-    // Capture the receipt at high quality
-    const canvas = await html2canvas(receipt, {
-      scale: 2,
-      backgroundColor: "#ffffff",
-      useCORS: true,
-      windowWidth: receipt.scrollWidth,
-    });
+    try {
+      const canvas = await html2canvas(receipt, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        useCORS: true,
+        windowWidth: receipt.scrollWidth,
+      });
 
-    const imgData = canvas.toDataURL("image/png");
+      const imgData = canvas.toDataURL("image/png");
+      const pxPerMm = 3.779528;
+      const pdfWidth = 80; // adjust to 58 for smaller thermal paper
+      const pdfHeight = canvas.height / pxPerMm;
 
-    // Real-world scaling logic (1mm ≈ 3.779528 px)
-    const pxPerMm = 3.779528;
-    const pdfWidth = 80; // 80mm thermal width
-    const pdfHeight = canvas.height / pxPerMm; // convert actual pixel height to mm
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: [pdfWidth, pdfHeight],
+      });
 
-    // Create portrait PDF with proper aspect ratio
-    const pdf = new jsPDF({
-      orientation: "portrait",
-      unit: "mm",
-      format: [pdfWidth, pdfHeight],
-    });
+      const imgWidth = pdfWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
 
-    // Calculate image height to preserve proportions
-    const imgWidth = pdfWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      // Auto-print instead of saving
+      pdf.autoPrint();
+      window.open(pdf.output("bloburl"), "_blank");
 
-    pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
-    pdf.save(`receipt-${Date.now()}.pdf`);
-
-    toast({
-      title: "Receipt generated",
-      description: "Properly scaled PDF created.",
-    });
-  } catch (error) {
-    console.error("PDF generation failed:", error);
-    toast({
-      title: "Error",
-      description: "Something went wrong while generating the receipt.",
-      variant: "destructive",
-    });
-  }
-};
-
+      toast({
+        title: "Receipt ready",
+        description: "Print dialog opened automatically.",
+      });
+    } catch (error) {
+      console.error("PDF generation failed:", error);
+      toast({
+        title: "Error",
+        description: "Something went wrong while generating the receipt.",
+        variant: "destructive",
+      });
+    }
+  };
 
   if (showReceipt && selectedStall) {
     return (
@@ -191,7 +187,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
             <CardContent className="space-y-3">
               <div className="text-center">
                 <div className="text-2xl font-bold">PHP {paymentData.amount}</div>
-                <div>Receipt No: DPM-{Date.now().toString().slice(-6)}</div>
+                <div>Receipt No: {receiptNo}</div>
               </div>
               <div className="border-t pt-2 space-y-1 text-sm">
                 <div className="flex justify-between">
@@ -231,7 +227,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
         </div>
 
         <Button className="w-full" onClick={handlePrintReceipt}>
-          Print Receipt
+          🖨️ Print Receipt
         </Button>
       </div>
     );
