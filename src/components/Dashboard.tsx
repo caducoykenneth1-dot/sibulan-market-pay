@@ -7,18 +7,20 @@ import {
   DollarSign,
   Building2,
   Users,
-  Calendar,
   AlertCircle,
   Plus,
-  Send,
-  CalendarDays,
+  Home,
+  History,
   PieChart
 } from "lucide-react";
 import { type StallRecord } from "@/data/stalls";
+import { type Invoice } from "./UnpaidDues";
 
 interface DashboardProps {
   onPageChange: (page: string) => void;
   stalls: StallRecord[];
+  unpaidInvoices: Invoice[];
+  userRole: string; // ✅ Added userRole prop
 }
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
@@ -35,46 +37,58 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
-export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
+export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: DashboardProps) => {
   const summary = useMemo(() => {
-    let totalCollected = 0;
+    const today = new Date().toISOString().split('T')[0];
+    // ✅ Correctly filter for paid invoices from today from the full list of invoices.
+    const todaysPaidInvoices = unpaidInvoices.filter(inv => inv.status === 'paid' && inv.paid_at?.startsWith(today)); 
+    const totalCollectedToday = todaysPaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+
     let occupiedCount = 0;
     let vacantCount = 0;
     let pendingCount = 0;
     let overdueCount = 0;
+
+    // This calculation is for the main balance card, representing potential monthly income.
+    // The "Today's Collections" card will use the more accurate `totalCollectedToday`.
+    const totalPotentialRent = stalls.reduce((sum, s) => s.occupied ? sum + s.monthlyRent : sum, 0);
+
+    // Get a set of vendor IDs with unpaid invoices for the "Pending Payments" count.
+    const unpaidOnlyInvoices = unpaidInvoices.filter(inv => inv.status === 'unpaid');
+    const unpaidVendorIds = new Set(unpaidOnlyInvoices.map(inv => inv.vendor_id));
 
     stalls.forEach((stall) => {
       const rent = Number.isFinite(stall.monthlyRent) ? stall.monthlyRent : 0;
 
       if (stall.occupied) {
         occupiedCount += 1;
-        totalCollected += rent;
       } else {
         vacantCount += 1;
       }
 
+      // A stall has a pending payment if its status is 'due' or 'overdue',
+      // OR if it has an associated unpaid invoice.
       if (stall.status === "overdue") {
         overdueCount += 1;
-        pendingCount += 1;
-      } else if (stall.status === "due") {
-        pendingCount += 1;
+      }
+
+      if (stall.status === "due" || stall.status === "overdue" || unpaidVendorIds.has(stall.dbId)) {
+        pendingCount++;
       }
     });
+    return { totalCollectedToday, totalPotentialRent, occupiedCount, vacantCount, pendingCount, overdueCount };}, [stalls, unpaidInvoices]); 
 
-    return { totalCollected, occupiedCount, vacantCount, pendingCount, overdueCount };
-  }, [stalls]);
-
-  const { totalCollected, occupiedCount, vacantCount, pendingCount, overdueCount } = summary;
+  const { totalCollectedToday, totalPotentialRent, occupiedCount, vacantCount, pendingCount, overdueCount } = summary;
   const totalStalls = stalls.length;
 
-  const formattedTotalCollected = useMemo(() => `PHP ${totalCollected.toLocaleString()}`, [totalCollected]);
+  const formattedTotalPotentialRent = useMemo(() => `PHP ${totalPotentialRent.toLocaleString()}`, [totalPotentialRent]);
   const occupancyRate = totalStalls === 0 ? 0 : Math.round((occupiedCount / totalStalls) * 100);
 
-  const stats = [
+  const stats: Array<{ title: string; value: string; change: string; icon: any; className?: string }> = [
     {
       title: "Today's Collections",
-      value: formattedTotalCollected,
-      change: `${occupiedCount} active stalls`,
+      value: `PHP ${totalCollectedToday.toLocaleString()}`,
+      change: "From paid invoices today",
       icon: DollarSign
     },
     {
@@ -93,30 +107,35 @@ export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
       title: "Pending Payments",
       value: String(pendingCount),
       change: "Needs follow-up",
-      icon: AlertCircle
+      icon: AlertCircle,
+      className: "bg-red-50 border-red-200 dark:bg-red-950 dark:border-red-800 text-red-600 dark:text-red-400"
     }
   ];
+
+  stats.splice(2, 0, {
+    title: "Vacant Stalls",
+    value: String(vacantCount),
+    change: `${Math.round((vacantCount / totalStalls) * 100) || 0}% of total`,
+    icon: Home,
+    className: "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
+  });
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
   const recentPayments = useMemo(() => {
-    if (stalls.length === 0) {
-      return [] as Array<{ id: string; vendor: string; stallName: string; amount: string; time: string }>;
-    }
-
-    const referenceTimes = ["9:30 AM", "9:20 AM", "9:15 AM", "9:00 AM"];
-
-    return stalls
-      .filter((stall) => stall.occupied)
+    // ✅ Use the full list of invoices to find the most recent PAID transactions.
+    return unpaidInvoices
+      .filter(inv => inv.status === 'paid' && inv.paid_at)
+      .sort((a, b) => new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime())
       .slice(0, 4)
-      .map((stall, index) => ({
-        id: `TX-${index + 1}`,
-        vendor: stall.vendor || "No vendor assigned",
-        stallName: displayNameById.get(stall.id) ?? stall.name,
-        amount: `PHP ${stall.monthlyRent.toLocaleString()}`,
-        time: referenceTimes[index % referenceTimes.length]
+      .map((inv) => ({
+        id: `TX-${inv.id}`,
+        vendor: inv.vendor_name,
+        stallName: inv.stall_name,
+        amount: `PHP ${inv.amount.toLocaleString()}`,
+        time: new Date(inv.paid_at!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }));
-  }, [stalls, displayNameById]);
+  }, [unpaidInvoices]);
 
   const marketStatus = [
     {
@@ -127,7 +146,7 @@ export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
     },
     {
       label: "Monthly Collections",
-      value: formattedTotalCollected,
+      value: formattedTotalPotentialRent,
       description: "Collected from active stalls",
       icon: DollarSign
     },
@@ -165,8 +184,8 @@ export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
 
       {/* Balance card */}
       <div className="rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-400 to-purple-500 p-5 text-white shadow-lg">
-        <div className="text-sm/5 opacity-90">Total Collections</div>
-        <div className="mt-1 text-4xl font-bold">{formattedTotalCollected}</div>
+        <div className="text-sm/5 opacity-90">Potential Monthly Rent</div>
+        <div className="mt-1 text-4xl font-bold">{formattedTotalPotentialRent}</div>
         <div className="mt-1 text-xs opacity-90">Active stalls: {occupiedCount}</div>
       </div>
 
@@ -178,54 +197,68 @@ export const Dashboard = ({ onPageChange, stalls }: DashboardProps) => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-4 gap-3">
-            <button
-              onClick={() => onPageChange("collect")}
-              className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
-            >
-              <Plus className="h-5 w-5" />
-              <span className="text-xs">Collect</span>
-            </button>
+          <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+            {/* Collect - collector only */}
+            {userRole?.toLowerCase() === "collector" && (
+              <button
+                onClick={() => onPageChange("collect")}
+                className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
+              >
+                <Plus className="h-5 w-5" />
+                <span className="text-xs">Collect</span>
+              </button>
+            )}
+
             <button
               onClick={() => onPageChange("history")}
               className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
             >
-              <Send className="h-5 w-5" />
+              <History className="h-5 w-5" />
               <span className="text-xs">History</span>
             </button>
+
+            {/* Insights - admin only */}
+            {userRole?.toLowerCase() === "admin" && (
+              <button
+                onClick={() => onPageChange("reports")}
+                className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
+              >
+                <PieChart className="h-5 w-5" />
+                <span className="text-xs">Insights</span>
+              </button>
+            )}
+
+            {/* Add New Stall - admin only */}
+            {userRole?.toLowerCase() === "admin" && (
+              <button
+                onClick={() => onPageChange("stalls")}
+                className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
+              >
+                <Building2 className="h-5 w-5" />
+                <span className="text-xs">Add New Stall</span>
+              </button>
+            )}
+
+            {/* Always visible */}
             <button
-              onClick={() => onPageChange("scheduled")}
-              className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
+              onClick={() => onPageChange("unpaid")}
+              className="flex flex-col items-center gap-2 rounded-xl bg-destructive/10 p-3 text-destructive transition hover:bg-destructive/20"
             >
-              <CalendarDays className="h-5 w-5" />
-              <span className="text-xs">Scheduled</span>
-            </button>
-            <button
-              onClick={() => onPageChange("reports")}
-              className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
-            >
-              <PieChart className="h-5 w-5" />
-              <span className="text-xs">Insights</span>
-            </button>
-            <button
-              onClick={() => onPageChange("stalls")}
-              className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
-            >
-              <Building2 className="h-5 w-5" />
-              <span className="text-xs">Add Stall</span>
+              <AlertCircle className="h-5 w-5" />
+              <span className="text-xs">Unpaid</span>
             </button>
           </div>
         </CardContent>
       </Card>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {stats.map((stat) => {
           const Icon = stat.icon;
           return (
-            <Card key={stat.title} className="rounded-2xl">
+            <Card key={stat.title} className={`rounded-2xl ${stat.className || ""}`}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
+                <CardTitle className="text-sm font-medium">{stat.title}</CardTitle> 
                 <Icon className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>

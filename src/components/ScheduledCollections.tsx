@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import {
-  ArrowLeft,
+  ArrowLeft,  
   CalendarDays,
   CheckCircle,
   Clock,
@@ -145,22 +145,6 @@ export const ScheduledCollections = ({ onNavigate, stalls }: ScheduledCollection
     [collections]
   );
 
-  const stallDirectory = useMemo(
-    () =>
-      stalls.map((stall) => {
-        const displayName = displayNameById.get(stall.id) ?? stall.name;
-        return {
-          id: stall.id,
-          name: displayName,
-          vendor: stall.vendor || "No vendor assigned",
-          status: stall.status,
-          type: stall.type,
-          monthlyRent: stall.monthlyRent
-        };
-      }),
-    [stalls, displayNameById]
-  );
-
   const handleMarkCompleted = (id: string) => {
     setCollections((prev) =>
       prev.map((item) =>
@@ -240,10 +224,6 @@ export const ScheduledCollections = ({ onNavigate, stalls }: ScheduledCollection
           <h1 className="text-3xl font-bold">Scheduled Collections</h1>
           <p className="text-muted-foreground">Live schedule derived from current stall assignments.</p>
         </div>
-        <Button variant="ghost" onClick={() => onNavigate("dashboard")}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Dashboard
-        </Button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -340,41 +320,6 @@ export const ScheduledCollections = ({ onNavigate, stalls }: ScheduledCollection
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Live Stall Directory</CardTitle>
-          <CardDescription>Shared stall information from Stall Management.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {stallDirectory.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No stalls available.</p>
-          ) : (
-            stallDirectory.map((stall) => (
-              <div
-                key={stall.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3"
-              >
-                <div>
-                  <p className="font-medium">{stall.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {stall.vendor} - PHP {stall.monthlyRent.toLocaleString()}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={stall.status === "vacant" ? "outline" : "default"} className="capitalize">
-                    {stall.status}
-                  </Badge>
-                  {stall.type ? (
-                    <Badge variant="secondary" className="capitalize">
-                      {stall.type}
-                    </Badge>
-                  ) : null}
-                </div>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 };

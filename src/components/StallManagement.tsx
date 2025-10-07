@@ -34,7 +34,82 @@ import {
 } from "@/data/stalls";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
-import { Building2, DollarSign, Filter, Pencil, Phone, Plus, Search, Trash2, User } from "lucide-react";
+import { Building2, Calendar, DollarSign, Filter, Pencil, Phone, Plus, Search, Trash2, User } from "lucide-react";
+
+/* ----------------------------------------------------------
+   🧾 AUTO BILLING FUNCTION
+---------------------------------------------------------- */
+async function generateMonthlyInvoices(toast: any) {
+  const today = new Date();
+
+  // 1️⃣ Fetch all vendors/stalls
+  const { data: stalls, error } = await supabase
+  .from("vendors")
+  .select("id, vendor, type, monthly_rent, next_due");
+
+  
+
+
+  if (error) {
+    console.error("Error fetching stalls:", error);
+    toast({
+      title: "Error",
+      description: "Failed to fetch stall data.",
+      variant: "destructive",
+    });
+    return;
+  }
+
+  // ✅ Create a map of dbId to its calculated display name (e.g., 101 -> "Stall 1")
+  const typeCounters = new Map<string, number>();
+  const stallDisplayNameMap = new Map<number, string>();
+  stalls.forEach(stall => {
+    const { sequence: typeSequence } = getNextTypeSequence(typeCounters, stall.type);
+    stallDisplayNameMap.set(stall.id, `Stall ${typeSequence}`);
+  });
+
+  let generatedCount = 0;
+
+  // 2️⃣ Loop through and create invoices for due stalls
+  for (const stall of stalls) {
+    const nextDue = new Date(stall.next_due);
+    const stallDisplayName = stallDisplayNameMap.get(stall.id) || `Stall ${stall.id}`;
+    // ✅ Only generate invoices for occupied stalls that are due.
+    if (stall.vendor && nextDue <= today) {
+      const { error: insertError } = await supabase.from("invoices").insert({
+  vendor_id: stall.id, // link to vendor record
+  stall_name: `${stall.type} - ${stallDisplayName}`,
+  vendor_name: stall.vendor,
+  amount: stall.monthly_rent,
+  due_date: nextDue.toISOString().split("T")[0],
+  status: "unpaid",
+});
+
+
+      if (!insertError) {
+        generatedCount++;
+
+        // 3️⃣ Move next_due forward by one month
+        const newDue = new Date(nextDue);
+        newDue.setMonth(nextDue.getMonth() + 1);
+
+        await supabase
+          .from("vendors")
+          .update({ next_due: newDue.toISOString().split("T")[0] })
+          .eq("id", stall.id);
+      }
+    }
+  }
+
+  // 4️⃣ Toast result
+  toast({
+    title: "Invoices Generated",
+    description:
+      generatedCount > 0
+        ? `${generatedCount} invoices created successfully.`
+        : "No stalls were due today.",
+  });
+}
 
 /* ----------------------------------------------------------
    MAIN COMPONENT
@@ -42,6 +117,7 @@ import { Building2, DollarSign, Filter, Pencil, Phone, Plus, Search, Trash2, Use
 interface StallManagementProps {
   stalls: StallRecord[];
   onStallsChange: Dispatch<SetStateAction<StallRecord[]>>;
+  userRole: string;
 }
 
 type StallFormState = {
@@ -87,7 +163,7 @@ const getStatusBadge = (status: StallStatus) => {
 /* ----------------------------------------------------------
    COMPONENT
 ---------------------------------------------------------- */
-export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps) => {
+export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManagementProps) => {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | StallStatus>("all");
@@ -97,6 +173,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
   const [stallBeingEdited, setStallBeingEdited] = useState<StallRecord | null>(null);
   const [formState, setFormState] = useState<StallFormState>(createEmptyForm());
   const [stallToDelete, setStallToDelete] = useState<StallRecord | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   /* ----------------------------------------------------------
      HELPERS
@@ -143,9 +220,8 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
   }, [stalls, statusFilter, typeFilter, normalizedSearch]);
 
   /* ----------------------------------------------------------
-     CRUD: CREATE + EDIT + DELETE
+     CRUD + GENERATE DUES BUTTON
   ---------------------------------------------------------- */
-
   const reloadStalls = async () => {
     const { data, error } = await supabase
       .from("vendors")
@@ -209,7 +285,22 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
   };
 
   const handleFormChange = (field: keyof StallFormState, value: string) => {
-    setFormState((prev) => ({ ...prev, [field]: value }));
+    if (field === "contact" && userRole?.toLowerCase() === "admin") {
+      // For admins, allow only numbers and limit to 11 digits for contact field.
+      const newContact = value.replace(/[^0-9]/g, "");
+
+      // Only update if the new value is valid:
+      // 1. Length is 11 or less.
+      // 2. It's empty OR it starts with '0' OR it starts with '09'.
+      // This allows typing '0' then '9' but prevents other invalid starts.
+      const isValidStart = newContact === "" || newContact.startsWith("0");
+      if (newContact.length <= 11 && isValidStart) {
+        setFormState((prev) => ({ ...prev, [field]: newContact }));
+      }
+    } else {
+      // Default behavior for other fields or non-admin users.
+      setFormState((prev) => ({ ...prev, [field]: value }));
+    }
   };
 
   const handleFormSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -274,6 +365,13 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
     }
   };
 
+  const handleGenerateClick = async () => {
+    setIsGenerating(true);
+    await generateMonthlyInvoices(toast);
+    await reloadStalls();
+    setIsGenerating(false);
+  };
+
   /* ----------------------------------------------------------
      RENDER
   ---------------------------------------------------------- */
@@ -284,9 +382,21 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
           <h1 className="text-3xl font-bold">Stall Management</h1>
           <p className="text-muted-foreground">Track occupied stalls, vacant slots, and upcoming dues.</p>
         </div>
-        <Button onClick={openCreateDialog} className="w-full md:w-auto">
-          <Plus className="mr-2 h-4 w-4" /> Add Stall
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={openCreateDialog} className="w-full md:w-auto">
+            <Plus className="mr-2 h-4 w-4" /> Add Stall
+          </Button>
+          {userRole?.toLowerCase() === "admin" && (
+            <Button
+              variant="secondary"
+              disabled={isGenerating}
+              onClick={handleGenerateClick}
+              className="w-full md:w-auto"
+            >
+              {isGenerating ? "Generating..." : (<><Calendar className="mr-2 h-4 w-4" /> Generate Dues</>)}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Stats */}
@@ -349,7 +459,7 @@ export const StallManagement = ({ stalls, onStallsChange }: StallManagementProps
         </CardContent>
       </Card>
 
-      {/* Stall list */}
+      {/* Stall List */}
       {filteredStalls.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">No stalls match the current filters.</CardContent>

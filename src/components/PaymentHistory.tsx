@@ -6,27 +6,27 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Search, Filter, Download, Receipt, Eye } from "lucide-react";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+import { type Invoice } from "./UnpaidDues";
 import { type StallRecord } from "@/data/stalls";
-
-type PaymentRecord = {
-  id: string;
-  date: string;
-  time: string;
-  stallName: string;
-  vendor: string;
-  amount: number;
-  type: string;
-  method: string;
-  status: "completed" | "pending";
-  collector: string;
-};
 
 interface PaymentHistoryProps {
   stalls: StallRecord[];
+  invoices: Invoice[];
 }
 
-const getStatusBadge = (status: PaymentRecord["status"]) =>
-  status === "completed" ? "default" : "secondary";
+const getStatusBadge = (status: Invoice["status"]) => {
+  switch (status) {
+    case "paid":
+      return "default" as const;
+    case "unpaid":
+      return "destructive" as const;
+    default:
+      return "outline" as const;
+  }
+};
+
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   const counters = new Map<string, number>();
@@ -42,49 +42,21 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
-const formatDate = (date: Date): string => date.toISOString().split("T")[0];
-
-const COLLECTOR_POOL = ["Juan Collector", "Maria Collector", "Alex Rivera"];
-
-const buildPaymentRecords = (stalls: StallRecord[], displayNameById: Map<string, string>): PaymentRecord[] => {
-  const today = new Date();
-  const timeSlots = ["09:30 AM", "10:15 AM", "11:00 AM", "01:30 PM", "02:15 PM"];
-
-  return stalls
-    .filter((stall) => stall.occupied || stall.status !== "vacant")
-    .map((stall, index) => {
-      const paymentDate = new Date(today);
-      paymentDate.setDate(today.getDate() - (index % 10));
-      const status: "completed" | "pending" = stall.status === "overdue" || stall.status === "due" ? "pending" : "completed";
-      const stallDisplayName = displayNameById.get(stall.id) ?? stall.name;
-
-      return {
-        id: `DPM-${(123400 + index).toString().padStart(6, "0")}`,
-        date: formatDate(paymentDate),
-        time: timeSlots[index % timeSlots.length],
-        stallName: stallDisplayName,
-        vendor: stall.vendor || "No vendor assigned",
-        amount: stall.monthlyRent,
-        type: stall.type || "General",
-        method: status === "completed" ? "Cash" : "Pending",
-        status,
-        collector: COLLECTOR_POOL[index % COLLECTOR_POOL.length]
-      };
-    });
-};
-
-export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
-  const [selectedPayment, setSelectedPayment] = useState<PaymentRecord | null>(null);
+export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
+  const [selectedPayment, setSelectedPayment] = useState<Invoice | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
-  const payments = useMemo(() => buildPaymentRecords(stalls, displayNameById), [stalls, displayNameById]);
+  const payments = useMemo(() => 
+    invoices.filter(inv => inv.status === 'paid' && inv.paid_at)
+            .sort((a, b) => new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime()), 
+  [invoices]);
 
   const typeOptions = useMemo(
-    () => Array.from(new Set(payments.map((p) => p.type))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(payments.map((p) => p.payment_type || 'Monthly Rent'))).sort((a, b) => a.localeCompare(b)),
     [payments]
   );
 
@@ -99,11 +71,11 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
       const normalizedSearch = searchTerm.trim().toLowerCase();
       const matchesSearch =
         normalizedSearch.length === 0 ||
-        payment.stallName.toLowerCase().includes(normalizedSearch) ||
-        payment.vendor.toLowerCase().includes(normalizedSearch) ||
-        payment.id.toLowerCase().includes(normalizedSearch);
+        payment.stall_name.toLowerCase().includes(normalizedSearch) ||
+        payment.vendor_name.toLowerCase().includes(normalizedSearch) ||
+        String(payment.id).toLowerCase().includes(normalizedSearch);
 
-      const matchesType = filterType === "all" || payment.type === filterType;
+      const matchesType = filterType === "all" || (payment.payment_type || 'Monthly Rent') === filterType;
 
       return matchesSearch && matchesType;
     });
@@ -111,7 +83,7 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
 
   const totalAmount = useMemo(() => filteredPayments.reduce((sum, p) => sum + p.amount, 0), [filteredPayments]);
 
-  const handleViewDetails = (payment: PaymentRecord) => {
+  const handleViewDetails = (payment: Invoice) => {
     setSelectedPayment(payment);
     setIsDialogOpen(true);
   };
@@ -121,10 +93,72 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
     setSelectedPayment(null);
   };
 
+  const handleExport = async () => {
+    if (filteredPayments.length === 0) {
+      return;
+    }
+
+    const reportElement = document.createElement("div");
+    reportElement.style.position = "absolute";
+    reportElement.style.left = "-9999px";
+    reportElement.style.width = "210mm"; // A4 width
+    reportElement.innerHTML = `
+      <div style="padding: 20px; font-family: sans-serif; color: #000;">
+        <h1 style="font-size: 24px; text-align: center; margin-bottom: 20px;">Payment History Report</h1>
+        <p style="font-size: 12px; margin-bottom: 20px;">Generated on: ${new Date().toLocaleString()}</p>
+        <table style="width: 100%; border-collapse: collapse; font-size: 10px;">
+          <thead>
+            <tr style="background-color: #f2f2f2;">
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Receipt ID</th>
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Paid At</th>
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Vendor</th>
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Stall</th>
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Amount</th>
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Collector</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredPayments
+              .map(
+                (p) => `
+              <tr>
+                <td style="border: 1px solid #ddd; padding: 8px;">DPM-${String(p.id).padStart(6, "0")}</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">${new Date(p.paid_at!).toLocaleString()}</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">${p.vendor_name}</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">${p.stall_name}</td>
+                <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">${p.amount.toLocaleString()}</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">${p.collector_name || "N/A"}</td>
+              </tr>
+            `
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+    document.body.appendChild(reportElement);
+
+    const canvas = await html2canvas(reportElement, { scale: 2 });
+    document.body.removeChild(reportElement);
+
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+    const ratio = canvasWidth / canvasHeight;
+    const imgWidth = pdfWidth - 20; // with margin
+    const imgHeight = imgWidth / ratio;
+
+    pdf.addImage(imgData, "PNG", 10, 10, imgWidth, imgHeight);
+    pdf.save(`payment-history-${new Date().toISOString().split("T")[0]}.pdf`);
+  };
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Payment History</h1>
+        <h1 className="text-3xl font-bold">Payment History</h1> 
         <p className="text-muted-foreground">View and manage all payment records powered by the latest stall data.</p>
       </div>
 
@@ -157,7 +191,7 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
                   ))}
                 </SelectContent>
               </Select>
-              <Button variant="outline">
+              <Button variant="outline" onClick={handleExport}>
                 <Download className="mr-2 h-4 w-4" />
                 Export
               </Button>
@@ -212,12 +246,12 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
                     <Receipt className="h-6 w-6 text-primary" />
                   </div>
                   <div>
-                    <div className="font-medium">{payment.vendor}</div>
+                    <div className="font-medium">{payment.vendor_name}</div>
                     <div className="text-sm text-muted-foreground">
-                      {payment.stallName} - {payment.id}
+                      {payment.stall_name} - DPM-{String(payment.id).padStart(6, "0")}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      {payment.date} at {payment.time}
+                      {new Date(payment.paid_at!).toLocaleString()}
                     </div>
                   </div>
                 </div>
@@ -225,7 +259,7 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
                   <div className="text-right">
                     <div className="font-medium text-success">PHP {payment.amount.toLocaleString()}</div>
                     <Badge variant="outline" className="text-xs capitalize">
-                      {payment.type}
+                      {payment.payment_type?.replace(/-/g, ' ') || 'Monthly Rent'}
                     </Badge>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => handleViewDetails(payment)} aria-label="View payment details">
@@ -241,48 +275,12 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Live Stall Directory</CardTitle>
-          <CardDescription>Everyone sees the latest stall information from Stall Management.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {stalls.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No stalls available.</p>
-          ) : (
-            stalls.map((stall) => (
-              <div
-                key={stall.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3"
-              >
-                <div>
-                  <p className="font-medium">{displayNameById.get(stall.id) ?? stall.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {stall.vendor || "No vendor assigned"} - PHP {stall.monthlyRent.toLocaleString()}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={stall.status === "vacant" ? "outline" : "default"} className="capitalize">
-                    {stall.status}
-                  </Badge>
-                  {stall.type ? (
-                    <Badge variant="secondary" className="capitalize">
-                      {stall.type}
-                    </Badge>
-                  ) : null}
-                </div>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-
       <Dialog open={isDialogOpen} onOpenChange={(open) => (open ? setIsDialogOpen(true) : handleCloseDialog())}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Payment receipt</DialogTitle>
-            {selectedPayment ? (
-              <DialogDescription>Receipt #{selectedPayment.id}</DialogDescription>
+            {selectedPayment ? ( 
+              <DialogDescription>Receipt #DPM-{String(selectedPayment.id).padStart(6, "0")}</DialogDescription>
             ) : (
               <DialogDescription>Review payment details.</DialogDescription>
             )}
@@ -292,37 +290,37 @@ export const PaymentHistory = ({ stalls }: PaymentHistoryProps) => {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="text-muted-foreground">Vendor</p>
-                  <p className="font-medium">{selectedPayment.vendor}</p>
+                  <p className="font-medium">{selectedPayment.vendor_name}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Stall</p>
-                  <p className="font-medium">{selectedPayment.stallName}</p>
+                  <p className="font-medium">{selectedPayment.stall_name}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Collected on</p>
                   <p className="font-medium">
-                    {selectedPayment.date} at {selectedPayment.time}
+                    {new Date(selectedPayment.paid_at!).toLocaleString()}
                   </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Collector</p>
-                  <p className="font-medium">{selectedPayment.collector}</p>
+                  <p className="font-medium">{selectedPayment.collector_name || "N/A"}</p>
                 </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="text-muted-foreground">Amount</p>
-                  <p className="text-lg font-semibold text-success">PHP {selectedPayment.amount.toLocaleString()}</p>
+                  <p className="text-lg font-semibold text-success">PHP {selectedPayment.amount.toLocaleString()}</p> 
                 </div>
                 <div>
                   <p className="text-muted-foreground">Payment type</p>
                   <Badge variant="outline" className="w-fit capitalize">
-                    {selectedPayment.type}
+                    {selectedPayment.payment_type?.replace(/-/g, ' ') || 'Monthly Rent'}
                   </Badge>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Method</p>
-                  <p className="font-medium">{selectedPayment.method}</p>
+                  <p className="text-muted-foreground">Notes</p>
+                  <p className="font-medium">{selectedPayment.notes || "None"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Status</p>

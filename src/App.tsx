@@ -6,6 +6,9 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 
+// 👇 Import your Unpaid Dues component
+import { UnpaidDues } from "@/components/UnpaidDues";
+
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -15,8 +18,13 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
+          {/* Main Dashboard */}
           <Route path="/" element={<Index />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+
+          {/* 👇 New route for collectors to manage unpaid dues */}
+          <Route path="/unpaid-dues" element={<UnpaidDues />} />
+
+          {/* Catch-all route (404 page) */}
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

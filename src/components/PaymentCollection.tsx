@@ -3,13 +3,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { type StallRecord } from "@/data/stalls";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+import { supabase } from "@/lib/supabaseClient"; // ✅ Supabase client
 
 type PaymentData = {
   amount: string;
@@ -19,6 +19,8 @@ type PaymentData = {
 
 interface PaymentCollectionProps {
   stalls: StallRecord[];
+  collectorName: string;
+  onPaymentSuccess: () => void;
 }
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
@@ -37,7 +39,7 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 
 const generateReceiptNo = () => `DPM-${Math.floor(100000 + Math.random() * 900000)}`;
 
-export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
+export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: PaymentCollectionProps) => {
   const { toast } = useToast();
   const [selectedType, setSelectedType] = useState<string>("");
   const [selectedStallId, setSelectedStallId] = useState<string>("");
@@ -48,11 +50,11 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
   });
   const [showReceipt, setShowReceipt] = useState(false);
   const [receiptNo, setReceiptNo] = useState(generateReceiptNo());
+  const [loading, setLoading] = useState(false);
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
   const stallTypeOptions = useMemo(
-    () =>
-      Array.from(new Set(stalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(stalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
     [stalls]
   );
 
@@ -89,6 +91,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
     () => stalls.find((stall) => stall.id === selectedStallId) ?? null,
     [stalls, selectedStallId]
   );
+
   const selectedStallDisplayName = selectedStall
     ? displayNameById.get(selectedStall.id) ?? selectedStall.name
     : "";
@@ -101,25 +104,61 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
     setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.monthlyRent) }));
   }, [selectedStall]);
 
-  const handlePaymentSubmit = () => {
-    if (!selectedStall || !paymentData.amount || !paymentData.paymentType) {
+  // ✅ Supabase insert to "invoices"
+  const handlePaymentSubmit = async () => {
+    if (!selectedStall || !paymentData.amount) {
       toast({
         title: "Missing information",
         description: "Please select a stall and complete all required fields.",
-        variant: "destructive"
+        variant: "destructive",
       });
       return;
     }
 
+    setLoading(true);
+
+ // ✅ Combine type and stall number for clearer naming
+const stallLabel =
+  selectedStall.type && selectedStallDisplayName
+    ? `${selectedStall.type} - ${selectedStallDisplayName}`
+    : selectedStallDisplayName || "Unnamed Stall";
+
+const newInvoice = {
+  vendor_id: selectedStall.dbId, // links to vendor
+  vendor_name: selectedStall.vendor || "No vendor",
+  stall_name: stallLabel, // ✅ shows "Clothing - Stall 1"
+  stall_type: selectedStall.type,
+  amount: Number(paymentData.amount),
+  payment_type: paymentData.paymentType || "Monthly Rent",
+  notes: paymentData.notes || null,
+  due_date: new Date().toISOString().split("T")[0],
+  status: "paid",
+  paid_at: new Date().toISOString(),
+  collector_name: collectorName,
+};
+
+
+    const { error } = await supabase.from("invoices").insert([newInvoice]);
+    setLoading(false);
+
+    if (error) {
+      console.error(error);
+      toast({
+        title: "Error saving payment",
+        description: error.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // ✅ Success
     setReceiptNo(generateReceiptNo());
     setShowReceipt(true);
     toast({
       title: "Payment recorded",
-      description: `Payment of PHP ${paymentData.amount} captured for ${selectedStall.vendor || "No vendor assigned"}.`
+      description: `Payment of PHP ${paymentData.amount} saved for ${selectedStall.vendor || "No vendor"}.`,
     });
-
-    // Optional: Add SMS sending logic here later
-    // await fetch("https://api.semaphore.co/api/v4/messages", {...})
+    onPaymentSuccess(); // ✅ Trigger data refresh
   };
 
   const handlePrintReceipt = async () => {
@@ -136,7 +175,7 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
 
       const imgData = canvas.toDataURL("image/png");
       const pxPerMm = 3.779528;
-      const pdfWidth = 80; // adjust to 58 for smaller thermal paper
+      const pdfWidth = 80;
       const pdfHeight = canvas.height / pxPerMm;
 
       const pdf = new jsPDF({
@@ -149,7 +188,6 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
       pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
 
-      // Auto-print instead of saving
       pdf.autoPrint();
       window.open(pdf.output("bloburl"), "_blank");
 
@@ -179,10 +217,9 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
 
         <div id="receipt-content">
           <Card className="mx-auto w-[300px] text-sm p-2">
-            <CardHeader className="text-center">
-              <CardTitle className="text-lg font-semibold">
-                PAYMENT RECEIPT
-              </CardTitle>
+            <CardHeader className="text-center space-y-2">
+              <img src="/logo.png" alt="Sibulan Market Pay Logo" className="mx-auto h-16 w-16" />
+              <CardTitle className="text-base font-semibold">PAYMENT RECEIPT</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="text-center">
@@ -195,11 +232,11 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
                   <span className="font-medium">{selectedStall.vendor || "No vendor"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Stall:</span>
-                  <span className="font-medium">
-                    {selectedStallDisplayName} ({selectedStall.id})
-                  </span>
-                </div>
+              <span>Stall:</span>
+            <span className="font-medium">
+             {selectedStall.type} - {selectedStallDisplayName}
+             </span>
+                 </div>
                 <div className="flex justify-between">
                   <span>Amount:</span>
                   <span className="font-medium">PHP {paymentData.amount}</span>
@@ -208,12 +245,6 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
                   <span>Payment Type:</span>
                   <span className="font-medium">{paymentData.paymentType}</span>
                 </div>
-                {paymentData.notes && (
-                  <div className="flex justify-between">
-                    <span>Notes:</span>
-                    <span className="font-medium">{paymentData.notes}</span>
-                  </div>
-                )}
                 <div className="flex justify-between">
                   <span>Date:</span>
                   <span>{new Date().toLocaleString()}</span>
@@ -362,9 +393,9 @@ export const PaymentCollection = ({ stalls }: PaymentCollectionProps) => {
           <Button
             className="w-full"
             onClick={handlePaymentSubmit}
-            disabled={!selectedStall || !paymentData.amount || !paymentData.paymentType}
+            disabled={!selectedStall || !paymentData.amount || loading}
           >
-            Record Payment
+            {loading ? "Saving..." : "Record Payment"}
           </Button>
         </CardContent>
       </Card>
