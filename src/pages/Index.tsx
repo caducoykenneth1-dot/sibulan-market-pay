@@ -1,19 +1,19 @@
 import { useEffect, useState, useMemo } from "react";
 import { Navigation } from "@/components/Navigation.tsx";
 import { Dashboard } from "@/components/Dashboard";
-import { PaymentCollection } from "@/components/PaymentCollection"; // 🟢 Added
-import { PaymentHistory } from "@/components/PaymentHistory"; // 🟢 Added
-import { StallManagement } from "@/components/StallManagement"; // 🟢 Added
+import { PaymentCollection } from "@/components/PaymentCollection";
+import { PaymentHistory } from "@/components/PaymentHistory";
+import { StallManagement } from "@/components/StallManagement";
 import { Reports } from "@/components/Reports";
-// import { ScheduledCollections } from "@/components/ScheduledCollections";
-import { ArchivedStalls } from "@/components/ArchivedStalls"; // 🟢 Added
+import { UserManagement, type Account } from "@/components/UserManagement";
+import { ArchivedStalls } from "@/components/ArchivedStalls";
 import { UnpaidDues } from "@/components/UnpaidDues";
 import { type Invoice } from "@/components/UnpaidDues";
 import {
   computeStatusFromDueDate,
   getNextTypeSequence,
   type StallRecord,
-  type StallStatus,
+  STALL_TYPES,
 } from "@/data/stalls";
 import {
   Card,
@@ -52,14 +52,21 @@ type VendorRow = {
 
 // A dummy domain to append to usernames to make them valid for Supabase Auth.
 const DUMMY_EMAIL_DOMAIN = "@example.com";
+const sectionMap = new Map(STALL_TYPES.map((type) => [type.name, type.section]));
+
+// 👉 Your deployed Edge Function base URL
+const USER_MGMT_FN =
+  "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/user-management";
 
 const Index = () => {
   const [rawStalls, setRawStalls] = useState<StallRecord[]>([]);
   const [unpaidInvoices, setUnpaidInvoices] = useState<Invoice[]>([]);
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [dataVersion, setDataVersion] = useState(0);
   const [currentPage, setCurrentPage] = useState("dashboard");
   const [user, setUser] = useState<any>(null);
+
   const [authMode, setAuthMode] = useState<
     "login" | "register" | "forgot_password" | "reset_password"
   >("login");
@@ -82,7 +89,6 @@ const Index = () => {
   });
   const [resetPasswordVisible, setResetPasswordVisible] = useState(false);
   const [resetConfirmVisible, setResetConfirmVisible] = useState(false);
-
   const [loginPasswordVisible, setLoginPasswordVisible] = useState(false);
   const [registerPasswordVisible, setRegisterPasswordVisible] = useState(false);
   const [registerConfirmVisible, setRegisterConfirmVisible] = useState(false);
@@ -110,9 +116,45 @@ const Index = () => {
     return () => authListener.subscription.unsubscribe();
   }, []);
 
-  const refreshData = () => {
-    setDataVersion((v) => v + 1);
-  };
+  // ✅ Fetch all user accounts for the admin via Edge Function (secure)
+  useEffect(() => {
+    const fetchAccounts = async () => {
+      if (user?.user_metadata?.role !== "admin") return;
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) return;
+
+      try {
+        const res = await fetch(USER_MGMT_FN, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const result = await res.json();
+        if (!res.ok) {
+          toast({
+            title: "Unable to load users",
+            description:
+              result?.message || "Your account may not have admin access.",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (result?.users) {
+          // Result shape: { id, email, full_name, role, created_at, last_sign_in_at }
+          setAccounts(result.users as Account[]);
+        }
+      } catch (e: any) {
+        toast({
+          title: "Error fetching users",
+          description: e?.message ?? "Network error",
+          variant: "destructive",
+        });
+      }
+    };
+    fetchAccounts();
+  }, [user, dataVersion, toast]);
+
+  const refreshData = () => setDataVersion((v) => v + 1);
 
   // ✅ Load ALL invoices for reports
   useEffect(() => {
@@ -127,7 +169,7 @@ const Index = () => {
         setAllInvoices(data || []);
       }
     };
-    fetchAllInvoices(); // Re-fetch when data changes
+    fetchAllInvoices();
   }, [rawStalls, dataVersion]);
 
   // ✅ Load unpaid invoices
@@ -145,7 +187,7 @@ const Index = () => {
       }
     };
     fetchUnpaid();
-  }, [rawStalls, dataVersion]); // Re-fetch when stalls change, e.g., after a payment
+  }, [rawStalls, dataVersion]);
 
   // ✅ Load stalls
   useEffect(() => {
@@ -179,6 +221,7 @@ const Index = () => {
         return;
       }
       if (isCancelled) return;
+
       const rows = (data ?? []) as VendorRow[];
       const typeCounters = new Map<string, number>();
       const mapped: StallRecord[] = rows.map((row, index) => {
@@ -199,8 +242,8 @@ const Index = () => {
             ? row.monthly_rent
             : Number.parseFloat(String(row.monthly_rent ?? 0)) || 0;
 
-        // ✅ Automatically determine status based on the due date.
         const statusValue = computeStatusFromDueDate(row.next_due, row.status);
+        const section = sectionMap.get(typeValue) ?? "N/A";
 
         return {
           id: `stall-${safeId}`,
@@ -215,6 +258,7 @@ const Index = () => {
           nextDue: row.next_due ?? "",
           status: statusValue,
           occupied: statusValue !== "vacant" && statusValue !== "archived",
+          section,
         };
       });
 
@@ -225,7 +269,7 @@ const Index = () => {
     return () => {
       isCancelled = true;
     };
-  }, [dataVersion]);
+  }, [dataVersion, toast]);
 
   // ✅ Filter out archived stalls using useMemo for performance
   const stalls = useMemo(() => {
@@ -401,6 +445,8 @@ const Index = () => {
             stalls={stalls}
             unpaidInvoices={allInvoices}
             userRole={user?.user_metadata?.role ?? ""}
+            userName={user?.user_metadata?.full_name ?? ""}
+            userUsername={user?.email?.split("@")[0] ?? ""}
           />
         );
       case "collect":
@@ -423,12 +469,14 @@ const Index = () => {
         );
       case "reports":
         return <Reports stalls={stalls} invoices={allInvoices} />;
-      // case "scheduled":
-      //   return (
-      //     <ScheduledCollections onNavigate={setCurrentPage} stalls={stalls} />
-      //   );
+      case "users":
+        return (
+          <UserManagement accounts={accounts} onAccountsChange={refreshData} />
+        );
       case "archived":
-        return <ArchivedStalls onDataChange={refreshData} allStalls={rawStalls} />;
+        return (
+          <ArchivedStalls onDataChange={refreshData} allStalls={rawStalls} />
+        );
       case "unpaid":
         return <UnpaidDues />;
       default:
@@ -438,6 +486,8 @@ const Index = () => {
             stalls={stalls}
             unpaidInvoices={allInvoices}
             userRole={user?.user_metadata?.role ?? ""}
+            userName={user?.user_metadata?.full_name ?? ""}
+            userUsername={user?.email?.split("@")[0] ?? ""}
           />
         );
     }
@@ -460,7 +510,9 @@ const Index = () => {
               alt="Sibulan Market Pay Logo"
               className="mx-auto h-20 w-20 rounded-lg"
             />
-            <CardTitle className="text-2xl font-bold">Sibulan Market Pay</CardTitle>
+            <CardTitle className="text-2xl font-bold">
+              Sibulan Market Pay
+            </CardTitle>
             <CardDescription>{authDescriptions[authMode]}</CardDescription>
           </CardHeader>
           <CardContent>
@@ -472,7 +524,10 @@ const Index = () => {
                     id="login-username"
                     value={loginForm.username}
                     onChange={(event) =>
-                      setLoginForm((prev) => ({ ...prev, username: event.target.value }))
+                      setLoginForm((prev) => ({
+                        ...prev,
+                        username: event.target.value,
+                      }))
                     }
                     autoComplete="username"
                     required
@@ -486,7 +541,10 @@ const Index = () => {
                       type={loginPasswordVisible ? "text" : "password"}
                       value={loginForm.password}
                       onChange={(event) =>
-                        setLoginForm((prev) => ({ ...prev, password: event.target.value }))
+                        setLoginForm((prev) => ({
+                          ...prev,
+                          password: event.target.value,
+                        }))
                       }
                       autoComplete="current-password"
                       className="pr-10"
@@ -494,17 +552,29 @@ const Index = () => {
                     />
                     <button
                       type="button"
-                      onClick={() => setLoginPasswordVisible((prev) => !prev)}
+                      onClick={() =>
+                        setLoginPasswordVisible((prev) => !prev)
+                      }
                       className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
-                      aria-label={loginPasswordVisible ? "Hide password" : "Show password"}
+                      aria-label={
+                        loginPasswordVisible ? "Hide password" : "Show password"
+                      }
                     >
-                      {loginPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {loginPasswordVisible ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
                 </div>
 
-                {authError && <p className="text-sm text-destructive">{authError}</p>}
-                {authMessage && <p className="text-sm text-emerald-600">{authMessage}</p>}
+                {authError && (
+                  <p className="text-sm text-destructive">{authError}</p>
+                )}
+                {authMessage && (
+                  <p className="text-sm text-emerald-600">{authMessage}</p>
+                )}
 
                 <Button type="submit" className="w-full">
                   Sign in
@@ -544,7 +614,10 @@ const Index = () => {
                     id="register-name"
                     value={registerForm.name}
                     onChange={(event) =>
-                      setRegisterForm((prev) => ({ ...prev, name: event.target.value }))
+                      setRegisterForm((prev) => ({
+                        ...prev,
+                        name: event.target.value,
+                      }))
                     }
                     required
                   />
@@ -555,7 +628,10 @@ const Index = () => {
                     id="register-username"
                     value={registerForm.username}
                     onChange={(event) =>
-                      setRegisterForm((prev) => ({ ...prev, username: event.target.value }))
+                      setRegisterForm((prev) => ({
+                        ...prev,
+                        username: event.target.value,
+                      }))
                     }
                     autoComplete="username"
                     required
@@ -566,7 +642,10 @@ const Index = () => {
                   <Select
                     value={registerForm.role}
                     onValueChange={(value) =>
-                      setRegisterForm((prev) => ({ ...prev, role: value as AccountRole }))
+                      setRegisterForm((prev) => ({
+                        ...prev,
+                        role: value as AccountRole,
+                      }))
                     }
                   >
                     <SelectTrigger id="register-role">
@@ -586,7 +665,10 @@ const Index = () => {
                       type={registerPasswordVisible ? "text" : "password"}
                       value={registerForm.password}
                       onChange={(event) =>
-                        setRegisterForm((prev) => ({ ...prev, password: event.target.value }))
+                        setRegisterForm((prev) => ({
+                          ...prev,
+                          password: event.target.value,
+                        }))
                       }
                       autoComplete="new-password"
                       className="pr-10"
@@ -594,11 +676,21 @@ const Index = () => {
                     />
                     <button
                       type="button"
-                      onClick={() => setRegisterPasswordVisible((prev) => !prev)}
+                      onClick={() =>
+                        setRegisterPasswordVisible((prev) => !prev)
+                      }
                       className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
-                      aria-label={registerPasswordVisible ? "Hide password" : "Show password"}
+                      aria-label={
+                        registerPasswordVisible
+                          ? "Hide password"
+                          : "Show password"
+                      }
                     >
-                      {registerPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {registerPasswordVisible ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -610,7 +702,10 @@ const Index = () => {
                       type={registerConfirmVisible ? "text" : "password"}
                       value={registerForm.confirmPassword}
                       onChange={(event) =>
-                        setRegisterForm((prev) => ({ ...prev, confirmPassword: event.target.value }))
+                        setRegisterForm((prev) => ({
+                          ...prev,
+                          confirmPassword: event.target.value,
+                        }))
                       }
                       autoComplete="new-password"
                       className="pr-10"
@@ -618,17 +713,31 @@ const Index = () => {
                     />
                     <button
                       type="button"
-                      onClick={() => setRegisterConfirmVisible((prev) => !prev)}
+                      onClick={() =>
+                        setRegisterConfirmVisible((prev) => !prev)
+                      }
                       className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
-                      aria-label={registerConfirmVisible ? "Hide password" : "Show password"}
+                      aria-label={
+                        registerConfirmVisible
+                          ? "Hide password"
+                          : "Show password"
+                      }
                     >
-                      {registerConfirmVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {registerConfirmVisible ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
                 </div>
 
-                {authError && <p className="text-sm text-destructive">{authError}</p>}
-                {authMessage && <p className="text-sm text-emerald-600">{authMessage}</p>}
+                {authError && (
+                  <p className="text-sm text-destructive">{authError}</p>
+                )}
+                {authMessage && (
+                  <p className="text-sm text-emerald-600">{authMessage}</p>
+                )}
 
                 <Button type="submit" className="w-full">
                   Create account
@@ -657,15 +766,21 @@ const Index = () => {
                     id="forgot-username"
                     value={forgotPasswordForm.username}
                     onChange={(event) =>
-                      setForgotPasswordForm({ username: event.target.value })
+                      setForgotPasswordForm({
+                        username: event.target.value,
+                      })
                     }
                     autoComplete="username"
                     required
                   />
                 </div>
 
-                {authError && <p className="text-sm text-destructive">{authError}</p>}
-                {authMessage && <p className="text-sm text-emerald-600">{authMessage}</p>}
+                {authError && (
+                  <p className="text-sm text-destructive">{authError}</p>
+                )}
+                {authMessage && (
+                  <p className="text-sm text-emerald-600">{authMessage}</p>
+                )}
 
                 <Button type="submit" className="w-full">
                   Send reset link
@@ -706,11 +821,21 @@ const Index = () => {
                     />
                     <button
                       type="button"
-                      onClick={() => setResetPasswordVisible((prev) => !prev)}
+                      onClick={() =>
+                        setResetPasswordVisible((prev) => !prev)
+                      }
                       className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
-                      aria-label={resetPasswordVisible ? "Hide password" : "Show password"}
+                      aria-label={
+                        resetPasswordVisible
+                          ? "Hide password"
+                          : "Show password"
+                      }
                     >
-                      {resetPasswordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {resetPasswordVisible ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -732,17 +857,31 @@ const Index = () => {
                     />
                     <button
                       type="button"
-                      onClick={() => setResetConfirmVisible((prev) => !prev)}
+                      onClick={() =>
+                        setResetConfirmVisible((prev) => !prev)
+                      }
                       className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
-                      aria-label={resetConfirmVisible ? "Hide password" : "Show password"}
+                      aria-label={
+                        resetConfirmVisible
+                          ? "Hide password"
+                          : "Show password"
+                      }
                     >
-                      {resetConfirmVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {resetConfirmVisible ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
                 </div>
 
-                {authError && <p className="text-sm text-destructive">{authError}</p>}
-                {authMessage && <p className="text-sm text-emerald-600">{authMessage}</p>}
+                {authError && (
+                  <p className="text-sm text-destructive">{authError}</p>
+                )}
+                {authMessage && (
+                  <p className="text-sm text-emerald-600">{authMessage}</p>
+                )}
 
                 <Button type="submit" className="w-full">
                   Set new password
@@ -770,36 +909,21 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary/10 via-secondary/30 to-background">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-2 md:flex-row md:gap-6 md:px-4">
-        <div className="md:sticky md:top-6 md:w-64 md:flex-shrink-0">
+        <div className="md:sticky md:top-6 md:w-72 md:flex-shrink-0">
           <Navigation
             currentPage={currentPage}
             onPageChange={setCurrentPage}
             onLogout={handleLogout}
-            userName={user.user_metadata.full_name}
-            userRole={user.user_metadata.role}
-            userUsername={user.email.split("@")[0]}
+            userName={user?.user_metadata?.full_name}
+            userRole={user?.user_metadata?.role}
+            userUsername={user?.email?.split("@")[0]}
           />
         </div>
 
-        <main className="flex-1 w-full space-y-6 p-4 pt-24 md:p-6 md:pt-6 with-bottom-nav">
-          <div className="rounded-lg border bg-card/60 p-4 shadow-sm">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Signed in as
-            </p>
-            <p className="text-sm font-semibold text-foreground">
-              {user.user_metadata.full_name}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Username: {user.email.split("@")[0]}
-            </p>
-            <p className="text-xs text-muted-foreground capitalize">
-              Role: {user.user_metadata.role}
-            </p>
-          </div>
+        <main className="flex-1 w-full space-y-6 p-4 pt-6 with-bottom-nav">
           {renderCurrentPage()}
         </main>
       </div>
-
     </div>
   );
 };

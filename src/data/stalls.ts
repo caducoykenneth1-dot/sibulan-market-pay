@@ -15,6 +15,7 @@ export interface StallRecord {
   nextDue: string;
   status: StallStatus;
   occupied: boolean;
+  section: 'Dry Section' | 'Wet Section' | 'N/A';
   archive_reason?: string;
 }
 

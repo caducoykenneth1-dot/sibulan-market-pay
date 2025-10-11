@@ -11,6 +11,7 @@ import {
   LogOut,
   Archive,
   AlertCircle,
+  Users,
   Calendar,
 } from "lucide-react";
 
@@ -38,6 +39,7 @@ const adminNav = [
   { id: "history", label: "History", icon: History },
   { id: "stalls", label: "Stalls", icon: Building2 },
   { id: "reports", label: "Reports", icon: BarChart3 },
+  { id: "users", label: "User Management", icon: Users },
   { id: "unpaid", label: "Unpaid", icon: AlertCircle },
   { id: "archived", label: "Archived", icon: Archive },
 ];
@@ -108,12 +110,12 @@ export const Navigation = ({
           variant="outline"
           size="icon"
           onClick={() => setIsMenuOpen((prev) => !prev)}
-          className="bg-card shadow-md h-8 w-8"
+          className="bg-card shadow-md h-10 w-10"
           aria-label={
             isMenuOpen ? "Close navigation menu" : "Open navigation menu"
           }
         >
-          {isMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          {isMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </Button>
       </div>
 

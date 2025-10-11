@@ -1,0 +1,9 @@
+[functions]
+# Global settings for all functions (optional)
+# You can remove this section if it's not needed
+# For now, we will keep it empty to avoid errors.
+
+[functions.user-management]
+verify_jwt = false
+import_map = "functions/user-management/import_map.json"
+entrypoint = "functions/user-management/index.ts"

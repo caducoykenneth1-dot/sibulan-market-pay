@@ -21,6 +21,8 @@ interface DashboardProps {
   stalls: StallRecord[];
   unpaidInvoices: Invoice[];
   userRole: string; // ✅ Added userRole prop
+  userName: string;
+  userUsername: string;
 }
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
@@ -37,7 +39,7 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
-export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: DashboardProps) => {
+export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, userName, userUsername }: DashboardProps) => {
   const summary = useMemo(() => {
     const today = new Date();
     const todayDateString = today.toISOString().split('T')[0];
@@ -184,8 +186,15 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: Da
             <AvatarFallback>SM</AvatarFallback>
           </Avatar>
           <div>
-            <p className="text-sm text-muted-foreground">Welcome back</p>
-            <h1 className="text-xl font-semibold">Sibulan Market Team</h1>
+            <p className="text-sm font-medium text-primary">Welcome back</p>
+            <h1 className="text-xl font-semibold">{userName || 'Sibulan Market Team'}</h1>
+            <div className="text-xs text-muted-foreground">
+              <span>
+                {userUsername}
+              </span>
+              <span className="mx-1">•</span>
+              <span className="capitalize">{userRole}</span>
+            </div>
           </div>
         </div>
         <Button variant="outline" onClick={() => onPageChange("collect")}>
@@ -263,10 +272,14 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: Da
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        {stats.map((stat) => {
+          {stats.map((stat, index) => {
           const Icon = stat.icon;
           return (
-            <Card key={stat.title} className={`rounded-2xl ${stat.className || ""}`}>
+            <Card
+              key={stat.title}
+              className={`rounded-2xl animate-in fade-in-0 slide-in-from-bottom-5 ${stat.className || ""}`}
+              style={{ animationDelay: `${index * 100}ms`, animationFillMode: 'backwards' }}
+            >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">{stat.title}</CardTitle> 
                 <Icon className="h-4 w-4 text-muted-foreground" />

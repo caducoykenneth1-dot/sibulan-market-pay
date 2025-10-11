@@ -1,4 +1,4 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,7 +38,7 @@ import {
 } from "@/data/stalls";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
-import { Archive, Building2, Calendar, DollarSign, Filter, Pencil, Phone, Plus, RefreshCw, Search, User } from "lucide-react";
+import { Archive, Building2, Calendar, DollarSign, Filter, Pencil, Phone, Plus, RefreshCw, Search, User, ArrowUp, ArrowDown } from "lucide-react";
 
 /* ----------------------------------------------------------
    🧾 AUTO BILLING FUNCTION
@@ -126,6 +126,13 @@ interface StallManagementProps {
   userRole: string;
 }
 
+type SortKey = 'stallNumber' | 'status' | 'vendor';
+type SortDirection = 'asc' | 'desc';
+interface SortConfig {
+  key: SortKey;
+  direction: SortDirection;
+}
+
 type StallFormState = {
   vendor: string;
   contact: string;
@@ -182,6 +189,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | StallStatus>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'stallNumber', direction: 'asc' });
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [stallBeingEdited, setStallBeingEdited] = useState<StallRecord | null>(null);
@@ -190,6 +198,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [archiveReason, setArchiveReason] = useState("");
+  const [selectedStall, setSelectedStall] = useState<StallRecord | null>(null);
 
   /* ----------------------------------------------------------
      HELPERS
@@ -238,7 +247,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
   const filteredStalls = useMemo(() => {
-    return stalls.filter((stall) => {
+    let filtered = stalls.filter((stall) => {
       const matchesStatus = statusFilter === "all" || stall.status === statusFilter;
       const matchesType = typeFilter === "all" || stall.type === typeFilter;
       const matchesSearch =
@@ -248,45 +257,50 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
         String(stall.dbId).includes(normalizedSearch);
       return matchesStatus && matchesType && matchesSearch;
     });
-  }, [stalls, statusFilter, typeFilter, normalizedSearch]);
+
+    // Sorting logic
+    return filtered.sort((a, b) => {
+      const { key, direction } = sortConfig;
+      let valA: string | number;
+      let valB: string | number;
+
+      if (key === 'stallNumber') {
+        valA = a.dbId;
+        valB = b.dbId;
+      } else {
+        valA = a[key].toLowerCase();
+        valB = b[key].toLowerCase();
+      }
+
+      let comparison = 0;
+      if (valA > valB) comparison = 1;
+      else if (valA < valB) comparison = -1;
+
+      return direction === 'asc' ? comparison : -comparison;
+    });
+  }, [stalls, statusFilter, typeFilter, normalizedSearch, sortConfig]);
+
+  const groupedStalls = useMemo(() => {
+    return filteredStalls.reduce((acc, stall) => {
+      const section = stall.section || 'Uncategorized';
+      if (!acc[section]) {
+        acc[section] = [];
+      }
+      acc[section].push(stall);
+      return acc;
+    }, {} as Record<string, StallRecord[]>);
+  }, [filteredStalls]);
+
+  // When filters change, reset the selected stall if it's no longer in the list
+  useEffect(() => {
+    if (selectedStall && !filteredStalls.find(s => s.id === selectedStall.id)) {
+      setSelectedStall(null);
+    }
+  }, [filteredStalls, selectedStall]);
 
   /* ----------------------------------------------------------
      CRUD + GENERATE DUES BUTTON
   ---------------------------------------------------------- */
-  const reloadStalls = async () => {
-    const { data, error } = await supabase
-      .from("vendors")
-      .select("id,vendor,contact,type,monthly_rent,last_payment,next_due,status,rental_type")
-      .order("id", { ascending: true });
-
-    if (error) {
-      console.error("Reload error:", error);
-      toast({ title: "Reload failed", description: error.message, variant: "destructive" });
-      return;
-    }
-
-    const typeCounters = new Map<string, number>();
-    const mapped: StallRecord[] = (data ?? []).map((row) => {
-      const { sequence: typeSequence, typeValue } = getNextTypeSequence(typeCounters, row.type);
-      const statusValue = computeStatusFromDueDate(row.next_due, row.status);
-      return {
-        id: `stall-${row.id}`,
-        dbId: row.id,
-        name: `Stall ${typeSequence}`,
-        vendor: row.vendor ?? "",
-        contact: row.contact ?? "",
-        type: typeValue,
-        rentAmount: row.monthly_rent ?? 0,
-        rentalType: row.rental_type ?? 'monthly',
-        lastPayment: row.last_payment ?? "",
-        nextDue: row.next_due ?? "",
-        status: statusValue,
-        occupied: statusValue !== "vacant" && statusValue !== "archived"
-      };
-    });
-
-    onStallsChange();
-  };
 
   const openCreateDialog = () => {
     setFormState(createEmptyForm());
@@ -391,7 +405,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
         toast({ title: "Stall created", description: "New stall added successfully." });
       }
 
-      await reloadStalls();
+      onStallsChange();
       closeFormDialog();
     } catch (error: any) {
       if (!navigator.onLine) {
@@ -423,7 +437,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
         archive_reason: archiveReason.trim(),
       });
       toast({ title: "Stall Archived", description: "The stall has been moved to the archives." });
-      await reloadStalls();
+      onStallsChange();
       setStallToDelete(null);
       setArchiveReason(""); // Reset reason
     } catch (error: any) {
@@ -446,7 +460,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
   const handleGenerateClick = async () => {
     setIsGenerating(true);
     await generateMonthlyInvoices(toast);
-    await reloadStalls();
+    onStallsChange();
     setIsGenerating(false);
   };
 
@@ -505,7 +519,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
         <CardHeader>
           <CardTitle className="text-base font-semibold">Search & Filters</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-3">
+        <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
@@ -542,195 +556,218 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
               ))}
             </SelectContent>
           </Select>
+          <div className="flex gap-2">
+            <Select value={sortConfig.key} onValueChange={(value) => setSortConfig({ ...sortConfig, key: value as SortKey })}>
+              <SelectTrigger>
+                <SelectValue placeholder="Sort by..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="stallNumber">Stall Number</SelectItem>
+                <SelectItem value="status">Status</SelectItem>
+                <SelectItem value="vendor">Vendor Name</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button 
+              variant="outline" 
+              size="icon" 
+              onClick={() => setSortConfig(prev => ({ ...prev, direction: prev.direction === 'asc' ? 'desc' : 'asc' }))}
+            >
+              {sortConfig.direction === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
       {/* Stall List */}
-      {filteredStalls.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">No stalls match the current filters.</CardContent>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Stall Selection</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {filteredStalls.length === 0 ? (
+            <div className="py-10 text-center text-muted-foreground">No stalls match the current filters.</div>
+          ) : (
+            <div className="space-y-4">
+              {Object.entries(groupedStalls).map(([section, sectionStalls]) => (
+                <div key={section}>
+                  <h3 className="text-sm font-semibold text-muted-foreground mb-2">{section}</h3>
+                  <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-2">
+                    {sectionStalls.map((stall) => (
+                      <Button
+                        key={stall.id}
+                        variant={selectedStall?.id === stall.id ? "default" : "outline"}
+                        onClick={() => setSelectedStall(prev => prev?.id === stall.id ? null : stall)}
+                        className="h-12 w-auto min-w-[5rem] px-2"
+                      >
+                        <span className="font-bold text-sm">{stall.name}</span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Selected Stall Card */}
+      {selectedStall && (
+        <Card key={selectedStall.id} className="animate-in fade-in-50 slide-in-from-top-5">
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Building2 className="h-5 w-5 text-muted-foreground" />
+              {selectedStall.name}
+            </CardTitle>
+            <Badge variant={getStatusBadge(selectedStall.status)} className="capitalize">
+              {selectedStall.status}
+            </Badge>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex items-center gap-2"><User className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.vendor || "No vendor assigned"}</span></div>
+              <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.contact || "N/A"}</span></div>
+              <div className="flex items-center gap-2"><DollarSign className="h-4 w-4 text-muted-foreground" /><span>Rent: ₱{selectedStall.rentAmount.toLocaleString()} / {selectedStall.rentalType}</span></div>
+              <div className="flex items-center gap-2"><Badge className="capitalize" variant="outline">{selectedStall.type || "Uncategorised"}</Badge></div>
+              <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Last Payment: {selectedStall.lastPayment || "N/A"}</span></div>
+              <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Next Due: {selectedStall.nextDue || "N/A"}</span></div>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => openEditDialog(selectedStall)}>
+                <Pencil className="mr-2 h-4 w-4" /> Edit
+              </Button>
+              <Button variant="destructive" size="sm" 
+                onClick={() => setStallToDelete(selectedStall)}
+                disabled={userRole?.toLowerCase() !== 'collector' && userRole?.toLowerCase() !== 'admin'}>
+                <Archive className="mr-2 h-4 w-4" /> Archive
+              </Button>
+            </div>
+          </CardContent>
         </Card>
-      ) : (
-        <div className="grid gap-4">
-          {filteredStalls.map((stall) => (
-            <Card key={stall.id}>
-              <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Building2 className="h-5 w-5 text-muted-foreground" />
-                  {stall.name}
-                </CardTitle>
-                <Badge variant={getStatusBadge(stall.status)} className="capitalize">
-                  {stall.status}
-                </Badge>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="flex items-center gap-2">
-                    <User className="h-4 w-4 text-muted-foreground" />
-                    <span>{stall.vendor || "No vendor assigned"}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Phone className="h-4 w-4 text-muted-foreground" />
-                    <span>{stall.contact || "N/A"}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    <span>Rent: ₱{stall.rentAmount.toLocaleString()} / {stall.rentalType}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge className="capitalize" variant="outline">
-                      {stall.type || "Uncategorised"}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
-                    <span>Last Payment: {stall.lastPayment || "N/A"}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
-                    <span>Next Due: {stall.nextDue || "N/A"}</span>
-                  </div>
-                </div>
-                <div className="flex gap-2 pt-2">
-                  <Button variant="outline" size="sm" onClick={() => openEditDialog(stall)}>
-                    <Pencil className="mr-2 h-4 w-4" /> Edit
-                  </Button>
-                  <Button variant="destructive" size="sm" 
-                    onClick={() => setStallToDelete(stall)}
-                    disabled={userRole?.toLowerCase() !== 'collector' && userRole?.toLowerCase() !== 'admin'}>
-                    <Archive className="mr-2 h-4 w-4" /> Archive
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
       )}
 
       {/* Create/Edit Dialog */}
       <Dialog open={isCreateOpen} onOpenChange={(open) => (open ? setIsCreateOpen(true) : closeFormDialog())}>
-        <DialogContent>
-          <form onSubmit={handleFormSubmit} className="space-y-5">
-            <DialogHeader>
-              <DialogTitle>{isEditMode ? "Edit Stall" : "Add New Stall"}</DialogTitle>
-              <DialogDescription>
-                {isEditMode
-                  ? "Update stall information. Leave vendor fields blank for vacant stalls."
-                  : "Fill in stall information. Leave vendor fields blank for vacant stalls."}
-              </DialogDescription>
-            </DialogHeader>
+        <DialogContent className="w-[90vw] max-w-lg rounded-md flex flex-col max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle>{isEditMode ? "Edit Stall" : "Add New Stall"}</DialogTitle>
+            <DialogDescription>
+              {isEditMode
+                ? "Update stall information. Leave vendor fields blank for vacant stalls."
+                : "Fill in stall information. Leave vendor fields blank for vacant stalls."}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto pr-6 pl-1 -mr-6 -ml-1 space-y-5">
+            <div className="grid gap-4 sm:grid-cols-2 ">
+                <div className="space-y-2">
+                  <Label htmlFor="type">Stall type</Label>
+                  <Select value={formState.type} onValueChange={(value) => handleFormChange("type", value)}>
+                    <SelectTrigger id="type">
+                      <SelectValue placeholder="Select stall type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(groupedStallTypes).map(([section, types]) => (
+                        <SelectGroup key={section}>
+                          <SelectLabel>{section}</SelectLabel>
+                          {types.map((type) => (
+                            <SelectItem key={type.name} value={type.name}>
+                              {type.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="type">Stall type</Label>
-                <Select value={formState.type} onValueChange={(value) => handleFormChange("type", value)}>
-                  <SelectTrigger id="type">
-                    <SelectValue placeholder="Select stall type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(groupedStallTypes).map(([section, types]) => (
-                      <SelectGroup key={section}>
-                        <SelectLabel>{section}</SelectLabel>
-                        {types.map((type) => (
-                          <SelectItem key={type.name} value={type.name}>
-                            {type.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="status">Status</Label>
+                  <Select
+                    value={formState.status}
+                    onValueChange={(value) => handleFormChange("status", value as StallStatus)}>
+                    <SelectTrigger id="status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATUS_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="status">Status</Label>
-                <Select
-                  value={formState.status}
-                  onValueChange={(value) => handleFormChange("status", value as StallStatus)}>
-                  <SelectTrigger id="status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {STATUS_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rentalType">Rental Type</Label>
+                  <Select value={formState.rentalType} onValueChange={(value) => handleFormChange("rentalType", value as 'monthly' | 'daily')}>
+                    <SelectTrigger id="rentalType">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {RENTAL_TYPE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="rentalType">Rental Type</Label>
-                <Select value={formState.rentalType} onValueChange={(value) => handleFormChange("rentalType", value as 'monthly' | 'daily')}>
-                  <SelectTrigger id="rentalType">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {RENTAL_TYPE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rent">Rent Amount (PHP)</Label>
+                  <Input
+                    id="rent"
+                    type="number"
+                    min={0}
+                    value={formState.rentAmount}
+                    onChange={(e) => handleFormChange("rentAmount", e.target.value)}
+                    required
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="rent">Rent Amount (PHP)</Label>
-                <Input
-                  id="rent"
-                  type="number"
-                  min={0}
-                  value={formState.rentAmount}
-                  onChange={(e) => handleFormChange("rentAmount", e.target.value)}
-                  required
-                />
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="vendor">Vendor name</Label>
+                  <Input
+                    id="vendor"
+                    value={formState.vendor}
+                    onChange={(e) => handleFormChange("vendor", e.target.value)}
+                    placeholder="Leave blank if vacant"
+                    disabled={formState.status === "vacant"}
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="vendor">Vendor name</Label>
-                <Input
-                  id="vendor"
-                  value={formState.vendor}
-                  onChange={(e) => handleFormChange("vendor", e.target.value)}
-                  placeholder="Leave blank if vacant"
-                  disabled={formState.status === "vacant"}
-                />
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="contact">Contact number</Label>
+                  <Input
+                    id="contact"
+                    value={formState.contact}
+                    onChange={(e) => handleFormChange("contact", e.target.value)}
+                    placeholder="09xxxxxxxxx"
+                    disabled={formState.status === "vacant"}
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="contact">Contact number</Label>
-                <Input
-                  id="contact"
-                  value={formState.contact}
-                  onChange={(e) => handleFormChange("contact", e.target.value)}
-                  placeholder="09xxxxxxxxx"
-                  disabled={formState.status === "vacant"}
-                />
-              </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="last">Last payment date</Label>
+                  <Input
+                    id="last"
+                    type="date"
+                    value={formState.lastPayment}
+                    onChange={(e) => handleFormChange("lastPayment", e.target.value)}
+                    disabled={formState.status === "vacant"}
+                  />
+                </div>
 
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="last">Last payment date</Label>
-                <Input
-                  id="last"
-                  type="date"
-                  value={formState.lastPayment}
-                  onChange={(e) => handleFormChange("lastPayment", e.target.value)}
-                  disabled={formState.status === "vacant"}
-                />
-              </div>
-
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="next">Next due date</Label>
-                <Input
-                  id="next"
-                  type="date"
-                  value={formState.nextDue}
-                  onChange={(e) => handleFormChange("nextDue", e.target.value)}
-                  disabled={formState.status === "vacant"}
-                />
-              </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="next">Next due date</Label>
+                  <Input
+                    id="next"
+                    type="date"
+                    value={formState.nextDue}
+                    onChange={(e) => handleFormChange("nextDue", e.target.value)}
+                    disabled={formState.status === "vacant"}
+                  />
+                </div>
             </div>
 
             <DialogFooter>
@@ -741,7 +778,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
                 {isEditMode ? "Save changes" : "Save stall"}
               </Button>
             </DialogFooter>
-          </form>
+            </form>
         </DialogContent>
       </Dialog>
 

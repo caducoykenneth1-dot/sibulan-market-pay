@@ -3,10 +3,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { computeStatusFromDueDate, type StallRecord } from "@/data/stalls";
+import { computeStatusFromDueDate, type StallRecord, type StallTypeInfo } from "@/data/stalls";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { supabase } from "@/lib/supabaseClient"; // ✅ Supabase client
@@ -55,6 +55,20 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
     () => Array.from(new Set(stalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
     [stalls]
   );
+
+  const groupedStallTypes = useMemo(() => {
+    const stallTypesWithSection = stalls.map(stall => ({ name: stall.type, section: stall.section }));
+    const uniqueStallTypes = Array.from(new Map(stallTypesWithSection.map(item => [item.name, item])).values());
+    
+    return uniqueStallTypes.reduce((acc, type) => {
+      const section = type.section || 'Uncategorized';
+      if (!acc[section]) {
+        acc[section] = [];
+      }
+      acc[section].push(type as StallTypeInfo);
+      return acc;
+    }, {} as Record<string, StallTypeInfo[]>);
+  }, [stalls]);
 
   useEffect(() => {
     if (stallTypeOptions.length === 0) {
@@ -370,11 +384,16 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
                   <SelectValue placeholder="Select stall type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {stallTypeOptions.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
-                  ))}
+                  {Object.entries(groupedStallTypes).map(([section, types]) => (
+                      <SelectGroup key={section}>
+                        <SelectLabel>{section}</SelectLabel>
+                        {types.map((type) => (
+                          <SelectItem key={type.name} value={type.name}>
+                            {type.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
