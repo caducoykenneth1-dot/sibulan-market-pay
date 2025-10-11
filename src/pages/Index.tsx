@@ -4,8 +4,8 @@ import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection"; // 🟢 Added
 import { PaymentHistory } from "@/components/PaymentHistory"; // 🟢 Added
 import { StallManagement } from "@/components/StallManagement"; // 🟢 Added
-import { Reports } from "@/components/Reports"; // 🟢 Added
-import { ScheduledCollections } from "@/components/ScheduledCollections"; // 🟢 Added
+import { Reports } from "@/components/Reports";
+// import { ScheduledCollections } from "@/components/ScheduledCollections";
 import { ArchivedStalls } from "@/components/ArchivedStalls"; // 🟢 Added
 import { UnpaidDues } from "@/components/UnpaidDues";
 import { type Invoice } from "@/components/UnpaidDues";
@@ -423,10 +423,10 @@ const Index = () => {
         );
       case "reports":
         return <Reports stalls={stalls} invoices={allInvoices} />;
-      case "scheduled":
-        return (
-          <ScheduledCollections onNavigate={setCurrentPage} stalls={stalls} />
-        );
+      // case "scheduled":
+      //   return (
+      //     <ScheduledCollections onNavigate={setCurrentPage} stalls={stalls} />
+      //   );
       case "archived":
         return <ArchivedStalls onDataChange={refreshData} allStalls={rawStalls} />;
       case "unpaid":

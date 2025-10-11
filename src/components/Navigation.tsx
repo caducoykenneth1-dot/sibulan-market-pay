@@ -25,7 +25,7 @@ interface NavigationProps {
 
 const collectorNav = [
   { id: "dashboard", label: "Dashboard", icon: Home },
-  { id: "scheduled", label: "Scheduled Collections", icon: Calendar },
+  // { id: "scheduled", label: "Scheduled Collections", icon: Calendar },
   { id: "collect", label: "Collect", icon: Receipt },
   { id: "history", label: "History", icon: History },
   { id: "stalls", label: "Stalls", icon: Building2 },
