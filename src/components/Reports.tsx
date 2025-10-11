@@ -24,8 +24,11 @@ import {
 } from "recharts";
 import { type StallRecord } from "@/data/stalls";
 import { type Invoice } from "./UnpaidDues";
-import * as autoTable from "jspdf-autotable";
-import jsPDF from "jspdf";
+import jsPDF from "jspdf"; // Import the base class
+import 'jspdf-autotable'; // Import the plugin for its side effects
+
+// Augment the jsPDF type to include the autoTable plugin
+declare module "jspdf" { interface jsPDF { autoTable: (options: any) => jsPDF; } }
 
 interface ReportsProps {
   stalls: StallRecord[];
@@ -250,7 +253,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
 
       // Key Metrics Table
       contentY = addSectionTitle("Key Metrics (Current Month)", contentY);
-      (autoTable as any).default(pdf, {
+      (pdf as any).autoTable({
         startY: contentY,
         ...tableStyles,
         body: [
@@ -275,7 +278,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
         return [d.month, { content: `₱${d.collections.toLocaleString()}`, styles: { halign: "right" as const } }, { content: change, styles: { halign: "right" as const } }];
       });
       contentY = addSectionTitle("Monthly Collection Trends", contentY);
-      (autoTable as any).default(pdf, {
+      (pdf as any).autoTable({
         startY: contentY,
         ...tableStyles,
         head: [["Month", "Collections (₱)", "% Change from Previous Month"]],
@@ -285,7 +288,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
 
       // Top Collectors Table
       contentY = addSectionTitle("Top Performing Collectors (Current Month)", contentY);
-      (autoTable as any).default(pdf, {
+      (pdf as any).autoTable({
         startY: contentY,
         ...tableStyles,
         head: [["Collector Name", "# of Payments", "Total Collected (₱)", "Average Payment (₱)"]],
@@ -305,7 +308,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
         { content: `₱${s.amount.toLocaleString()}`, styles: { halign: "right" as const } },
       ]);
       contentY = addSectionTitle("Payment Breakdown by Stall Type", contentY);
-      (autoTable as any).default(pdf, {
+      (pdf as any).autoTable({
         startY: contentY,
         ...tableStyles,
         head: [["Stall Type", "No. of Stalls", "Total Collected (₱)"]],
@@ -317,7 +320,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
       const unpaidStalls = stalls.filter(s => s.status === 'overdue' || s.status === 'due');
       const totalUnpaid = unpaidStalls.reduce((sum, s) => sum + s.rentAmount, 0);
       contentY = addSectionTitle("Pending / Unpaid Summary", contentY);
-      (autoTable as any).default(pdf, {
+      (pdf as any).autoTable({
         startY: contentY,
         ...tableStyles,
         body: [
@@ -329,7 +332,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
       contentY = (pdf as any).lastAutoTable.finalY + 10;
 
       if (unpaidStalls.length > 0) {
-        (autoTable as any).default(pdf, {
+        (pdf as any).autoTable({
           startY: contentY,
           ...tableStyles,
           head: [["Stall Name", "Vendor", "Due Date", "Amount (₱)"]],
