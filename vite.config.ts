@@ -15,10 +15,4 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  build: {
-    rollupOptions: {
-      // ✅ Tell Vite not to try bundling jsPDF libraries
-      external: ["jspdf", "jspdf-autotable"],
-    },
-  },
 }));
