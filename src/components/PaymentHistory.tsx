@@ -55,16 +55,17 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
             .sort((a, b) => new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime()), 
   [invoices]);
 
-  const typeOptions = useMemo(
-    () => Array.from(new Set(payments.map((p) => p.payment_type || 'Monthly Rent'))).sort((a, b) => a.localeCompare(b)),
-    [payments]
-  );
+  // ✅ Changed to use stall_type for filtering sections like "Fish", "Meat", etc.
+  const stallTypeOptions = useMemo(() => {
+    const types = new Set(payments.map(p => p.stall_type).filter(Boolean));
+    return Array.from(types).sort((a, b) => a!.localeCompare(b!));
+  }, [payments]);
 
   useEffect(() => {
-    if (filterType !== "all" && !typeOptions.includes(filterType)) {
+    if (filterType !== "all" && !stallTypeOptions.includes(filterType)) {
       setFilterType("all");
     }
-  }, [filterType, typeOptions]);
+  }, [filterType, stallTypeOptions]);
 
   const filteredPayments = useMemo(() => {
     return payments.filter((payment) => {
@@ -75,7 +76,8 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         payment.vendor_name.toLowerCase().includes(normalizedSearch) ||
         String(payment.id).toLowerCase().includes(normalizedSearch);
 
-      const matchesType = filterType === "all" || (payment.payment_type || 'Monthly Rent') === filterType;
+      // ✅ Filter logic now checks stall_type
+      const matchesType = filterType === "all" || payment.stall_type === filterType;
 
       return matchesSearch && matchesType;
     });
@@ -178,16 +180,16 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
             </div>
             <div className="flex gap-2">
               <Select value={filterType} onValueChange={setFilterType}>
-                <SelectTrigger className="w-48">
+                <SelectTrigger className="w-full sm:w-48">
                   <Filter className="mr-2 h-4 w-4" />
-                  <SelectValue placeholder="Filter by type" />
+                  <SelectValue placeholder="Filter by section" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All types</SelectItem>
-                  {typeOptions.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
+                  <SelectItem value="all">All Sections</SelectItem>
+                  {stallTypeOptions.map((type) => (
+                    type ? <SelectItem key={type} value={type}>
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </SelectItem> : null
                   ))}
                 </SelectContent>
               </Select>

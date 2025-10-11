@@ -17,6 +17,7 @@ export interface Invoice {
   due_date: string;
   status: "unpaid" | "paid";
   paid_at?: string | null;
+  stall_type?: string | null;
   payment_type?: string | null;
   collector_name?: string | null;
   notes?: string | null;

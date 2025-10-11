@@ -39,26 +39,37 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 
 export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: DashboardProps) => {
   const summary = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
-    // ✅ Correctly filter for paid invoices from today from the full list of invoices.
-    const todaysPaidInvoices = unpaidInvoices.filter(inv => inv.status === 'paid' && inv.paid_at?.startsWith(today)); 
+    const today = new Date();
+    const todayDateString = today.toISOString().split('T')[0];
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
+
+    const paidInvoices = unpaidInvoices.filter(inv => inv.status === 'paid' && inv.paid_at);
+
+    const todaysPaidInvoices = paidInvoices.filter(inv => inv.paid_at!.startsWith(todayDateString));
     const totalCollectedToday = todaysPaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+
+    const currentMonthPaidInvoices = paidInvoices.filter(inv => {
+      const paidDate = new Date(inv.paid_at!);
+      return paidDate.getMonth() === currentMonth && paidDate.getFullYear() === currentYear;
+    });
+    const totalCollectedThisMonth = currentMonthPaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+
+    // This calculation is for the main balance card, representing potential monthly income.
+    // The "Today's Collections" card will use the more accurate `totalCollectedToday`.
+    const totalPotentialRent = stalls.reduce((sum, s) => s.occupied ? sum + s.rentAmount : sum, 0);
+
+    // Get a set of vendor IDs with unpaid invoices for the "Pending Payments" count.
+    const unpaidOnlyInvoices = unpaidInvoices.filter(inv => inv.status === 'unpaid');
+    const unpaidVendorIds = new Set(unpaidOnlyInvoices.map(inv => inv.vendor_id));
 
     let occupiedCount = 0;
     let vacantCount = 0;
     let pendingCount = 0;
     let overdueCount = 0;
 
-    // This calculation is for the main balance card, representing potential monthly income.
-    // The "Today's Collections" card will use the more accurate `totalCollectedToday`.
-    const totalPotentialRent = stalls.reduce((sum, s) => s.occupied ? sum + s.monthlyRent : sum, 0);
-
-    // Get a set of vendor IDs with unpaid invoices for the "Pending Payments" count.
-    const unpaidOnlyInvoices = unpaidInvoices.filter(inv => inv.status === 'unpaid');
-    const unpaidVendorIds = new Set(unpaidOnlyInvoices.map(inv => inv.vendor_id));
-
     stalls.forEach((stall) => {
-      const rent = Number.isFinite(stall.monthlyRent) ? stall.monthlyRent : 0;
+      const rent = Number.isFinite(stall.rentAmount) ? stall.rentAmount : 0;
 
       if (stall.occupied) {
         occupiedCount += 1;
@@ -76,12 +87,12 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: Da
         pendingCount++;
       }
     });
-    return { totalCollectedToday, totalPotentialRent, occupiedCount, vacantCount, pendingCount, overdueCount };}, [stalls, unpaidInvoices]); 
+    return { totalCollectedToday, totalCollectedThisMonth, occupiedCount, vacantCount, pendingCount, overdueCount };}, [stalls, unpaidInvoices]);
 
-  const { totalCollectedToday, totalPotentialRent, occupiedCount, vacantCount, pendingCount, overdueCount } = summary;
+  const { totalCollectedToday, totalCollectedThisMonth, occupiedCount, vacantCount, pendingCount, overdueCount } = summary;
   const totalStalls = stalls.length;
 
-  const formattedTotalPotentialRent = useMemo(() => `PHP ${totalPotentialRent.toLocaleString()}`, [totalPotentialRent]);
+  const formattedTotalCollectedThisMonth = useMemo(() => `PHP ${totalCollectedThisMonth.toLocaleString()}`, [totalCollectedThisMonth]);
   const occupancyRate = totalStalls === 0 ? 0 : Math.round((occupiedCount / totalStalls) * 100);
 
   const stats: Array<{ title: string; value: string; change: string; icon: any; className?: string }> = [
@@ -146,7 +157,7 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: Da
     },
     {
       label: "Monthly Collections",
-      value: formattedTotalPotentialRent,
+      value: formattedTotalCollectedThisMonth,
       description: "Collected from active stalls",
       icon: DollarSign
     },
@@ -184,8 +195,8 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: Da
 
       {/* Balance card */}
       <div className="rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-400 to-purple-500 p-5 text-white shadow-lg">
-        <div className="text-sm/5 opacity-90">Potential Monthly Rent</div>
-        <div className="mt-1 text-4xl font-bold">{formattedTotalPotentialRent}</div>
+        <div className="text-sm/5 opacity-90">Total Collections This Month</div>
+        <div className="mt-1 text-4xl font-bold">{formattedTotalCollectedThisMonth}</div>
         <div className="mt-1 text-xs opacity-90">Active stalls: {occupiedCount}</div>
       </div>
 
@@ -227,9 +238,8 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices }: Da
                 <span className="text-xs">Insights</span>
               </button>
             )}
-
-            {/* Add New Stall - admin only */}
-            {userRole?.toLowerCase() === "admin" && (
+            {/* Add New Stall - collector only */}
+            {userRole?.toLowerCase() === "collector" && (
               <button
                 onClick={() => onPageChange("stalls")}
                 className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"

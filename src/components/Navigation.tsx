@@ -1,9 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Home,
-  CalendarDays,
   Receipt,
   History,
   Building2,
@@ -11,7 +9,9 @@ import {
   Menu,
   X,
   LogOut,
+  Archive,
   AlertCircle,
+  Calendar,
 } from "lucide-react";
 
 interface NavigationProps {
@@ -23,156 +23,194 @@ interface NavigationProps {
   userUsername?: string;
 }
 
+const collectorNav = [
+  { id: "dashboard", label: "Dashboard", icon: Home },
+  { id: "scheduled", label: "Scheduled Collections", icon: Calendar },
+  { id: "collect", label: "Collect", icon: Receipt },
+  { id: "history", label: "History", icon: History },
+  { id: "stalls", label: "Stalls", icon: Building2 },
+  { id: "unpaid", label: "Unpaid", icon: AlertCircle },
+  { id: "archived", label: "Archived", icon: Archive },
+];
+
+const adminNav = [
+  { id: "dashboard", label: "Dashboard", icon: Home },
+  { id: "history", label: "History", icon: History },
+  { id: "stalls", label: "Stalls", icon: Building2 },
+  { id: "reports", label: "Reports", icon: BarChart3 },
+  { id: "unpaid", label: "Unpaid", icon: AlertCircle },
+  { id: "archived", label: "Archived", icon: Archive },
+];
+
 export const Navigation = ({
   currentPage,
   onPageChange,
   onLogout,
   userName,
   userRole,
-  userUsername
+  userUsername,
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-
- // 🟢 Add these before where navItems is defined:
-const collectorNav = [
-  { id: "dashboard", label: "Dashboard", icon: Home },
-  // { id: "scheduled", label: "Scheduled", icon: CalendarDays },
-  { id: "collect", label: "Collect Payment", icon: Receipt },
-  { id: "history", label: "Payment History", icon: History },
-  { id: "unpaid", label: "Unpaid Dues", icon: AlertCircle },
-];
-
-const adminNav = [
-  { id: "dashboard", label: "Dashboard", icon: Home },
-  // { id: "scheduled", label: "Scheduled", icon: CalendarDays },
-  // { id: "collect", label: "Collect Payment", icon: Receipt },
-  { id: "history", label: "Payment History", icon: History },
-  { id: "stalls", label: "Stall Management", icon: Building2 },
-  { id: "reports", label: "Reports & Analytics", icon: BarChart3 },
-  { id: "unpaid", label: "Unpaid Dues", icon: AlertCircle },
-];
-
-// 🟢 Replace your existing navItems array with this single line:
-const navItems = userRole === "collector" ? collectorNav : adminNav;
-
+  const navItems = userRole === "collector" ? collectorNav : adminNav;
 
   const handleMobileNav = (page: string) => {
-    if (onPageChange) {
-      onPageChange(page);
-    }
+    onPageChange?.(page);
     setIsMenuOpen(false);
   };
 
   const handleLogout = () => {
-    if (onLogout) {
-      onLogout();
-    }
+    onLogout?.();
     setIsMenuOpen(false);
   };
 
   return (
     <>
-      {/* 📱 Mobile Bottom Navigation */}
-      <div className="md:hidden fixed bottom-4 left-1/2 z-50 w-[92%] -translate-x-1/2">
-        <div className="rounded-2xl border bg-card/90 px-2 py-2 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-white/70">
-          <div className="grid grid-cols-6 gap-1">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const active = currentPage === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleMobileNav(item.id)}
-                  className={`flex flex-col items-center justify-center rounded-xl py-2 text-[11px] font-medium transition-colors ${
-                    active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+      {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg">
+        <div className="grid grid-cols-4 items-center gap-2 px-2 py-2">
+          {[
+            { id: "dashboard", label: "Dashboard", icon: Home },
+            { id: "stalls", label: "Stalls", icon: Building2 },
+            { id: "collect", label: "Collect", icon: Receipt },
+            { id: "archived", label: "Archived", icon: Archive },
+          ].map((item) => {
+            const Icon = item.icon;
+            const active = currentPage === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => handleMobileNav(item.id)}
+                className={`flex flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-xs font-medium transition-all ${
+                  active
+                    ? "text-primary bg-primary/10 font-semibold"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+              >
+                <Icon
+                  className={`h-5 w-5 transition-transform duration-200 ${
+                    active
+                      ? "scale-110"
+                      : "text-muted-foreground group-hover:text-foreground"
                   }`}
-                >
-                  <Icon className="h-5 w-5" />
-                  <span className="mt-1">{item.label.split(" ")[0]}</span>
-                </button>
-              );
-            })}
-          </div>
-          {onLogout && (
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-destructive/10 py-2 text-xs font-medium text-destructive transition hover:bg-destructive/20"
-            >
-              <LogOut className="h-4 w-4" /> Log out
-            </button>
-          )}
+                />
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* 📱 Mobile Menu Toggle */}
-      <div className="md:hidden fixed top-4 left-4 z-40">
+      {/* Floating toggle for slide-in drawer */}
+      <div
+        className="md:hidden fixed left-3 z-40"
+        style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
+      >
         <Button
           variant="outline"
           size="icon"
           onClick={() => setIsMenuOpen((prev) => !prev)}
-          className="bg-card shadow-lg"
+          className="bg-card shadow-md h-8 w-8"
+          aria-label={
+            isMenuOpen ? "Close navigation menu" : "Open navigation menu"
+          }
         >
-          {isMenuOpen ? <X /> : <Menu />}
+          {isMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
         </Button>
       </div>
 
-      {isMenuOpen && <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setIsMenuOpen(false)} />}
+      {isMenuOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-50 bg-black/40"
+          onClick={() => setIsMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
 
-      {/* 🖥️ Sidebar for Desktop */}
-      <Card
-        className={`fixed z-40 h-full w-64 border-r bg-card transition-transform duration-300 md:relative ${
+      {/* ✅ Ultra-Compact Sidebar */}
+      <aside
+        className={`fixed top-0 left-0 z-50 h-full w-56 sm:w-60 md:w-64 transform transition-transform duration-300 md:relative md:h-auto ${
           isMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
+        aria-label="Primary navigation"
       >
-        <div className="flex h-full flex-col p-6">
-          <div className="mb-8 text-center">
-            <img src="/logo.png" alt="Sibulan Market Pay Logo" className="mx-auto mb-4 h-16 w-16 rounded-lg" />
-            <h2 className="text-xl font-bold text-primary">Sibulan Public Market</h2>
-            <p className="text-sm text-muted-foreground">Stall Rental System</p>
+        <div className="flex h-full flex-col border-r bg-card shadow-xl md:shadow-none rounded-r-2xl md:rounded-none">
+          {/* ✅ Logo + Header */}
+          <div className="shrink-0 mb-6 px-4 pt-6 text-center">
+            <img
+              src="/logo.png"
+              alt="Sibulan Market Pay Logo"
+              className="mx-auto mb-2 h-16 w-16 rounded-lg"
+            />
+            <h2 className="text-xl font-bold text-primary">
+              Sibulan Market
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Stall System
+            </p>
           </div>
 
-          {/* 🔹 Main Navigation */}
-          <nav className="flex-1 space-y-2">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = currentPage === item.id;
-              return (
-                <Button
-                  key={item.id}
-                  variant={isActive ? "default" : "ghost"}
-                  className="w-full justify-start"
-                  onClick={() => {
-                    if (onPageChange) {
-                      onPageChange(item.id);
-                      setIsMenuOpen(false);
-                    }
-                  }}
-                >
-                  <Icon className="mr-2 h-4 w-4" />
-                  {item.label}
-                </Button>
-              );
-            })}
-          </nav>
+          {/* ✅ Scrollable Nav Section */}
+          <div className="flex-1 overflow-y-auto px-2 pb-24 md:pb-4">
+            <nav className="space-y-1">
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = currentPage === item.id;
+                return (
+                  <Button
+                    key={item.id}
+                    variant={isActive ? "default" : "ghost"}
+                    className={`group w-full justify-start items-center gap-2.5 text-sm px-3 py-2 h-auto ${
+                      isActive
+                        ? "font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => {
+                      handleMobileNav(item.id);
+                    }}
+                  >
+                    <Icon
+                      className={`h-5 w-5 transition-transform duration-200 group-hover:scale-110 ${
+                        isActive
+                          ? ""
+                          : "text-muted-foreground group-hover:text-foreground"
+                      }`}
+                    />
+                    {item.label}
+                  </Button>
+                );
+              })}
+            </nav>
+          </div>
 
-          {/* 👤 User Info + Logout */}
+          {/* ✅ Fixed Footer / Logout Section */}
           {onLogout && (
-            <div className="mt-8 space-y-3 border-t pt-4 text-xs text-muted-foreground">
+            <div className="sticky bottom-0 left-0 mt-auto w-full border-t bg-card/95 p-4 text-xs text-muted-foreground backdrop-blur-sm">
               {(userName || userRole || userUsername) && (
-                <div>
-                  {userName && <p className="text-sm font-semibold text-foreground">{userName}</p>}
-                  {userUsername && <p className="truncate">Username: {userUsername}</p>}
-                  {userRole && <p className="capitalize">Role: {userRole}</p>}
+                <div className="mb-3 space-y-1 text-left">
+                  {userName && (
+                    <p className="text-sm font-semibold text-foreground">
+                      {userName}
+                    </p>
+                  )}
+                  {userUsername && (
+                    <p className="truncate text-xs">Username: {userUsername}</p>
+                  )}
+                  {userRole && (
+                    <p className="capitalize text-xs">Role: {userRole}</p>
+                  )}
                 </div>
               )}
-              <Button variant="outline" className="w-full justify-start" onClick={handleLogout}>
-                <LogOut className="mr-2 h-4 w-4" /> Log out
+              <Button
+                variant="ghost"
+                className="w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={handleLogout}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                Log out
               </Button>
             </div>
           )}
         </div>
-      </Card>
+      </aside>
     </>
   );
 };

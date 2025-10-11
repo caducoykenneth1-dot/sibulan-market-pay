@@ -6,14 +6,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { type StallRecord } from "@/data/stalls";
+import { computeStatusFromDueDate, type StallRecord } from "@/data/stalls";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { supabase } from "@/lib/supabaseClient"; // ✅ Supabase client
 
 type PaymentData = {
   amount: string;
-  paymentType: string;
   notes: string;
 };
 
@@ -45,8 +44,7 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
   const [selectedStallId, setSelectedStallId] = useState<string>("");
   const [paymentData, setPaymentData] = useState<PaymentData>({
     amount: "",
-    paymentType: "",
-    notes: ""
+    notes: "",
   });
   const [showReceipt, setShowReceipt] = useState(false);
   const [receiptNo, setReceiptNo] = useState(generateReceiptNo());
@@ -101,10 +99,12 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
       setPaymentData((prev) => ({ ...prev, amount: "" }));
       return;
     }
-    setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.monthlyRent) }));
+    setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.rentAmount) }));
   }, [selectedStall]);
 
-  // ✅ Supabase insert to "invoices"
+  /* ----------------------------------------------------------
+     ✅ MAIN PAYMENT SUBMIT HANDLER
+  ---------------------------------------------------------- */
   const handlePaymentSubmit = async () => {
     if (!selectedStall || !paymentData.amount) {
       toast({
@@ -116,51 +116,127 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
     }
 
     setLoading(true);
+    const paymentTimestamp = new Date();
+    const paymentDateString = paymentTimestamp.toISOString().split("T")[0];
 
- // ✅ Combine type and stall number for clearer naming
-const stallLabel =
-  selectedStall.type && selectedStallDisplayName
-    ? `${selectedStall.type} - ${selectedStallDisplayName}`
-    : selectedStallDisplayName || "Unnamed Stall";
+    const stallLabel =
+      selectedStall.type && selectedStallDisplayName
+        ? `${selectedStall.type} - ${selectedStallDisplayName}`
+        : selectedStallDisplayName || "Unnamed Stall";
 
-const newInvoice = {
-  vendor_id: selectedStall.dbId, // links to vendor
-  vendor_name: selectedStall.vendor || "No vendor",
-  stall_name: stallLabel, // ✅ shows "Clothing - Stall 1"
-  stall_type: selectedStall.type,
-  amount: Number(paymentData.amount),
-  payment_type: paymentData.paymentType || "Monthly Rent",
-  notes: paymentData.notes || null,
-  due_date: new Date().toISOString().split("T")[0],
-  status: "paid",
-  paid_at: new Date().toISOString(),
-  collector_name: collectorName,
-};
+    const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
 
+    // ✅ Insert payment into invoices
+    const { error: invoiceError } = await supabase.from("invoices").insert([
+      {
+        vendor_id: selectedStall.dbId,
+        vendor_name: selectedStall.vendor || "No vendor",
+        stall_name: stallLabel,
+        stall_type: selectedStall.type,
+        amount: Number(paymentData.amount),
+        payment_type: paymentType,
+        notes: paymentData.notes || null,
+        due_date: paymentDateString,
+        status: "paid",
+        paid_at: paymentTimestamp.toISOString(),
+        collector_name: collectorName,
+      },
+    ]);
 
-    const { error } = await supabase.from("invoices").insert([newInvoice]);
-    setLoading(false);
-
-    if (error) {
-      console.error(error);
-      toast({
-        title: "Error saving payment",
-        description: error.message,
-        variant: "destructive",
-      });
+    if (invoiceError) {
+      setLoading(false);
+      console.error(invoiceError);
+      if (!navigator.onLine) {
+        toast({
+          title: "No Internet Connection",
+          description: "Payment could not be saved. Please check your connection.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error saving payment",
+          description: invoiceError.message,
+          variant: "destructive",
+        });
+      }
       return;
     }
 
-    // ✅ Success
+    /* ✅ Auto-update stall’s next_due & status */
+    const today = new Date();
+    let nextDueDate = new Date(selectedStall.nextDue || today);
+
+    if (selectedStall.rentalType === "daily") {
+      nextDueDate.setDate(today.getDate() + 1);
+    } else {
+      nextDueDate.setMonth(today.getMonth() + 1);
+    }
+
+    const nextDueDateString = nextDueDate.toISOString().split("T")[0];
+    const updatedStatus = computeStatusFromDueDate(
+  nextDueDateString,
+  "current",
+  undefined,
+  selectedStall.rentalType
+);
+
+
+    console.log("🔍 Updating vendor:", {
+      id: selectedStall.dbId,
+      last_payment: paymentDateString,
+      next_due: nextDueDateString,
+      status: updatedStatus,
+    });
+
+    const { data: updateData, error: vendorUpdateError } = await supabase
+      .from("vendors")
+      .update({
+        last_payment: paymentDateString,
+        next_due: nextDueDateString,
+        status: updatedStatus,
+      })
+      .eq("id", selectedStall.dbId)
+      .select()
+      .single();
+
+    setLoading(false);
+
+    if (vendorUpdateError) {
+      console.error("❌ Vendor update failed:", vendorUpdateError);
+      if (!navigator.onLine) {
+        toast({
+          title: "No Internet Connection",
+          description: "Stall due date could not be updated. Please check your connection.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Update failed",
+          description: vendorUpdateError.message,
+          variant: "destructive",
+        });
+      }
+    } else {
+      console.log("✅ Vendor updated:", updateData);
+      toast({
+        title: "Next due updated",
+        description: `Stall ${updateData.type} new due: ${updateData.next_due}`,
+      });
+    }
+
+    // ✅ Success feedback
     setReceiptNo(generateReceiptNo());
     setShowReceipt(true);
     toast({
       title: "Payment recorded",
       description: `Payment of PHP ${paymentData.amount} saved for ${selectedStall.vendor || "No vendor"}.`,
     });
-    onPaymentSuccess(); // ✅ Trigger data refresh
+    await onPaymentSuccess();
   };
 
+  /* ----------------------------------------------------------
+     🖨️ RECEIPT PRINTING
+  ---------------------------------------------------------- */
   const handlePrintReceipt = async () => {
     const receipt = document.getElementById("receipt-content");
     if (!receipt) return;
@@ -205,6 +281,9 @@ const newInvoice = {
     }
   };
 
+  /* ----------------------------------------------------------
+     🧾 RECEIPT VIEW
+  ---------------------------------------------------------- */
   if (showReceipt && selectedStall) {
     return (
       <div className="space-y-6">
@@ -232,18 +311,14 @@ const newInvoice = {
                   <span className="font-medium">{selectedStall.vendor || "No vendor"}</span>
                 </div>
                 <div className="flex justify-between">
-              <span>Stall:</span>
-            <span className="font-medium">
-             {selectedStall.type} - {selectedStallDisplayName}
-             </span>
-                 </div>
+                  <span>Stall:</span>
+                  <span className="font-medium">
+                    {selectedStall.type} - {selectedStallDisplayName}
+                  </span>
+                </div>
                 <div className="flex justify-between">
                   <span>Amount:</span>
                   <span className="font-medium">PHP {paymentData.amount}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Payment Type:</span>
-                  <span className="font-medium">{paymentData.paymentType}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Date:</span>
@@ -264,6 +339,9 @@ const newInvoice = {
     );
   }
 
+  /* ----------------------------------------------------------
+     🧾 PAYMENT FORM
+  ---------------------------------------------------------- */
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -333,7 +411,8 @@ const newInvoice = {
                 <strong>Vendor:</strong> {selectedStall.vendor || "No vendor"}
               </div>
               <div>
-                <strong>Monthly Rent:</strong> PHP {selectedStall.monthlyRent}
+                <strong>Rent Amount:</strong> PHP {selectedStall.rentAmount.toLocaleString()} /{" "}
+                {selectedStall.rentalType}
               </div>
               <div>
                 <strong>Last Payment:</strong> {selectedStall.lastPayment || "--"}
@@ -348,7 +427,7 @@ const newInvoice = {
           <CardTitle>Payment Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4">
             <div>
               <Label htmlFor="amount">Amount (PHP)</Label>
               <Input
@@ -359,24 +438,6 @@ const newInvoice = {
                 onChange={(event) => setPaymentData({ ...paymentData, amount: event.target.value })}
                 placeholder="0.00"
               />
-            </div>
-            <div>
-              <Label htmlFor="payment-type">Payment Type</Label>
-              <Select
-                value={paymentData.paymentType || undefined}
-                onValueChange={(value) => setPaymentData({ ...paymentData, paymentType: value })}
-              >
-                <SelectTrigger id="payment-type">
-                  <SelectValue placeholder="Select payment type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="monthly-rent">Monthly Rent</SelectItem>
-                  <SelectItem value="daily-fee">Daily Fee</SelectItem>
-                  <SelectItem value="penalty">Penalty</SelectItem>
-                  <SelectItem value="deposit">Security Deposit</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
           </div>
 

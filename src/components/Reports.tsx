@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,7 +12,7 @@ import {
   Users,
   BarChart3,
   PieChart
-} from "lucide-react";
+} from "lucide-react"; // ✅ Added Building2 for the new report icon
 import {
   Bar,
   BarChart,
@@ -24,6 +24,8 @@ import {
 } from "recharts";
 import { type StallRecord } from "@/data/stalls";
 import { type Invoice } from "./UnpaidDues";
+import autoTable from "jspdf-autotable";
+import jsPDF from "jspdf";
 
 interface ReportsProps {
   stalls: StallRecord[];
@@ -31,6 +33,9 @@ interface ReportsProps {
 }
 
 export const Reports = ({ stalls, invoices }: ReportsProps) => {
+  const reportRef = useRef<HTMLDivElement>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
   const reportData = useMemo(() => {
     const now = new Date();
     const currentMonth = now.getMonth();
@@ -93,6 +98,24 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
       percentage: totalBreakdownAmount > 0 ? (amount / totalBreakdownAmount) * 100 : 0,
     })).sort((a, b) => b.amount - a.amount);
 
+    // --- Collections by Stall Section (for the current month) ---
+    const stallTypeBreakdown: Record<string, { amount: number; count: number }> = {};
+    currentMonthPaidInvoices.forEach(inv => {
+      const type = inv.stall_type || 'Uncategorized';
+      if (!stallTypeBreakdown[type]) {
+        stallTypeBreakdown[type] = { amount: 0, count: 0 };
+      }
+      stallTypeBreakdown[type].amount += inv.amount;
+      stallTypeBreakdown[type].count += 1;
+    });
+
+    const collectionsByStallType = Object.entries(stallTypeBreakdown)
+      .map(([type, data]) => ({
+        type: type,
+        amount: data.amount,
+        count: data.count,
+      })).sort((a, b) => b.amount - a.amount);
+
     // --- Top Performing Collectors (for the current month) ---
     const collectorPerformance: Record<string, { collections: number; amount: number }> = {};
     currentMonthPaidInvoices.forEach(inv => {
@@ -138,39 +161,214 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
       collectionRate,
       occupancyRate,
       averagePayment,
-      allMonthlyData, // Pass all data for export
+      allMonthlyData,
       monthlyData,
       paymentTypes,
       paymentStatusOverview,
+      collectionsByStallType,
       topPerformers,
+      occupiedCount,
     };
   }, [stalls, invoices]);
 
-  const { totalCollections, collectionRate, occupancyRate, averagePayment, allMonthlyData, monthlyData, paymentTypes, paymentStatusOverview, topPerformers } = reportData;
+  const { totalCollections, collectionRate, occupancyRate, averagePayment, monthlyData, allMonthlyData, paymentTypes, paymentStatusOverview, collectionsByStallType, topPerformers, occupiedCount } = reportData;
 
-  const handleExport = () => {
-    const headers = ["Month", "Total Collections (PHP)", "Number of Payments"];
-    const rows = allMonthlyData.map(row => [
-      `"${row.month}"`,
-      row.collections,
-      row.stalls
-    ].join(','));
+  const handleExport = async () => {
+    setIsDownloading(true);
+    try {
+      const pdf = new jsPDF("p", "mm", "a4");
+      const today = new Date();
+      const dateStr = today.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+      const pageHeight = pdf.internal.pageSize.height;
+      const pageWidth = pdf.internal.pageSize.width;
+      const margin = 20; // Roughly 0.78 inches
 
-    const csvContent = [headers.join(','), ...rows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    const date = new Date().toISOString().split('T')[0];
-    link.setAttribute("download", `monthly-collections-report-${date}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+      // --- Helper to convert logo to data URL ---
+      const getLogoDataUrl = async () => {
+        try {
+          const response = await fetch("/logo.png");
+          const blob = await response.blob();
+          return new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        } catch (error) {
+          console.error("Failed to load logo for PDF:", error);
+          return null;
+        }
+      };
+
+      const logoDataUrl = await getLogoDataUrl();
+
+      // --- PDF Header & Footer ---
+      const addHeaderAndFooter = () => {
+        const pageCount = (pdf.internal as any).getNumberOfPages();
+        for (let i = 1; i <= pageCount; i++) {
+          pdf.setPage(i);
+          // Header
+          if (logoDataUrl) {
+            pdf.addImage(logoDataUrl, "PNG", margin, 10, 15, 15);
+          }
+          pdf.setFontSize(9).setFont("helvetica", "italic");
+          pdf.text("Republic of the Philippines", pageWidth / 2, 12, { align: "center" });
+          pdf.setFontSize(10).setFont("helvetica", "normal");
+          pdf.text("Municipality of Sibulan, Negros Oriental", pageWidth / 2, 17, { align: "center" });
+          pdf.setFontSize(14).setFont("helvetica", "bold");
+          pdf.text("Sibulan Market – Financial Report", pageWidth / 2, 24, { align: "center" });
+          pdf.setFontSize(9).setFont("helvetica", "normal");
+          pdf.text(`Report Generated: ${dateStr}`, pageWidth - margin, 22, { align: "right" });
+          pdf.setDrawColor(150);
+          pdf.line(margin, 28, pageWidth - margin, 28);
+
+          // Footer
+          pdf.setFontSize(8);
+          pdf.line(margin, pageHeight - 15, pageWidth - margin, pageHeight - 15);
+          pdf.text("Generated by Sibulan Market Stall Rental System", margin, pageHeight - 10);
+          pdf.text(`Page ${i} of ${pageCount}`, pageWidth - margin, pageHeight - 10, { align: "right" });
+        }
+      };
+
+      // --- Section Title Helper ---
+      const addSectionTitle = (title: string, y: number) => {
+        pdf.setFontSize(13).setFont("helvetica", "bold");
+        pdf.text(title, pageWidth / 2, y, { align: "center" });
+        pdf.setDrawColor(0, 51, 102); // Navy blue #003366
+        pdf.line(pageWidth / 2 - 20, y + 1, pageWidth / 2 + 20, y + 1);
+        return y + 8;
+      };
+
+      // --- Content Generation ---
+      let contentY = 40;
+      const tableStyles = {
+        theme: "grid" as const,
+        styles: { font: "helvetica", fontSize: 9, cellPadding: 2, lineColor: "#CCCCCC" },
+        headStyles: { fillColor: "#F5F5F5", textColor: "#333333", fontStyle: "bold" as const },
+        alternateRowStyles: { fillColor: "#FAFAFA" },
+      };
+
+      // Key Metrics Table
+      contentY = addSectionTitle("Key Metrics (Current Month)", contentY);
+      autoTable(pdf, {
+        startY: contentY,
+        ...tableStyles,
+        body: [
+          ["Total Collections", { content: `₱${totalCollections.toLocaleString()}`, styles: { halign: "right" as const, fontStyle: "bold" } }],
+          ["Collection Rate", { content: `${collectionRate.toFixed(1)}%`, styles: { halign: "right" as const, fontStyle: "bold" } }],
+          ["Occupancy Rate", { content: `${occupancyRate.toFixed(1)}%`, styles: { halign: "right" as const, fontStyle: "bold" } }],
+          ["Average Payment", { content: `₱${averagePayment.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, styles: { halign: "right" as const, fontStyle: "bold" } }],
+          ["Total Stalls", { content: `${stalls.length}`, styles: { halign: "right" as const, fontStyle: "bold" } }],
+          ["Active Vendors", { content: `${occupiedCount}`, styles: { halign: "right" as const, fontStyle: "bold" } }],
+        ],
+      });
+      contentY = (pdf as any).lastAutoTable.finalY + 10;
+
+      // Monthly Trends Table
+      const monthlyTrendsBody = allMonthlyData.map((d, i) => {
+        const prevMonth = allMonthlyData[i + 1];
+        let change = "—";
+        if (prevMonth && prevMonth.collections > 0) {
+          const pctChange = ((d.collections - prevMonth.collections) / prevMonth.collections) * 100;
+          change = `${pctChange.toFixed(1)}%`;
+        }
+        return [d.month, { content: `₱${d.collections.toLocaleString()}`, styles: { halign: "right" as const } }, { content: change, styles: { halign: "right" as const } }];
+      });
+      contentY = addSectionTitle("Monthly Collection Trends", contentY);
+      autoTable(pdf, {
+        startY: contentY,
+        ...tableStyles,
+        head: [["Month", "Collections (₱)", "% Change from Previous Month"]],
+        body: monthlyTrendsBody,
+      });
+      contentY = (pdf as any).lastAutoTable.finalY + 10;
+
+      // Top Collectors Table
+      contentY = addSectionTitle("Top Performing Collectors (Current Month)", contentY);
+      autoTable(pdf, {
+        startY: contentY,
+        ...tableStyles,
+        head: [["Collector Name", "# of Payments", "Total Collected (₱)", "Average Payment (₱)"]],
+        body: topPerformers.map((p) => [
+          p.collector,
+          { content: p.collections, styles: { halign: "right" as const } },
+          { content: `₱${p.amount.toLocaleString()}`, styles: { halign: "right" as const } },
+          { content: `₱${(p.amount / p.collections).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, styles: { halign: "right" as const } },
+        ]),
+      });
+      contentY = (pdf as any).lastAutoTable.finalY + 10;
+
+      // Payment Breakdown by Stall Type
+      const stallTypeBody = collectionsByStallType.map((s) => [
+        s.type,
+        { content: s.count.toString(), styles: { halign: "right" as const } },
+        { content: `₱${s.amount.toLocaleString()}`, styles: { halign: "right" as const } },
+      ]);
+      contentY = addSectionTitle("Payment Breakdown by Stall Type", contentY);
+      autoTable(pdf, {
+        startY: contentY,
+        ...tableStyles,
+        head: [["Stall Type", "No. of Stalls", "Total Collected (₱)"]],
+        body: stallTypeBody,
+      });
+      contentY = (pdf as any).lastAutoTable.finalY + 10;
+
+      // Unpaid Summary
+      const unpaidStalls = stalls.filter(s => s.status === 'overdue' || s.status === 'due');
+      const totalUnpaid = unpaidStalls.reduce((sum, s) => sum + s.rentAmount, 0);
+      contentY = addSectionTitle("Pending / Unpaid Summary", contentY);
+      autoTable(pdf, {
+        startY: contentY,
+        ...tableStyles,
+        body: [
+          ["Number of Unpaid Stalls", { content: unpaidStalls.length.toString(), styles: { halign: "right" as const } }],
+          ["Total Outstanding Balance", { content: `₱${totalUnpaid.toLocaleString()}`, styles: { halign: "right" as const } }],
+          ["Remarks", unpaidStalls.length === 0 ? "All collections are up to date." : "Action required for listed stalls."],
+        ],
+      });
+      contentY = (pdf as any).lastAutoTable.finalY + 10;
+
+      if (unpaidStalls.length > 0) {
+        autoTable(pdf, {
+          startY: contentY,
+          ...tableStyles,
+          head: [["Stall Name", "Vendor", "Due Date", "Amount (₱)"]],
+          body: unpaidStalls.map(s => [
+            s.name,
+            s.vendor,
+            s.nextDue,
+            { content: `₱${s.rentAmount.toLocaleString()}`, styles: { halign: "right" as const } },
+          ]),
+        });
+        contentY = (pdf as any).lastAutoTable.finalY + 10;
+      }
+
+      // --- Final Summary Note ---
+      const summaryNote = "This report is automatically generated by the Sibulan Market Stall Rental and Payment System for official record-keeping and financial monitoring purposes.";
+      const splitText = pdf.splitTextToSize(summaryNote, pageWidth - margin * 2);
+      if (contentY > pageHeight - 30) { // Check if there's enough space
+        pdf.addPage();
+        contentY = 40;
+      }
+      pdf.setFontSize(9).setFont("helvetica", "italic");
+      pdf.text(splitText, margin, contentY);
+
+      // --- Finalize and Save ---
+      addHeaderAndFooter();
+      const date = today.toISOString().split("T")[0];
+      pdf.save(`sibulan-market-report-${date}.pdf`);
+
+    } catch (error) {
+      console.error("Failed to generate PDF report:", error);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
     <div className="space-y-6">
+      {/* The ref is no longer needed for PDF export, so it's removed from the main wrapper */}
+      <div ref={reportRef}>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold">Reports & Analytics</h1>
@@ -186,9 +384,15 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
               <SelectItem value={new Date().toLocaleString('default', { month: 'long' })}>{new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}</SelectItem>
             </SelectContent>
           </Select>
-          <Button onClick={handleExport}>
-            <Download className="mr-2 h-4 w-4" />
-            Export Report
+          <Button onClick={handleExport} disabled={isDownloading} variant="secondary">
+            {isDownloading ? (
+              "Preparing..."
+            ) : (
+              <>
+                <Download className="mr-2 h-4 w-4" />
+                Export PDF
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -202,7 +406,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-success">₱{totalCollections.toLocaleString()}</div>
-            <div className="flex items-center gap-1 text-xs text-success">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <TrendingUp className="h-3 w-3" />
               For the current month
             </div>
@@ -216,7 +420,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-primary">{collectionRate.toFixed(1)}%</div>
-            <div className="flex items-center gap-1 text-xs text-success">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <TrendingUp className="h-3 w-3" />
               Of invoices due this month
             </div>
@@ -230,7 +434,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-accent">{occupancyRate.toFixed(1)}%</div>
-            <div className="flex items-center gap-1 text-xs text-success">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <TrendingUp className="h-3 w-3" />
               Of all stalls are occupied
             </div>
@@ -326,6 +530,48 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
         </Card>
       </div>
 
+      {/* Collections by Stall Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Building2 className="h-5 w-5" />
+            Collections by Stall Section
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {collectionsByStallType.length > 0 ? (
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={collectionsByStallType} layout="vertical" margin={{ left: 100 }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                  <XAxis 
+                    type="number" 
+                    tickFormatter={(value: number) => `₱${value / 1000}k`}
+                    tickLine={false}
+                    axisLine={false}
+                    fontSize={12}
+                  />
+                  <YAxis 
+                    dataKey="type" 
+                    type="category" 
+                    tickLine={false} 
+                    axisLine={false} 
+                    fontSize={12}
+                    width={150}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'hsl(var(--muted))' }}
+                    contentStyle={{ background: 'hsl(var(--background))', border: '1px solid hsl(var(--border))', borderRadius: 'var(--radius)' }}
+                    formatter={(value: number) => [`₱${value.toLocaleString()}`, 'Collections']}
+                  />
+                  <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} barSize={20} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <p className="text-sm text-muted-foreground text-center py-4">No collection data available for stall sections this month.</p>}
+        </CardContent>
+      </Card>
+
       {/* Top Performers and Overdue Analysis */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top Collectors */}
@@ -389,6 +635,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
             </div>
           </CardContent>
         </Card>
+      </div>
       </div>
     </div>
   );

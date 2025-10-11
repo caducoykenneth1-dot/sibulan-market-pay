@@ -2,10 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
-
+/* ================================
+   🌈 Design System Variables
+   Define all colors, gradients, fonts, etc.
+   All colors MUST be HSL-based.
+================================= */
 @layer base {
   :root {
     --background: 240 10% 98%;
@@ -45,19 +46,12 @@ All colors MUST be HSL.
     --radius: 0.5rem;
 
     --sidebar-background: 0 0% 98%;
-
     --sidebar-foreground: 240 5.3% 26.1%;
-
     --sidebar-primary: 240 5.9% 10%;
-
     --sidebar-primary-foreground: 0 0% 98%;
-
     --sidebar-accent: 240 4.8% 95.9%;
-
     --sidebar-accent-foreground: 240 5.9% 10%;
-
     --sidebar-border: 220 13% 91%;
-
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
@@ -89,6 +83,7 @@ All colors MUST be HSL.
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 212.7 26.8% 83.9%;
+
     --sidebar-background: 240 5.9% 10%;
     --sidebar-foreground: 240 4.8% 95.9%;
     --sidebar-primary: 224.3 76.3% 48%;
@@ -100,6 +95,9 @@ All colors MUST be HSL.
   }
 }
 
+/* ================================
+   🧩 Base Styles
+================================= */
 @layer base {
   * {
     @apply border-border;
@@ -110,8 +108,35 @@ All colors MUST be HSL.
   }
 }
 
-/* App-like helpers */
+/* ================================
+   📱 App-Like Utilities (Single-Row Nav)
+================================= */
 @layer utilities {
-  .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 5rem); }
-  .safe-top { padding-top: env(safe-area-inset-top); }
+  /* ✅ Safe area padding for iOS/Android devices */
+  .safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 5rem);
+  }
+
+  .safe-top {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 1rem);
+  }
+
+  /* ✅ Fixed single-row bottom navigation bar */
+  .bottom-nav {
+    @apply fixed bottom-0 left-0 w-full bg-white border-t border-gray-200 shadow-lg z-50 flex justify-around items-center h-16;
+  }
+
+  /* ✅ Main content spacing (avoid overlap) */
+  .with-bottom-nav {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 4.5rem);
+  }
+
+  /* ✅ Navigation button styles */
+  .nav-item {
+    @apply flex flex-col items-center justify-center text-xs text-gray-500 hover:text-primary transition-colors;
+  }
+
+  .nav-item-active {
+    @apply text-primary font-semibold;
+  }
 }
