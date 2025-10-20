@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient"; // ✅ Added useMemo
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button"; // ✅ Added Chevron icons
-import { Loader2, ArchiveRestore, Building2, User, Phone, Info, Layers, Droplets, ChevronLeft, ChevronRight } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Loader2, ArchiveRestore, Building2, User, Phone, Info, Layers, Droplets, ChevronLeft, ChevronRight, Search, Filter, LayoutGrid
+} from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,7 +19,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { type StallRecord, updateStall, STALL_TYPES } from "@/data/stalls";
-
+ 
 // ✅ Pagination constants and state
 const STALLS_PER_PAGE = 5;
 
@@ -37,6 +41,9 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalStalls, setTotalStalls] = useState(0);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sectionFilter, setSectionFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
 
   // ✅ Create a lookup map for original stall names from the full list
@@ -44,19 +51,49 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   const totalPages = Math.ceil(totalStalls / STALLS_PER_PAGE);
 
+  // ✅ Create a sorted list of unique stall types for the filter dropdown
+  const stallTypeOptions = useMemo(() => {
+    const types = STALL_TYPES.filter(t => sectionFilter === 'all' || t.section === sectionFilter).map(t => t.name);
+    return [...new Set(types)].sort();
+  }, [sectionFilter]);
+
+
   const fetchArchivedStalls = async (page: number) => {
-    setLoading(true);
+    // Don't set loading to true if it's just a search/filter change on the first page
+    if (page === currentPage) {
+      setLoading(true);
+    }
+
     const from = (page - 1) * STALLS_PER_PAGE;
     const to = from + STALLS_PER_PAGE - 1;
 
-    const { data, error, count } = await supabase
+    let query = supabase
       .from("vendors")
       .select("id, vendor, contact, type, monthly_rent, last_payment, next_due, status, rental_type, archive_reason", {
         count: "exact", // ✅ Fetch total count efficiently
       })
       .eq("status", "archived")
-      .order("id", { ascending: true })
-      .range(from, to); // ✅ Fetch only the current page's data
+      .order("id", { ascending: true });
+
+    // Apply search filter
+    if (searchTerm) {
+      query = query.ilike("vendor", `%${searchTerm}%`);
+    }
+
+    // Apply section filter
+    if (sectionFilter !== "all") {
+      const typesInSection = STALL_TYPES.filter(t => t.section === sectionFilter).map(t => t.name);
+      if (typesInSection.length > 0) {
+        query = query.in("type", typesInSection);
+      }
+    }
+
+    // Apply type filter
+    if (typeFilter !== "all") {
+      query = query.eq("type", typeFilter);
+    }
+
+    const { data, error, count } = await query.range(from, to);
 
     if (error) {
       if (!navigator.onLine) {
@@ -99,7 +136,19 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   useEffect(() => {
     fetchArchivedStalls(currentPage);
-  }, [currentPage]);
+  }, [currentPage, nameMap]); // nameMap dependency ensures fetch runs after names are ready
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    if (currentPage !== 1) setCurrentPage(1);
+    else fetchArchivedStalls(1); // fetch on page 1 if already there
+  }, [searchTerm, sectionFilter, typeFilter]);
+
+  // Reset type filter when section changes
+  useEffect(() => {
+    setTypeFilter("all");
+  }, [sectionFilter]);
+
 
   const handleRestore = async () => {
     if (!stallToRestore) return;
@@ -158,6 +207,49 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
         <h1 className="text-3xl font-bold">Archived Stalls</h1>
         <p className="text-muted-foreground">View and restore previously archived stalls.</p>
       </div>
+
+      {/* Search and Filter */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Search & Filters</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search by vendor name..."
+              className="pl-9"
+            />
+          </div>
+          <Select value={sectionFilter} onValueChange={setSectionFilter}>
+            <SelectTrigger>
+              <Filter className="mr-2 h-4 w-4" />
+              <SelectValue placeholder="Filter by section" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Sections</SelectItem>
+              <SelectItem value="Dry Section">Dry Section</SelectItem>
+              <SelectItem value="Wet Section">Wet Section</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={typeFilter} onValueChange={setTypeFilter} disabled={stallTypeOptions.length === 0}>
+            <SelectTrigger>
+              <LayoutGrid className="mr-2 h-4 w-4" />
+              <SelectValue placeholder="Filter by type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              {stallTypeOptions.map(type => (
+                <SelectItem key={type} value={type}>
+                  {type}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
 
       {loading ? (
         <div className="flex justify-center items-center h-40"><Loader2 className="h-6 w-6 animate-spin" /></div>

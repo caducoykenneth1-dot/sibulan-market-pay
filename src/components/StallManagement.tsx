@@ -591,15 +591,15 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
               {Object.entries(groupedStalls).map(([section, sectionStalls]) => (
                 <div key={section}>
                   <h3 className="text-sm font-semibold text-muted-foreground mb-2">{section}</h3>
-                  <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {sectionStalls.map((stall) => (
                       <Button
                         key={stall.id}
                         variant={selectedStall?.id === stall.id ? "default" : "outline"}
                         onClick={() => setSelectedStall(prev => prev?.id === stall.id ? null : stall)}
-                        className="h-12 w-auto min-w-[5rem] px-2"
+                        className="h-12 w-12 p-0"
                       >
-                        <span className="font-bold text-sm">{stall.name}</span>
+                        <span className="font-bold text-xs leading-tight text-center">{stall.name}</span>
                       </Button>
                     ))}
                   </div>
