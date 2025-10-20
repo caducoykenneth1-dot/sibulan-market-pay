@@ -534,6 +534,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
       </div>
 
       {/* Collections by Stall Section */}
+      {/*
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -574,6 +575,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
           ) : <p className="text-sm text-muted-foreground text-center py-4">No collection data available for stall sections this month.</p>}
         </CardContent>
       </Card>
+      */}
 
       {/* Top Performers and Overdue Analysis */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
