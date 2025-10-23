@@ -477,8 +477,6 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                           </SelectItem>
                         ))}
                       </SelectGroup>
-                    ))}
-                </SelectContent>
               </Select>
             </div>
             <div>
@@ -499,6 +497,21 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                         const displayName = displayNameById.get(stall.id) ?? stall.name;
                         return (
                           <SelectItem key={stall.id} value={stall.id}>
+                            {displayName} - {stall.vendor || "No vendor"}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  )}
+
+                  {nonCollectableStalls.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Already Settled</SelectLabel>
+                      {nonCollectableStalls.map((stall) => {
+                        const displayName = displayNameById.get(stall.id) ?? stall.name;
+                        const nextDueLabel = formatDateForDisplay(stall.nextDue);
+                        return (
+                          <SelectItem key={stall.id} value={stall.id} disabled>
                             {displayName} - Next due {nextDueLabel}
                           </SelectItem>
                         );
@@ -506,6 +519,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                     </SelectGroup>
                   )}
                 </SelectContent>
+
               </Select>
               {collectableStalls.length === 0 && (
                 <p className="mt-2 text-sm text-muted-foreground">
