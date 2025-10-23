@@ -9,7 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { computeStatusFromDueDate, type StallRecord, type StallTypeInfo } from "@/data/stalls";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
-import { supabase } from "@/lib/supabaseClient"; // ✅ Supabase client
+import { supabase } from "@/lib/supabaseClient"; // Supabase client
 
 type PaymentData = {
   amount: string;
@@ -19,6 +19,7 @@ type PaymentData = {
 interface PaymentCollectionProps {
   stalls: StallRecord[];
   collectorName: string;
+  collectorId: string;
   onPaymentSuccess: () => void;
 }
 
@@ -62,7 +63,7 @@ const formatDateForDisplay = (value: string | null | undefined) => {
   });
 };
 
-export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: PaymentCollectionProps) => {
+export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymentSuccess }: PaymentCollectionProps) => {
   const { toast } = useToast();
   const [selectedType, setSelectedType] = useState<string>("");
   const [selectedStallId, setSelectedStallId] = useState<string>("");
@@ -166,9 +167,8 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
   }, [selectedStall]);
 
   /* ----------------------------------------------------------
-     ✅ MAIN PAYMENT SUBMIT HANDLER
-  ---------------------------------------------------------- */
-  const handlePaymentSubmit = async () => {
+     ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ MAIN PAYMENT SUBMIT HANDLER
+  ---------------------------------------------------------- */  const handlePaymentSubmit = async () => {
     if (!selectedStall || !paymentData.amount) {
       toast({
         title: "Missing information",
@@ -178,231 +178,209 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
       return;
     }
 
+    if (!collectorId) {
+      toast({
+        title: "Missing collector",
+        description: "Please sign in again before collecting payments.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const stallDbId = selectedStall.dbId;
+    let lockAcquired = false;
+
     setLoading(true);
-    const { data: latestStall, error: latestFetchError } = await supabase
-      .from("vendors")
-      .select("id, last_payment, next_due, status, rental_type")
-      .eq("id", selectedStall.dbId)
-      .maybeSingle();
-
-    if (latestFetchError) {
-      setLoading(false);
-      console.error("Error verifying stall status:", latestFetchError);
-      toast({
-        title: "Could not verify stall status",
-        description: latestFetchError.message,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const statusFromDb = (latestStall?.status || selectedStall.status || "").toLowerCase();
-    const rentalTypeFromDb = (latestStall?.rental_type || selectedStall.rentalType || "monthly") as "daily" | "monthly";
-    const todayStart = getStartOfToday();
-    let nextEligibleDate = parseISODate(latestStall?.next_due);
-
-    if (!nextEligibleDate && latestStall?.last_payment) {
-      const lastPaymentDate = parseISODate(latestStall.last_payment);
-      if (lastPaymentDate) {
-        nextEligibleDate = new Date(lastPaymentDate);
-        if (rentalTypeFromDb === "daily") {
-          nextEligibleDate.setDate(nextEligibleDate.getDate() + 1);
-        } else {
-          nextEligibleDate.setMonth(nextEligibleDate.getMonth() + 1);
-        }
-        nextEligibleDate.setHours(0, 0, 0, 0);
-      }
-    }
-
-    const canCollectNow = (() => {
-      if (statusFromDb === "vacant" || statusFromDb === "archived") return false;
-      if (nextEligibleDate) {
-        return nextEligibleDate <= todayStart;
-      }
-      return statusFromDb === "due" || statusFromDb === "overdue" || statusFromDb === "";
-    })();
-
-    if (!canCollectNow) {
-      setLoading(false);
-      toast({
-        title: "Not due yet",
-        description: nextEligibleDate
-          ? `This stall is settled until ${nextEligibleDate.toLocaleDateString()}. Please collect after that date.`
-          : "This stall is not currently due for collection.",
-        variant: "destructive",
-      });
-      setSelectedStallId("");
-      await onPaymentSuccess();
-      return;
-    }
-
-    const paymentTimestamp = new Date();
-    const paymentDateString = paymentTimestamp.toISOString().split("T")[0];
-
-    const stallLabel =
-      selectedStall.type && selectedStallDisplayName
-        ? `${selectedStall.type} - ${selectedStallDisplayName}`
-        : selectedStallDisplayName || "Unnamed Stall";
-
-    const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
-
-    // ✅ Insert payment into invoices
-    const { error: invoiceError } = await supabase.from("invoices").insert([
-      {
-        vendor_id: selectedStall.dbId,
-        vendor_name: selectedStall.vendor || "No vendor",
-        stall_name: stallLabel,
-        stall_type: selectedStall.type,
-        amount: Number(paymentData.amount),
-        payment_type: paymentType,
-        notes: paymentData.notes || null,
-        due_date: paymentDateString,
-        status: "paid",
-        paid_at: paymentTimestamp.toISOString(),
-        collector_name: collectorName,
-      },
-    ]);
-
-    if (invoiceError) {
-      setLoading(false);
-      console.error(invoiceError);
-      if (!navigator.onLine) {
-        toast({
-          title: "No Internet Connection",
-          description: "Payment could not be saved. Please check your connection.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Error saving payment",
-          description: invoiceError.message,
-          variant: "destructive",
-        });
-      }
-      return;
-    }
-
-    /* ✅ Auto-update stall’s next_due & status */
-    const today = new Date();
-    let nextDueDate = new Date(selectedStall.nextDue || today);
-
-    if (selectedStall.rentalType === "daily") {
-      nextDueDate.setDate(today.getDate() + 1);
-    } else {
-      nextDueDate.setMonth(today.getMonth() + 1);
-    }
-
-    const nextDueDateString = nextDueDate.toISOString().split("T")[0];
-    const updatedStatus = computeStatusFromDueDate(
-  nextDueDateString,
-  "current",
-  undefined,
-  selectedStall.rentalType
-);
-
-
-    console.log("🔍 Updating vendor:", {
-      id: selectedStall.dbId,
-      last_payment: paymentDateString,
-      next_due: nextDueDateString,
-      status: updatedStatus,
-    });
-
-    const { data: updateData, error: vendorUpdateError } = await supabase
-      .from("vendors")
-      .update({
-        last_payment: paymentDateString,
-        next_due: nextDueDateString,
-        status: updatedStatus,
-      })
-      .eq("id", selectedStall.dbId)
-      .select()
-      .single();
-
-    setLoading(false);
-
-    if (vendorUpdateError) {
-      console.error("❌ Vendor update failed:", vendorUpdateError);
-      if (!navigator.onLine) {
-        toast({
-          title: "No Internet Connection",
-          description: "Stall due date could not be updated. Please check your connection.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Update failed",
-          description: vendorUpdateError.message,
-          variant: "destructive",
-        });
-      }
-    } else {
-      console.log("✅ Vendor updated:", updateData);
-      toast({
-        title: "Next due updated",
-        description: `Stall ${updateData.type} new due: ${updateData.next_due}`,
-      });
-    }
-
-    // ✅ Success feedback
-    setReceiptNo(generateReceiptNo());
-    setShowReceipt(true);
-    toast({
-      title: "Payment recorded",
-      description: `Payment of PHP ${paymentData.amount} saved for ${selectedStall.vendor || "No vendor"}.`,
-    });
-    await onPaymentSuccess();
-  };
-
-  /* ----------------------------------------------------------
-     �-�️ RECEIPT PRINTING
-  ---------------------------------------------------------- */
-  const handlePrintReceipt = async () => {
-    const receipt = document.getElementById("receipt-content");
-    if (!receipt) return;
 
     try {
-      const canvas = await html2canvas(receipt, {
-        scale: 2,
-        backgroundColor: "#ffffff",
-        useCORS: true,
-        windowWidth: receipt.scrollWidth,
+      const { data: lockData, error: lockError } = await supabase.rpc("acquire_stall_lock", {
+        p_stall_id: stallDbId,
+        p_collector: collectorId,
+        p_collector_name: collectorName,
       });
 
-      const imgData = canvas.toDataURL("image/png");
-      const pxPerMm = 3.779528;
-      const pdfWidth = 80;
-      const pdfHeight = canvas.height / pxPerMm;
+      if (lockError) {
+        console.error("Error acquiring stall lock:", lockError);
+        toast({
+          title: "Unable to lock stall",
+          description: lockError.message,
+          variant: "destructive",
+        });
+        return;
+      }
 
-      const pdf = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: [pdfWidth, pdfHeight],
-      });
+      if (!lockData) {
+        toast({
+          title: "Already processing",
+          description: "Another collector is already recording a payment for this stall.",
+          variant: "destructive",
+        });
+        setSelectedStallId("");
+        await onPaymentSuccess();
+        return;
+      }
 
-      const imgWidth = pdfWidth;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
+      lockAcquired = true;
 
-      pdf.autoPrint();
-      window.open(pdf.output("bloburl"), "_blank");
+      const { data: latestStall, error: latestFetchError } = await supabase
+        .from("vendors")
+        .select("id, last_payment, next_due, status, rental_type")
+        .eq("id", stallDbId)
+        .maybeSingle();
 
+      if (latestFetchError) {
+        console.error("Error verifying stall status:", latestFetchError);
+        toast({
+          title: "Could not verify stall status",
+          description: latestFetchError.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const statusFromDb = (latestStall?.status || selectedStall.status || "").toLowerCase();
+      const rentalTypeFromDb = (latestStall?.rental_type || selectedStall.rentalType || "monthly") as "daily" | "monthly";
+      const todayStart = getStartOfToday();
+      let nextEligibleDate = parseISODate(latestStall?.next_due);
+
+      if (!nextEligibleDate && latestStall?.last_payment) {
+        const lastPaymentDate = parseISODate(latestStall.last_payment);
+        if (lastPaymentDate) {
+          nextEligibleDate = new Date(lastPaymentDate);
+          if (rentalTypeFromDb === "daily") {
+            nextEligibleDate.setDate(nextEligibleDate.getDate() + 1);
+          } else {
+            nextEligibleDate.setMonth(nextEligibleDate.getMonth() + 1);
+          }
+          nextEligibleDate.setHours(0, 0, 0, 0);
+        }
+      }
+
+      const canCollectNow = (() => {
+        if (statusFromDb === "vacant" || statusFromDb === "archived") return false;
+        if (nextEligibleDate) {
+          return nextEligibleDate <= todayStart;
+        }
+        return statusFromDb === "due" || statusFromDb === "overdue" || statusFromDb === "";
+      })();
+
+      if (!canCollectNow) {
+        toast({
+          title: "Not due yet",
+          description: nextEligibleDate
+            ? `This stall is settled until ${nextEligibleDate.toLocaleDateString()}. Please collect after that date.`
+            : "This stall is not currently due for collection.",
+          variant: "destructive",
+        });
+        setSelectedStallId("");
+        await onPaymentSuccess();
+        return;
+      }
+
+      const paymentTimestamp = new Date();
+      const paymentDateString = paymentTimestamp.toISOString().split("T")[0];
+
+      const stallLabel =
+        selectedStall.type && selectedStallDisplayName
+          ? `${selectedStall.type} - ${selectedStallDisplayName}`
+          : selectedStallDisplayName || "Unnamed Stall";
+
+      const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
+
+      const { error: invoiceError } = await supabase.from("invoices").insert([
+        {
+          vendor_id: stallDbId,
+          vendor_name: selectedStall.vendor || "No vendor",
+          stall_name: stallLabel,
+          stall_type: selectedStall.type,
+          amount: Number(paymentData.amount),
+          payment_type: paymentType,
+          notes: paymentData.notes || null,
+          due_date: paymentDateString,
+          status: "paid",
+          paid_at: paymentTimestamp.toISOString(),
+          collector_name: collectorName,
+        },
+      ]);
+
+      if (invoiceError) {
+        console.error("Error saving payment:", invoiceError);
+        toast({
+          title: !navigator.onLine ? "No Internet Connection" : "Error saving payment",
+          description: !navigator.onLine
+            ? "Payment could not be saved. Please check your connection."
+            : invoiceError.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const today = new Date();
+      let nextDueDate = new Date(selectedStall.nextDue || today);
+
+      if (selectedStall.rentalType === "daily") {
+        nextDueDate.setDate(today.getDate() + 1);
+      } else {
+        nextDueDate.setMonth(today.getMonth() + 1);
+      }
+
+      const nextDueDateString = nextDueDate.toISOString().split("T")[0];
+      const updatedStatus = computeStatusFromDueDate(
+        nextDueDateString,
+        "current",
+        undefined,
+        selectedStall.rentalType
+      );
+
+      const { data: updateData, error: vendorUpdateError } = await supabase
+        .from("vendors")
+        .update({
+          last_payment: paymentDateString,
+          next_due: nextDueDateString,
+          status: updatedStatus,
+        })
+        .eq("id", stallDbId)
+        .select()
+        .single();
+
+      if (vendorUpdateError) {
+        console.error("Vendor update failed:", vendorUpdateError);
+        toast({
+          title: !navigator.onLine ? "No Internet Connection" : "Update failed",
+          description: !navigator.onLine
+            ? "Stall due date could not be updated. Please check your connection."
+            : vendorUpdateError.message,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Next due updated",
+          description: `Stall ${updateData.type} new due: ${updateData.next_due}`,
+        });
+      }
+
+      setReceiptNo(generateReceiptNo());
+      setShowReceipt(true);
       toast({
-        title: "Receipt ready",
-        description: "Print dialog opened automatically.",
+        title: "Payment recorded",
+        description: `Payment of PHP ${paymentData.amount} saved for ${selectedStall.vendor || "No vendor"}.`,
       });
-    } catch (error) {
-      console.error("PDF generation failed:", error);
-      toast({
-        title: "Error",
-        description: "Something went wrong while generating the receipt.",
-        variant: "destructive",
-      });
+      await onPaymentSuccess();
+    } finally {
+      if (lockAcquired) {
+        const { error: releaseError } = await supabase.rpc("release_stall_lock", {
+          p_stall_id: stallDbId,
+        });
+        if (releaseError) {
+          console.error("Error releasing stall lock:", releaseError);
+        }
+      }
+      setLoading(false);
     }
   };
 
   /* ----------------------------------------------------------
-     🧾 RECEIPT VIEW
+     ÃƒÂ°Ã…Â¸Ã‚Â§Ã‚Â¾ RECEIPT VIEW
   ---------------------------------------------------------- */
   if (showReceipt && selectedStall) {
     return (
@@ -453,14 +431,14 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
         </div>
 
         <Button className="w-full" onClick={handlePrintReceipt}>
-          �-�️ Print Receipt
+          ÃƒÂ¯Ã‚Â¿Ã‚Â½-ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¸Ã‚Â Print Receipt
         </Button>
       </div>
     );
   }
 
   /* ----------------------------------------------------------
-     🧾 PAYMENT FORM
+     ÃƒÂ°Ã…Â¸Ã‚Â§Ã‚Â¾ PAYMENT FORM
   ---------------------------------------------------------- */
   return (
     <div className="space-y-6">
@@ -521,21 +499,7 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
                         const displayName = displayNameById.get(stall.id) ?? stall.name;
                         return (
                           <SelectItem key={stall.id} value={stall.id}>
-                            {displayName} – {stall.vendor || "No vendor"}
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                  )}
-                  {nonCollectableStalls.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel>Already Settled</SelectLabel>
-                      {nonCollectableStalls.map((stall) => {
-                        const displayName = displayNameById.get(stall.id) ?? stall.name;
-                        const nextDueLabel = formatDateForDisplay(stall.nextDue);
-                        return (
-                          <SelectItem key={stall.id} value={stall.id} disabled>
-                            {displayName} – Next due {nextDueLabel}
+                            {displayName} - Next due {nextDueLabel}
                           </SelectItem>
                         );
                       })}

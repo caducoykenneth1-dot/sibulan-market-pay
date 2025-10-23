@@ -454,6 +454,7 @@ const Index = () => {
           <PaymentCollection
             stalls={stalls}
             collectorName={user?.user_metadata?.full_name ?? "System"}
+            collectorId={user?.id ?? ""}
             onPaymentSuccess={refreshData}
           />
         );
