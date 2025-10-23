@@ -73,6 +73,13 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   });
   const [showReceipt, setShowReceipt] = useState(false);
   const [receiptNo, setReceiptNo] = useState(generateReceiptNo());
+  const [receiptContext, setReceiptContext] = useState<{
+    stallLabel: string;
+    vendor: string;
+    amount: string;
+    paymentType: string;
+    paymentDate: string;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
@@ -166,9 +173,38 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.rentAmount) }));
   }, [selectedStall]);
 
+  const handlePrintReceipt = async () => {
+    const receiptElement = document.getElementById("receipt-content");
+    if (!receiptElement) {
+      toast({
+        title: "Error",
+        description: "Could not find receipt content to print.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const canvas = await html2canvas(receiptElement, { scale: 3 }); // Increased scale for better quality
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "px",
+        format: [canvas.width, canvas.height],
+      });
+      pdf.addImage(imgData, "PNG", 0, 0, canvas.width, canvas.height);
+      pdf.autoPrint();
+      window.open(pdf.output('bloburl'), '_blank');
+    } catch (error) {
+      console.error("Error generating receipt PDF:", error);
+      toast({ title: "Printing Error", description: "Could not generate receipt for printing.", variant: "destructive" });
+    }
+  };
+
   /* ----------------------------------------------------------
      ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ MAIN PAYMENT SUBMIT HANDLER
-  ---------------------------------------------------------- */  const handlePaymentSubmit = async () => {
+  ---------------------------------------------------------- */
+  const handlePaymentSubmit = async () => {
     if (!selectedStall || !paymentData.amount) {
       toast({
         title: "Missing information",
@@ -358,8 +394,14 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
           description: `Stall ${updateData.type} new due: ${updateData.next_due}`,
         });
       }
-
       setReceiptNo(generateReceiptNo());
+      setReceiptContext({
+        stallLabel,
+        vendor: selectedStall.vendor || "No vendor",
+        amount: paymentData.amount,
+        paymentType,
+        paymentDate: paymentTimestamp.toLocaleString(),
+      });
       setShowReceipt(true);
       toast({
         title: "Payment recorded",
@@ -382,11 +424,18 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   /* ----------------------------------------------------------
      ÃƒÂ°Ã…Â¸Ã‚Â§Ã‚Â¾ RECEIPT VIEW
   ---------------------------------------------------------- */
-  if (showReceipt && selectedStall) {
+  if (showReceipt && receiptContext) {
     return (
       <div className="space-y-6">
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setShowReceipt(false)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setShowReceipt(false);
+              setReceiptContext(null);
+              setSelectedStallId("");
+            }}
+          >
             &lt; Back
           </Button>
           <h1 className="text-2xl font-bold">Payment Receipt</h1>
@@ -400,27 +449,29 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="text-center">
-                <div className="text-2xl font-bold">PHP {paymentData.amount}</div>
+                <div className="text-2xl font-bold">PHP {receiptContext.amount}</div>
                 <div>Receipt No: {receiptNo}</div>
               </div>
               <div className="border-t pt-2 space-y-1 text-sm">
                 <div className="flex justify-between">
                   <span>Vendor:</span>
-                  <span className="font-medium">{selectedStall.vendor || "No vendor"}</span>
+                  <span className="font-medium">{receiptContext.vendor}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Stall:</span>
-                  <span className="font-medium">
-                    {selectedStall.type} - {selectedStallDisplayName}
-                  </span>
+                  <span className="font-medium">{receiptContext.stallLabel}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Amount:</span>
-                  <span className="font-medium">PHP {paymentData.amount}</span>
+                  <span className="font-medium">PHP {receiptContext.amount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Payment Type:</span>
+                  <span className="font-medium">{receiptContext.paymentType}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Date:</span>
-                  <span>{new Date().toLocaleString()}</span>
+                  <span>{receiptContext.paymentDate}</span>
                 </div>
               </div>
               <div className="text-center text-xs pt-2 border-t mt-2">
@@ -431,7 +482,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         </div>
 
         <Button className="w-full" onClick={handlePrintReceipt}>
-          ÃƒÂ¯Ã‚Â¿Ã‚Â½-ÃƒÂ¯Ã‚Â¿Ã‚Â½ÃƒÂ¯Ã‚Â¸Ã‚Â Print Receipt
+          Print Receipt
         </Button>
       </div>
     );
