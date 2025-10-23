@@ -2,12 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient"; // ✅ Added useMemo
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button"; // ✅ Added Chevron icons
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Loader2, ArchiveRestore, Building2, User, Phone, Info, Layers, Droplets, ChevronLeft, ChevronRight, Search, Filter, LayoutGrid
+  Loader2, ArchiveRestore, Building2, User, Phone, Info, Layers, Droplets, ChevronLeft, ChevronRight, Search, Filter, LayoutGrid, Calendar, DollarSign
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -45,6 +50,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
+  const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
 
   // ✅ Create a lookup map for original stall names from the full list
   const nameMap = useMemo(() => new Map(allStalls.map(s => [s.dbId, s.name])), [allStalls]);
@@ -149,10 +155,27 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
     setTypeFilter("all");
   }, [sectionFilter]);
 
+  const groupedArchived = useMemo(() => {
+    return archivedStalls.reduce<Record<string, ArchivedStallRecord[]>>((acc, stall) => {
+      const section = stall.section || "N/A";
+      if (!acc[section]) {
+        acc[section] = [];
+      }
+      acc[section].push(stall);
+      return acc;
+    }, {});
+  }, [archivedStalls]);
+
+  useEffect(() => {
+    if (selectedStall && !archivedStalls.find(s => s.dbId === selectedStall.dbId)) {
+      setSelectedStall(null);
+    }
+  }, [archivedStalls, selectedStall]);
+
 
   const handleRestore = async () => {
     if (!stallToRestore) return;
-  
+
     // 1. Cache the current state for potential rollback
     const originalStalls = [...archivedStalls];
     const originalTotal = totalStalls;
@@ -162,6 +185,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
     setArchivedStalls(prev => prev.filter(s => s.id !== stallToRestoreCopy.id));
     setTotalStalls(prev => prev - 1);
     setStallToRestore(null); // Close the dialog immediately
+    setSelectedStall(prev => (prev?.id === stallToRestoreCopy.id ? null : prev));
   
     // If the last item on a page is restored, navigate to the previous page
     if (originalStalls.length === 1 && currentPage > 1) {
@@ -256,36 +280,23 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       ) : archivedStalls.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-muted-foreground">No archived stalls found.</CardContent></Card>
       ) : (
-        <div className="grid gap-4">
-          {archivedStalls.map((stall) => (
-            <Card key={stall.id} className="bg-muted/40">
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between text-lg">
-                  {stall.name}
-                  <Button size="sm" onClick={() => setStallToRestore(stall)}>
-                    <ArchiveRestore className="mr-2 h-4 w-4" /> Restore
+        <div className="space-y-5">
+          {Object.entries(groupedArchived).map(([section, stalls]) => (
+            <div key={section} className="space-y-2">
+              <h3 className="text-sm font-semibold text-muted-foreground">{section}</h3>
+              <div className="flex flex-wrap gap-2">
+                {stalls.map((stall) => (
+                  <Button
+                    key={stall.id}
+                    variant={selectedStall?.id === stall.id ? "default" : "outline"}
+                    className="h-12 w-12 p-0"
+                    onClick={() => setSelectedStall(prev => (prev?.id === stall.id ? null : stall))}
+                  >
+                    <span className="font-bold text-xs leading-tight text-center">{stall.name}</span>
                   </Button>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="grid sm:grid-cols-2 gap-3 text-sm">
-                <div className="flex items-center gap-2"><User className="h-4 w-4 text-muted-foreground" /><span>Vendor: {stall.vendor || "N/A"}</span></div>
-                <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><span>Contact: {stall.contact || "N/A"}</span></div>
-                {/* ✅ Display the stall section */}
-                <div className="flex items-center gap-2">
-                  {stall.section === 'Wet Section' 
-                    ? <Droplets className="h-4 w-4 text-muted-foreground" /> 
-                    : <Layers className="h-4 w-4 text-muted-foreground" />
-                  }
-                  <span>Section: {stall.section}</span>
-                </div>
-                <div className="flex items-center gap-2"><Building2 className="h-4 w-4 text-muted-foreground" /><span>Type: {stall.type}</span></div>
-                {/* ✅ Display the archive reason */}
-                <div className="flex items-start gap-2 sm:col-span-2 pt-2 border-t mt-1">
-                  <Info className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-                  <span>Reason: <span className="italic">{stall.archive_reason}</span></span>
-                </div>
-              </CardContent>
-            </Card>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       )}
@@ -308,6 +319,56 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
           </div>
         </div>
       )}
+
+      <Dialog open={Boolean(selectedStall)} onOpenChange={(open) => (!open ? setSelectedStall(null) : null)}>
+        <DialogContent className="sm:max-w-lg md:max-w-xl border-none p-0 overflow-hidden px-4">
+          {selectedStall && (
+            <Card key={selectedStall.id} className="border-none shadow-none">
+              <CardHeader className="px-6 pt-6 pb-0">
+                <div className="flex items-start justify-between gap-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Building2 className="h-5 w-5 text-muted-foreground" />
+                    {selectedStall.name}
+                  </CardTitle>
+                  <Badge variant="outline" className="uppercase tracking-wide">
+                    Archived
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm px-6 pb-6">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center gap-2"><User className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.vendor || "No vendor assigned"}</span></div>
+                  <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.contact || "N/A"}</span></div>
+                  <div className="flex items-center gap-2">
+                    {selectedStall.section === "Wet Section" ? (
+                      <Droplets className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <Layers className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <span>Section: {selectedStall.section}</span>
+                  </div>
+                  <div className="flex items-center gap-2"><Building2 className="h-4 w-4 text-muted-foreground" /><span>Type: {selectedStall.type}</span></div>
+                  <div className="flex items-center gap-2"><DollarSign className="h-4 w-4 text-muted-foreground" /><span>Rent: ₱{selectedStall.rentAmount.toLocaleString()} / {selectedStall.rentalType}</span></div>
+                  <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Last Payment: {selectedStall.lastPayment || "N/A"}</span></div>
+                  <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Next Due: {selectedStall.nextDue || "N/A"}</span></div>
+                </div>
+                <div className="flex items-start gap-2 border-t pt-3">
+                  <Info className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+                  <span>Reason: <span className="italic">{selectedStall.archive_reason || "No reason provided."}</span></span>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Button size="sm" onClick={() => setStallToRestore(selectedStall)}>
+                    <ArchiveRestore className="mr-2 h-4 w-4" /> Restore
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setSelectedStall(null)}>
+                    Close
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={Boolean(stallToRestore)} onOpenChange={(open) => !open && setStallToRestore(null)}>
         <AlertDialogContent>

@@ -197,9 +197,11 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
             </div>
           </div>
         </div>
-        <Button variant="outline" onClick={() => onPageChange("collect")}>
-          <Receipt className="mr-2 h-4 w-4" /> Collect
-        </Button>
+        {userRole?.toLowerCase() === "collector" && (
+          <Button variant="outline" onClick={() => onPageChange("collect")}>
+            <Receipt className="mr-2 h-4 w-4" /> Collect
+          </Button>
+        )}
       </div>
 
       {/* Balance card */}

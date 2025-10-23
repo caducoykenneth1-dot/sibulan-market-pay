@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +38,30 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 
 const generateReceiptNo = () => `DPM-${Math.floor(100000 + Math.random() * 900000)}`;
 
+const getStartOfToday = () => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
+};
+
+const parseISODate = (value: string | null | undefined): Date | null => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+};
+
+const formatDateForDisplay = (value: string | null | undefined) => {
+  const parsed = parseISODate(value);
+  if (!parsed) return "-";
+  return parsed.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+};
+
 export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: PaymentCollectionProps) => {
   const { toast } = useToast();
   const [selectedType, setSelectedType] = useState<string>("");
@@ -70,34 +94,59 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
     }, {} as Record<string, StallTypeInfo[]>);
   }, [stalls]);
 
+  const canCollectStall = useCallback((stall: StallRecord) => {
+    if (!stall) return false;
+    if (stall.status === "vacant" || stall.status === "archived") return false;
+
+    const nextDueDate = parseISODate(stall.nextDue);
+    if (nextDueDate) {
+      return nextDueDate <= getStartOfToday();
+    }
+
+    // Fallback to status if next due is missing
+    return stall.status === "due" || stall.status === "overdue";
+  }, []);
+
   useEffect(() => {
     if (stallTypeOptions.length === 0) {
       setSelectedType("");
       return;
     }
+    const firstCollectableType =
+      stallTypeOptions.find((type) =>
+        stalls.some((stall) => stall.type === type && canCollectStall(stall))
+      ) ?? stallTypeOptions[0];
+
     if (!selectedType) {
-      setSelectedType(stallTypeOptions[0]);
+      setSelectedType(firstCollectableType);
       return;
     }
     if (!stallTypeOptions.includes(selectedType)) {
-      setSelectedType(stallTypeOptions[0] ?? "");
+      setSelectedType(firstCollectableType);
     }
-  }, [selectedType, stallTypeOptions]);
+  }, [selectedType, stallTypeOptions, stalls, canCollectStall]);
 
   const filteredStalls = useMemo(() => {
     if (!selectedType) return stalls;
     return stalls.filter((stall) => stall.type === selectedType);
   }, [stalls, selectedType]);
 
+  const collectableStalls = useMemo(() => filteredStalls.filter(canCollectStall), [filteredStalls, canCollectStall]);
+
+  const nonCollectableStalls = useMemo(
+    () => filteredStalls.filter((stall) => !canCollectStall(stall)),
+    [filteredStalls, canCollectStall]
+  );
+
   useEffect(() => {
-    if (filteredStalls.length === 0) {
+    if (collectableStalls.length === 0) {
       setSelectedStallId("");
       return;
     }
-    if (!selectedStallId || !filteredStalls.some((stall) => stall.id === selectedStallId)) {
-      setSelectedStallId(filteredStalls[0].id);
+    if (!selectedStallId || !collectableStalls.some((stall) => stall.id === selectedStallId)) {
+      setSelectedStallId(collectableStalls[0].id);
     }
-  }, [filteredStalls, selectedStallId]);
+  }, [collectableStalls, selectedStallId]);
 
   const selectedStall = useMemo(
     () => stalls.find((stall) => stall.id === selectedStallId) ?? null,
@@ -130,6 +179,63 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
     }
 
     setLoading(true);
+    const { data: latestStall, error: latestFetchError } = await supabase
+      .from("vendors")
+      .select("id, last_payment, next_due, status, rental_type")
+      .eq("id", selectedStall.dbId)
+      .maybeSingle();
+
+    if (latestFetchError) {
+      setLoading(false);
+      console.error("Error verifying stall status:", latestFetchError);
+      toast({
+        title: "Could not verify stall status",
+        description: latestFetchError.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const statusFromDb = (latestStall?.status || selectedStall.status || "").toLowerCase();
+    const rentalTypeFromDb = (latestStall?.rental_type || selectedStall.rentalType || "monthly") as "daily" | "monthly";
+    const todayStart = getStartOfToday();
+    let nextEligibleDate = parseISODate(latestStall?.next_due);
+
+    if (!nextEligibleDate && latestStall?.last_payment) {
+      const lastPaymentDate = parseISODate(latestStall.last_payment);
+      if (lastPaymentDate) {
+        nextEligibleDate = new Date(lastPaymentDate);
+        if (rentalTypeFromDb === "daily") {
+          nextEligibleDate.setDate(nextEligibleDate.getDate() + 1);
+        } else {
+          nextEligibleDate.setMonth(nextEligibleDate.getMonth() + 1);
+        }
+        nextEligibleDate.setHours(0, 0, 0, 0);
+      }
+    }
+
+    const canCollectNow = (() => {
+      if (statusFromDb === "vacant" || statusFromDb === "archived") return false;
+      if (nextEligibleDate) {
+        return nextEligibleDate <= todayStart;
+      }
+      return statusFromDb === "due" || statusFromDb === "overdue" || statusFromDb === "";
+    })();
+
+    if (!canCollectNow) {
+      setLoading(false);
+      toast({
+        title: "Not due yet",
+        description: nextEligibleDate
+          ? `This stall is settled until ${nextEligibleDate.toLocaleDateString()}. Please collect after that date.`
+          : "This stall is not currently due for collection.",
+        variant: "destructive",
+      });
+      setSelectedStallId("");
+      await onPaymentSuccess();
+      return;
+    }
+
     const paymentTimestamp = new Date();
     const paymentDateString = paymentTimestamp.toISOString().split("T")[0];
 
@@ -249,7 +355,7 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
   };
 
   /* ----------------------------------------------------------
-     🖨️ RECEIPT PRINTING
+     �-�️ RECEIPT PRINTING
   ---------------------------------------------------------- */
   const handlePrintReceipt = async () => {
     const receipt = document.getElementById("receipt-content");
@@ -347,7 +453,7 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
         </div>
 
         <Button className="w-full" onClick={handlePrintReceipt}>
-          🖨️ Print Receipt
+          �-�️ Print Receipt
         </Button>
       </div>
     );
@@ -402,22 +508,46 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
               <Select
                 value={selectedStallId || undefined}
                 onValueChange={setSelectedStallId}
-                disabled={filteredStalls.length === 0}
+                disabled={collectableStalls.length === 0}
               >
                 <SelectTrigger id="stall-select">
                   <SelectValue placeholder="Choose stall" />
                 </SelectTrigger>
                 <SelectContent>
-                  {filteredStalls.map((stall) => {
-                    const displayName = displayNameById.get(stall.id) ?? stall.name;
-                    return (
-                      <SelectItem key={stall.id} value={stall.id}>
-                        {displayName} — {stall.vendor || "No vendor"}
-                      </SelectItem>
-                    );
-                  })}
+                  {collectableStalls.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Due &amp; Overdue</SelectLabel>
+                      {collectableStalls.map((stall) => {
+                        const displayName = displayNameById.get(stall.id) ?? stall.name;
+                        return (
+                          <SelectItem key={stall.id} value={stall.id}>
+                            {displayName} – {stall.vendor || "No vendor"}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  )}
+                  {nonCollectableStalls.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Already Settled</SelectLabel>
+                      {nonCollectableStalls.map((stall) => {
+                        const displayName = displayNameById.get(stall.id) ?? stall.name;
+                        const nextDueLabel = formatDateForDisplay(stall.nextDue);
+                        return (
+                          <SelectItem key={stall.id} value={stall.id} disabled>
+                            {displayName} – Next due {nextDueLabel}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  )}
                 </SelectContent>
               </Select>
+              {collectableStalls.length === 0 && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  All stalls of this type are settled until their next due date.
+                </p>
+              )}
             </div>
           </div>
 
@@ -435,6 +565,12 @@ export const PaymentCollection = ({ stalls, collectorName, onPaymentSuccess }: P
               </div>
               <div>
                 <strong>Last Payment:</strong> {selectedStall.lastPayment || "--"}
+              </div>
+              <div>
+                <strong>Next Due:</strong> {formatDateForDisplay(selectedStall.nextDue)}
+              </div>
+              <div className="capitalize">
+                <strong>Status:</strong> {selectedStall.status}
               </div>
             </div>
           )}

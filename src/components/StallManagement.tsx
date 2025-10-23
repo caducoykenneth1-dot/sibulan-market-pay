@@ -610,40 +610,49 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
         </CardContent>
       </Card>
 
-      {/* Selected Stall Card */}
-      {selectedStall && (
-        <Card key={selectedStall.id} className="animate-in fade-in-50 slide-in-from-top-5">
-          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Building2 className="h-5 w-5 text-muted-foreground" />
-              {selectedStall.name}
-            </CardTitle>
-            <Badge variant={getStatusBadge(selectedStall.status)} className="capitalize">
-              {selectedStall.status}
-            </Badge>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="flex items-center gap-2"><User className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.vendor || "No vendor assigned"}</span></div>
-              <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.contact || "N/A"}</span></div>
-              <div className="flex items-center gap-2"><DollarSign className="h-4 w-4 text-muted-foreground" /><span>Rent: ₱{selectedStall.rentAmount.toLocaleString()} / {selectedStall.rentalType}</span></div>
-              <div className="flex items-center gap-2"><Badge className="capitalize" variant="outline">{selectedStall.type || "Uncategorised"}</Badge></div>
-              <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Last Payment: {selectedStall.lastPayment || "N/A"}</span></div>
-              <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Next Due: {selectedStall.nextDue || "N/A"}</span></div>
-            </div>
-            <div className="flex gap-2 pt-2">
-              <Button variant="outline" size="sm" onClick={() => openEditDialog(selectedStall)}>
-                <Pencil className="mr-2 h-4 w-4" /> Edit
-              </Button>
-              <Button variant="destructive" size="sm" 
-                onClick={() => setStallToDelete(selectedStall)}
-                disabled={userRole?.toLowerCase() !== 'collector' && userRole?.toLowerCase() !== 'admin'}>
-                <Archive className="mr-2 h-4 w-4" /> Archive
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Selected Stall Modal */}
+      <Dialog open={Boolean(selectedStall)} onOpenChange={(open) => (!open ? setSelectedStall(null) : null)}>
+        <DialogContent className="sm:max-w-lg md:max-w-xl border-none p-0 overflow-hidden px-4">
+          {selectedStall && (
+            <Card key={selectedStall.id} className="border-none shadow-none">
+              <CardHeader className="px-6 pt-6 pb-0">
+                <div className="flex items-start justify-between gap-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Building2 className="h-5 w-5 text-muted-foreground" />
+                    {selectedStall.name}
+                  </CardTitle>
+                  <Badge variant={getStatusBadge(selectedStall.status)} className="capitalize">
+                    {selectedStall.status}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm px-6 pb-6">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center gap-2"><User className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.vendor || "No vendor assigned"}</span></div>
+                  <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.contact || "N/A"}</span></div>
+                  <div className="flex items-center gap-2"><DollarSign className="h-4 w-4 text-muted-foreground" /><span>Rent: ₱{selectedStall.rentAmount.toLocaleString()} / {selectedStall.rentalType}</span></div>
+                  <div className="flex items-center gap-2"><Badge className="capitalize" variant="outline">{selectedStall.type || "Uncategorised"}</Badge></div>
+                  <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Last Payment: {selectedStall.lastPayment || "N/A"}</span></div>
+                  <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Next Due: {selectedStall.nextDue || "N/A"}</span></div>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <Button variant="outline" size="sm" onClick={() => openEditDialog(selectedStall)}>
+                    <Pencil className="mr-2 h-4 w-4" /> Edit
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setStallToDelete(selectedStall)}
+                    disabled={userRole?.toLowerCase() !== "collector" && userRole?.toLowerCase() !== "admin"}
+                  >
+                    <Archive className="mr-2 h-4 w-4" /> Archive
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Create/Edit Dialog */}
       <Dialog open={isCreateOpen} onOpenChange={(open) => (open ? setIsCreateOpen(true) : closeFormDialog())}>
