@@ -469,14 +469,16 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                 </SelectTrigger>
                 <SelectContent>
                   {Object.entries(groupedStallTypes).map(([section, types]) => (
-                      <SelectGroup key={section}>
-                        <SelectLabel>{section}</SelectLabel>
-                        {types.map((type) => (
-                          <SelectItem key={type.name} value={type.name}>
-                            {type.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
+                    <SelectGroup key={section}>
+                      <SelectLabel>{section}</SelectLabel>
+                      {types.map((type) => (
+                        <SelectItem key={type.name} value={type.name}>
+                          {type.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div>
