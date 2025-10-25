@@ -1,21 +1,49 @@
 import { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Filter, Download, Receipt, Eye } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Search, Filter, Download, Receipt, Eye, DollarSign } from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+import {
+  format,
+  parseISO,
+  isToday,
+  isYesterday,
+  isThisWeek,
+} from "date-fns";
 import { type Invoice } from "./UnpaidDues";
 import { type StallRecord } from "@/data/stalls";
 
+// 🟩 Props
 interface PaymentHistoryProps {
   stalls: StallRecord[];
   invoices: Invoice[];
 }
 
+// 🟦 Helpers
 const getStatusBadge = (status: Invoice["status"]) => {
   switch (status) {
     case "paid":
@@ -27,7 +55,7 @@ const getStatusBadge = (status: Invoice["status"]) => {
   }
 };
 
-
+// 🟦 Generate display names for stalls
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   const counters = new Map<string, number>();
   const names = new Map<string, string>();
@@ -42,6 +70,27 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
+// 🟦 Group by date
+const groupPaymentsByDate = (payments: Invoice[]) => {
+  const groups: Record<string, Invoice[]> = {};
+  payments.forEach((p) => {
+    const date = new Date(p.paid_at!);
+    const key = format(date, "yyyy-MM-dd");
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(p);
+  });
+  return groups;
+};
+
+// 🟦 Format date headers
+const getDateLabel = (dateString: string) => {
+  const date = parseISO(dateString);
+  if (isToday(date)) return "Today";
+  if (isYesterday(date)) return "Yesterday";
+  if (isThisWeek(date)) return format(date, "EEEE");
+  return format(date, "MMMM d, yyyy — EEEE");
+};
+
 export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   const [selectedPayment, setSelectedPayment] = useState<Invoice | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -50,14 +99,20 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
-  const payments = useMemo(() => 
-    invoices.filter(inv => inv.status === 'paid' && inv.paid_at)
-            .sort((a, b) => new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime()), 
-  [invoices]);
+  // 🧾 Paid invoices only, sorted
+  const payments = useMemo(
+    () =>
+      invoices
+        .filter((inv) => inv.status === "paid" && inv.paid_at)
+        .sort(
+          (a, b) =>
+            new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime()
+        ),
+    [invoices]
+  );
 
-  // ✅ Changed to use stall_type for filtering sections like "Fish", "Meat", etc.
   const stallTypeOptions = useMemo(() => {
-    const types = new Set(payments.map(p => p.stall_type).filter(Boolean));
+    const types = new Set(payments.map((p) => p.stall_type).filter(Boolean));
     return Array.from(types).sort((a, b) => a!.localeCompare(b!));
   }, [payments]);
 
@@ -76,14 +131,26 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         payment.vendor_name.toLowerCase().includes(normalizedSearch) ||
         String(payment.id).toLowerCase().includes(normalizedSearch);
 
-      // ✅ Filter logic now checks stall_type
-      const matchesType = filterType === "all" || payment.stall_type === filterType;
+      const matchesType =
+        filterType === "all" || payment.stall_type === filterType;
 
       return matchesSearch && matchesType;
     });
   }, [payments, searchTerm, filterType]);
 
-  const totalAmount = useMemo(() => filteredPayments.reduce((sum, p) => sum + p.amount, 0), [filteredPayments]);
+  const totalAmount = useMemo(
+    () => filteredPayments.reduce((sum, p) => sum + p.amount, 0),
+    [filteredPayments]
+  );
+
+  const groupedPayments = useMemo(
+    () => groupPaymentsByDate(filteredPayments),
+    [filteredPayments]
+  );
+
+  const sortedDates = Object.keys(groupedPayments).sort((a, b) =>
+    a < b ? 1 : -1
+  );
 
   const handleViewDetails = (payment: Invoice) => {
     setSelectedPayment(payment);
@@ -95,15 +162,14 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     setSelectedPayment(null);
   };
 
+  // 🧾 Export PDF
   const handleExport = async () => {
-    if (filteredPayments.length === 0) {
-      return;
-    }
+    if (filteredPayments.length === 0) return;
 
     const reportElement = document.createElement("div");
     reportElement.style.position = "absolute";
     reportElement.style.left = "-9999px";
-    reportElement.style.width = "210mm"; // A4 width
+    reportElement.style.width = "210mm";
     reportElement.innerHTML = `
       <div style="padding: 20px; font-family: sans-serif; color: #000;">
         <h1 style="font-size: 24px; text-align: center; margin-bottom: 20px;">Payment History Report</h1>
@@ -111,27 +177,37 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         <table style="width: 100%; border-collapse: collapse; font-size: 10px;">
           <thead>
             <tr style="background-color: #f2f2f2;">
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Receipt ID</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Paid At</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Vendor</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Stall</th>
+              <th style="border: 1px solid #ddd; padding: 8px;">Receipt ID</th>
+              <th style="border: 1px solid #ddd; padding: 8px;">Paid At</th>
+              <th style="border: 1px solid #ddd; padding: 8px;">Vendor</th>
+              <th style="border: 1px solid #ddd; padding: 8px;">Stall</th>
               <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Amount</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Collector</th>
+              <th style="border: 1px solid #ddd; padding: 8px;">Collector</th>
             </tr>
           </thead>
           <tbody>
             ${filteredPayments
               .map(
                 (p) => `
-              <tr>
-                <td style="border: 1px solid #ddd; padding: 8px;">DPM-${String(p.id).padStart(6, "0")}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">${new Date(p.paid_at!).toLocaleString()}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">${p.vendor_name}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">${p.stall_name}</td>
-                <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">${p.amount.toLocaleString()}</td>
-                <td style="border: 1px solid #ddd; padding: 8px;">${p.collector_name || "N/A"}</td>
-              </tr>
-            `
+                <tr>
+                  <td style="border: 1px solid #ddd; padding: 8px;">DPM-${String(
+                    p.id
+                  ).padStart(6, "0")}</td>
+                  <td style="border: 1px solid #ddd; padding: 8px;">${new Date(
+                    p.paid_at!
+                  ).toLocaleString()}</td>
+                  <td style="border: 1px solid #ddd; padding: 8px;">${
+                    p.vendor_name
+                  }</td>
+                  <td style="border: 1px solid #ddd; padding: 8px;">${
+                    p.stall_name
+                  }</td>
+                  <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">${p.amount.toLocaleString()}</td>
+                  <td style="border: 1px solid #ddd; padding: 8px;">${
+                    p.collector_name || "N/A"
+                  }</td>
+                </tr>
+              `
               )
               .join("")}
           </tbody>
@@ -146,37 +222,35 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF("p", "mm", "a4");
     const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-    const canvasWidth = canvas.width;
-    const canvasHeight = canvas.height;
-    const ratio = canvasWidth / canvasHeight;
-    const imgWidth = pdfWidth - 20; // with margin
+    const ratio = canvas.width / canvas.height;
+    const imgWidth = pdfWidth - 20;
     const imgHeight = imgWidth / ratio;
-
     pdf.addImage(imgData, "PNG", 10, 10, imgWidth, imgHeight);
     pdf.save(`payment-history-${new Date().toISOString().split("T")[0]}.pdf`);
   };
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Payment History</h1> 
-        <p className="text-muted-foreground">View and manage all payment records powered by the latest stall data.</p>
+        <h1 className="text-3xl font-bold">Payment History</h1>
+        <p className="text-muted-foreground">
+          View and manage all payment records powered by the latest stall data.
+        </p>
       </div>
 
+      {/* Search + Filters */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by stall, vendor, or receipt number..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search by stall, vendor, or receipt number..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
             </div>
             <div className="flex gap-2">
               <Select value={filterType} onValueChange={setFilterType}>
@@ -186,105 +260,151 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Sections</SelectItem>
-                  {stallTypeOptions.map((type) => (
-                    type ? <SelectItem key={type} value={type}>
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
-                    </SelectItem> : null
-                  ))}
+                  {stallTypeOptions.map(
+                    (type) =>
+                      type && (
+                        <SelectItem key={type} value={type}>
+                          {type.charAt(0).toUpperCase() + type.slice(1)}
+                        </SelectItem>
+                      )
+                  )}
                 </SelectContent>
               </Select>
               <Button variant="outline" onClick={handleExport}>
-                <Download className="mr-2 h-4 w-4" />
-                Export
+                <Download className="mr-2 h-4 w-4" /> Export
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
 
+      {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-success">PHP {totalAmount.toLocaleString()}</div>
-              <div className="text-sm text-muted-foreground">Total Amount</div>
+          <CardContent className="pt-6 text-center">
+            <div className="text-2xl font-bold text-success">
+              PHP {totalAmount.toLocaleString()}
             </div>
+            <div className="text-sm text-muted-foreground">Total Amount</div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-primary">{filteredPayments.length}</div>
-              <div className="text-sm text-muted-foreground">Total Payments</div>
+          <CardContent className="pt-6 text-center">
+            <div className="text-2xl font-bold text-primary">
+              {filteredPayments.length}
             </div>
+            <div className="text-sm text-muted-foreground">Total Payments</div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-accent">
-                PHP {Math.round(totalAmount / filteredPayments.length || 0)}
-              </div>
-              <div className="text-sm text-muted-foreground">Average Amount</div>
+          <CardContent className="pt-6 text-center">
+            <div className="text-2xl font-bold text-accent">
+              PHP {Math.round(totalAmount / filteredPayments.length || 0)}
+            </div>
+            <div className="text-sm text-muted-foreground">
+              Average Amount
             </div>
           </CardContent>
         </Card>
       </div>
 
+      {/* Grouped Records */}
       <Card>
         <CardHeader>
           <CardTitle>Payment Records</CardTitle>
-          <CardDescription>Automatically generated from current stall assignments.</CardDescription>
+          <CardDescription>Grouped by date of payment</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {filteredPayments.map((payment) => (
-              <div
-                key={payment.id}
-                className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
-                    <Receipt className="h-6 w-6 text-primary" />
-                  </div>
-                  <div>
-                    <div className="font-medium">{payment.vendor_name}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {payment.stall_name} - DPM-{String(payment.id).padStart(6, "0")}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {new Date(payment.paid_at!).toLocaleString()}
-                    </div>
+          {sortedDates.map((dateKey) => {
+            const dayTotal = groupedPayments[dateKey].reduce(
+              (sum, p) => sum + p.amount,
+              0
+            );
+            return (
+              <div key={dateKey} className="mb-8">
+                <div className="flex items-center justify-between mb-3 border-b pb-1">
+                  <h3 className="text-lg font-semibold text-muted-foreground">
+                    {getDateLabel(dateKey)}
+                  </h3>
+                  <div className="flex items-center gap-1 text-sm font-semibold text-emerald-600">
+                    <DollarSign className="h-4 w-4" />
+                    <span>Total: PHP {dayTotal.toLocaleString()}</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <div className="font-medium text-success">PHP {payment.amount.toLocaleString()}</div>
-                    <Badge variant="outline" className="text-xs capitalize">
-                      {payment.payment_type?.replace(/-/g, ' ') || 'Monthly Rent'}
-                    </Badge>
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={() => handleViewDetails(payment)} aria-label="View payment details">
-                    <Eye className="h-4 w-4" />
-                  </Button>
+
+                <div className="space-y-4">
+                  {groupedPayments[dateKey].map((payment) => (
+                    <div
+                      key={payment.id}
+                      className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
+                          <Receipt className="h-6 w-6 text-primary" />
+                        </div>
+                        <div>
+                          <div className="font-medium">
+                            {payment.vendor_name}
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            {payment.stall_name} - DPM-
+                            {String(payment.id).padStart(6, "0")}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {format(new Date(payment.paid_at!), "PPpp")}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <div className="font-medium text-success">
+                            PHP {payment.amount.toLocaleString()}
+                          </div>
+                          <Badge variant="outline" className="text-xs capitalize">
+                            {payment.payment_type?.replace(/-/g, " ") ||
+                              "Monthly Rent"}
+                          </Badge>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewDetails(payment)}
+                          aria-label="View payment details"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
+
           {filteredPayments.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">No payments found matching your criteria.</div>
+            <div className="text-center py-8 text-muted-foreground">
+              No payments found matching your criteria.
+            </div>
           )}
         </CardContent>
       </Card>
 
-      <Dialog open={isDialogOpen} onOpenChange={(open) => (open ? setIsDialogOpen(true) : handleCloseDialog())}>
+      {/* Dialog */}
+      <Dialog
+        open={isDialogOpen}
+        onOpenChange={(open) =>
+          open ? setIsMenuOpen(true) : handleCloseDialog()
+        }
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Payment receipt</DialogTitle>
-            {selectedPayment ? ( 
-              <DialogDescription>Receipt #DPM-{String(selectedPayment.id).padStart(6, "0")}</DialogDescription>
+            <DialogTitle>Payment Receipt</DialogTitle>
+            {selectedPayment ? (
+              <DialogDescription>
+                Receipt #DPM-{String(selectedPayment.id).padStart(6, "0")}
+              </DialogDescription>
             ) : (
-              <DialogDescription>Review payment details.</DialogDescription>
+              <DialogDescription>Review payment details</DialogDescription>
             )}
           </DialogHeader>
           {selectedPayment && (
@@ -306,27 +426,37 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                 </div>
                 <div>
                   <p className="text-muted-foreground">Collector</p>
-                  <p className="font-medium">{selectedPayment.collector_name || "N/A"}</p>
+                  <p className="font-medium">
+                    {selectedPayment.collector_name || "N/A"}
+                  </p>
                 </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <p className="text-muted-foreground">Amount</p>
-                  <p className="text-lg font-semibold text-success">PHP {selectedPayment.amount.toLocaleString()}</p> 
+                  <p className="text-lg font-semibold text-success">
+                    PHP {selectedPayment.amount.toLocaleString()}
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Payment type</p>
                   <Badge variant="outline" className="w-fit capitalize">
-                    {selectedPayment.payment_type?.replace(/-/g, ' ') || 'Monthly Rent'}
+                    {selectedPayment.payment_type?.replace(/-/g, " ") ||
+                      "Monthly Rent"}
                   </Badge>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Notes</p>
-                  <p className="font-medium">{selectedPayment.notes || "None"}</p>
+                  <p className="font-medium">
+                    {selectedPayment.notes || "None"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Status</p>
-                  <Badge variant={getStatusBadge(selectedPayment.status)} className="capitalize w-fit">
+                  <Badge
+                    variant={getStatusBadge(selectedPayment.status)}
+                    className="capitalize w-fit"
+                  >
                     {selectedPayment.status}
                   </Badge>
                 </div>
@@ -334,9 +464,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
             </div>
           )}
           <DialogFooter>
-            <Button type="button" onClick={handleCloseDialog}>
-              Close
-            </Button>
+            <Button onClick={handleCloseDialog}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

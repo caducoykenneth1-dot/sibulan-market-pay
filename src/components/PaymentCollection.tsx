@@ -408,6 +408,14 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         description: `Payment of PHP ${paymentData.amount} saved for ${selectedStall.vendor || "No vendor"}.`,
       });
       await onPaymentSuccess();
+
+      // Send SMS Notification (fire-and-forget)
+      const smsMessage = `Sibulan MarketPay: Thank you for your payment of PHP ${paymentData.amount} for ${stallLabel} on ${paymentTimestamp.toLocaleDateString()}. Receipt: ${receiptNo}`;
+      sendSmsNotification(selectedStall.contact, smsMessage).catch(err => {
+        // Log SMS error without blocking UI
+        console.error("SMS notification failed to send:", err);
+      });
+
     } finally {
       if (lockAcquired) {
         const { error: releaseError } = await supabase.rpc("release_stall_lock", {

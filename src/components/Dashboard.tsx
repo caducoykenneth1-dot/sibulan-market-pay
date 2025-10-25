@@ -261,13 +261,13 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
             )}
 
             {/* Always visible */}
-            <button
+         {/*<button
               onClick={() => onPageChange("unpaid")}
               className="flex flex-col items-center gap-2 rounded-xl bg-destructive/10 p-3 text-destructive transition hover:bg-destructive/20"
             >
               <AlertCircle className="h-5 w-5" />
               <span className="text-xs">Unpaid</span>
-            </button>
+            </button> */}
           </div>
         </CardContent>
       </Card>

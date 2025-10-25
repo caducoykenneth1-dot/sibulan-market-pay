@@ -73,16 +73,22 @@ async function generateMonthlyInvoices(toast: any) {
 
   // 2️⃣ Loop through and create invoices for due stalls
   for (const stall of stalls) {
-    const nextDue = new Date(stall.next_due);
+    if (!stall.next_due) continue; // Skip stalls without a due date
+
+    const nextDue = new Date(stall.next_due); // e.g., 2024-07-25T00:00:00
+    nextDue.setUTCHours(0, 0, 0, 0); // Normalize to start of day in UTC
+
     const stallDisplayName = stallDisplayNameMap.get(stall.id) || `Stall ${stall.id}`;
-    // ✅ Only generate invoices for stalls that are 'due' or 'overdue'.
-    if (stall.vendor && (stall.status === 'due' || stall.status === 'overdue')) {
+    
+    // ✅ Generate invoices for stalls that are due today or are already past their due date.
+    if (stall.vendor && nextDue <= today) {
       const { error: insertError } = await supabase.from("invoices").insert({
         vendor_id: stall.id, // link to vendor record
         stall_name: `${stall.type} - ${stallDisplayName}`,
         vendor_name: stall.vendor,
         amount: stall.monthly_rent,
         due_date: nextDue.toISOString().split("T")[0],
+        stall_type: stall.type, // ✅ Add stall type to the invoice
         status: "unpaid",
       });
 
@@ -179,6 +185,20 @@ const getStatusBadge = (status: StallStatus) => {
     default:
       return "outline" as const;
   }
+};
+
+const statusStyles: Record<StallStatus, { badge: string; border: string }> = {
+  current: {
+    badge: "bg-emerald-100 text-emerald-700",
+    border: "border-emerald-500/30",
+  },
+  due: {
+    badge: "bg-amber-100 text-amber-700",
+    border: "border-amber-500/40",
+  },
+  overdue: { badge: "bg-rose-100 text-rose-700", border: "border-rose-500/40" },
+  vacant: { badge: "bg-gray-100 text-gray-600", border: "border-gray-300/70" },
+  archived: { badge: "bg-slate-100 text-slate-600", border: "border-slate-400/50" },
 };
 
 /* ----------------------------------------------------------
@@ -593,14 +613,20 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }: StallManag
                   <h3 className="text-sm font-semibold text-muted-foreground mb-2">{section}</h3>
                   <div className="flex flex-wrap gap-2">
                     {sectionStalls.map((stall) => (
-                      <Button
-                        key={stall.id}
-                        variant={selectedStall?.id === stall.id ? "default" : "outline"}
-                        onClick={() => setSelectedStall(prev => prev?.id === stall.id ? null : stall)}
-                        className="h-12 w-12 p-0"
-                      >
-                        <span className="font-bold text-xs leading-tight text-center">{stall.name}</span>
-                      </Button>
+                      <div key={stall.id} className="relative">
+                        <Button
+                          variant={selectedStall?.id === stall.id ? "default" : "outline"}
+                          onClick={() => setSelectedStall(prev => prev?.id === stall.id ? null : stall)}
+                          className={`h-12 w-12 p-0 transition-all hover:shadow-md ${statusStyles[stall.status]?.border ?? ""}`}
+                        >
+                          <span className="font-bold text-xs leading-tight text-center">{stall.name}</span>
+                        </Button>
+                        <div 
+                          className={`absolute -top-2 -right-3 transform-gpu scale-90 px-1.5 py-0.5 rounded-full text-[10px] font-semibold tracking-wide shadow-sm ${statusStyles[stall.status]?.badge ?? "bg-gray-200"}`}
+                        >
+                          {stall.status.charAt(0).toUpperCase() + stall.status.slice(1)}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>

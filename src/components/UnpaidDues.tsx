@@ -1,12 +1,37 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardHeader,
+  CardContent,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle, AlertCircle, ArrowLeft, RefreshCw, Users, DollarSign, Search, ArrowUp, ArrowDown } from "lucide-react";
-import { useMemo } from "react";
+import {
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+  RefreshCw,
+  Users,
+  DollarSign,
+  Search,  
+  Filter,
+  LayoutGrid,
+} from "lucide-react";
+import { STALL_TYPES } from "@/data/stalls";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export interface Invoice {
   id: number;
@@ -23,32 +48,31 @@ export interface Invoice {
   notes?: string | null;
 }
 
-type SortKey = 'due_date' | 'amount' | 'vendor_name';
-type SortDirection = 'asc' | 'desc';
-interface SortConfig {
-  key: SortKey;
-  direction: SortDirection;
+interface UnpaidStall extends Invoice {
+  sectionTag: string;
+  typeTag: string;
 }
+
+const sectionMap = new Map(STALL_TYPES.map((type) => [type.name, type.section]));
 
 export const UnpaidDues = () => {
   const { toast } = useToast();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [selectedInvoice, setSelectedInvoice] = useState<UnpaidStall | null>(null);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'due_date', direction: 'asc' });
-
-  const handleSortChange = (key: SortKey) => {
-    setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
-  };
+  const [sectionFilter, setSectionFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [collectorName, setCollectorName] = useState("Unknown Collector");
 
   // 🧾 Fetch all unpaid invoices
   const fetchUnpaid = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from("invoices")
-      .select("id, vendor_id, vendor_name, stall_name, amount, due_date, status")
-      .eq("status", "unpaid")
+      .select("id, vendor_id, vendor_name, stall_name, amount, due_date, status, stall_type")
+      .in("status", ["unpaid", "overdue"])
       .order("due_date", { ascending: true });
 
     if (error) {
@@ -67,17 +91,34 @@ export const UnpaidDues = () => {
     fetchUnpaid();
   }, []);
 
+  useEffect(() => {
+    const fetchCollector = async () => {
+      const { data } = await supabase.auth.getUser();
+      const meta = data.user?.user_metadata;
+      const resolved =
+        meta?.full_name ||
+        meta?.name ||
+        data.user?.email?.split("@")[0] ||
+        "Unknown Collector";
+      setCollectorName(resolved);
+    };
+
+    fetchCollector();
+  }, []);
+
   // ✅ Mark as Paid
   const markAsPaid = async (id: number) => {
-    setMarking(id);
+    if (!selectedInvoice) return;
+    setMarking(selectedInvoice.id);
     const { error } = await supabase
       .from("invoices")
       .update({
         status: "paid",
         paid_at: new Date().toISOString(),
+        collector_name: collectorName,
       })
       .eq("id", id);
-
+  
     if (error) {
       toast({
         title: "Error updating invoice",
@@ -91,9 +132,10 @@ export const UnpaidDues = () => {
       });
       // Optimistically update the UI for a faster experience
       setInvoices((prevInvoices) => prevInvoices.filter((invoice) => invoice.id !== id));
+      setSelectedInvoice(null);
     }
     setMarking(null);
-  };
+  };  
 
   const summary = useMemo(() => {
     const totalAmount = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
@@ -107,34 +149,114 @@ export const UnpaidDues = () => {
     return new Date(dueDate) < new Date() && !new Date(dueDate).toDateString().includes(new Date().toDateString());
   }
 
-  const processedInvoices = useMemo(() => {
+  const resolveStallMeta = (invoice: Invoice) => {
+    const rawType = invoice.stall_type?.trim() ?? "";
+    const inferredType =
+      rawType ||
+      invoice.stall_name?.split(" - ")[0]?.trim() ||
+      invoice.stall_name?.split("-")[0]?.trim() ||
+      "";
+
+    const normalizedType = inferredType || "Unspecified";
+    const mappedSection = sectionMap.get(normalizedType);
+
+    const fallbackSection = (() => {
+      const lower = normalizedType.toLowerCase();
+      if (
+        lower.includes("wet") ||
+        lower.includes("fish") ||
+        lower.includes("meat") ||
+        lower.includes("veg")
+      ) {
+        return "Wet Section";
+      }
+      if (
+        lower.includes("dry") ||
+        lower.includes("groc") ||
+        lower.includes("upper")
+      ) {
+        return "Dry Section";
+      }
+      return "Uncategorized";
+    })();
+
+    return {
+      sectionTag: mappedSection ?? fallbackSection,
+      typeTag: normalizedType,
+    };
+  };
+
+  const invoicesWithMeta = useMemo<UnpaidStall[]>(
+    () =>
+      invoices.map((inv) => {
+        const meta = resolveStallMeta(inv);
+        return {
+          ...inv,
+          ...meta,
+        };
+      }),
+    [invoices]
+  );
+
+  const stallTypeOptions = useMemo(() => {
+    const scoped = invoicesWithMeta.filter(
+      (inv) => sectionFilter === "all" || inv.sectionTag === sectionFilter
+    );
+
+    return Array.from(
+      new Set(
+        scoped
+          .map((inv) => inv.typeTag)
+          .filter((type) => type && type !== "Unspecified")
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [invoicesWithMeta, sectionFilter]);
+
+  const hasUnspecifiedType = useMemo(
+    () => invoicesWithMeta.some((inv) => inv.typeTag === "Unspecified"),
+    [invoicesWithMeta]
+  );
+
+  // Reset type filter when section changes
+  useEffect(() => {
+    setTypeFilter("all");
+  }, [sectionFilter]);
+
+  const filteredAndGroupedInvoices = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
-    let filtered = invoices;
-    if (normalizedSearch) {
-      filtered = invoices.filter((invoice) =>
-        invoice.vendor_name.toLowerCase().includes(normalizedSearch)
-      );
-    }
+    const processed = invoicesWithMeta
+      .filter((inv) => {
+        const matchesSection =
+          sectionFilter === "all" || inv.sectionTag === sectionFilter;
+        const matchesType =
+          typeFilter === "all" || inv.typeTag === typeFilter;
+        const matchesSearch =
+          !normalizedSearch ||
+          [
+            inv.vendor_name,
+            inv.stall_name,
+            inv.sectionTag,
+            inv.typeTag,
+          ]
+            .filter(Boolean)
+            .some((value) =>
+              value.toLowerCase().includes(normalizedSearch)
+            );
 
-    const sorted = [...filtered].sort((a, b) => {
-      const { key, direction } = sortConfig;
-      const valA = a[key];
-      const valB = b[key];
+        return matchesSection && matchesType && matchesSearch;
+      });
 
-      let comparison = 0;
-      if (valA > valB) {
-        comparison = 1;
-      } else if (valA < valB) {
-        comparison = -1;
+    return processed.reduce((acc, stall) => {
+      const section = stall.sectionTag;
+      if (!acc[section]) {
+        acc[section] = [];
       }
+      acc[section].push(stall);
+      return acc;
+    }, {} as Record<string, UnpaidStall[]>);
 
-      return direction === 'asc' ? comparison : -comparison;
-    });
-
-    return sorted;
-  }, [invoices, searchTerm, sortConfig]);
-
+  }, [invoicesWithMeta, searchTerm, sectionFilter, typeFilter]);
 
   if (loading) {
     return (
@@ -146,7 +268,7 @@ export const UnpaidDues = () => {
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="space-y-6">
       <div className="space-y-4">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
@@ -187,84 +309,133 @@ export const UnpaidDues = () => {
 
       {/* Search and Sort Controls */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-semibold">Filter & Sort</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2">
-          <div className="relative">
+        <CardContent className="grid gap-4 md:grid-cols-3 pt-6">
+          <div className="relative md:col-span-1">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search by vendor name..."
+              placeholder="Search by vendor or stall name..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10"
             />
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-muted-foreground">Sort by:</span>
-            {(['due_date', 'amount', 'vendor_name'] as SortKey[]).map(key => {
-              const isActive = sortConfig.key === key;
-              const Icon = sortConfig.direction === 'asc' ? ArrowUp : ArrowDown;
-              return (
-                <Button key={key} variant={isActive ? 'secondary' : 'ghost'} size="sm" onClick={() => handleSortChange(key)}>
-                  {key.replace('_', ' ')}
-                  {isActive && <Icon className="ml-2 h-4 w-4" />}
-                </Button>
-              );
-            })}
+          <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Select value={sectionFilter} onValueChange={setSectionFilter}>
+              <SelectTrigger>
+                <Filter className="mr-2 h-4 w-4" />
+                <SelectValue placeholder="Filter by section" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sections</SelectItem>
+                <SelectItem value="Dry Section">Dry Section</SelectItem>
+                <SelectItem value="Wet Section">Wet Section</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={typeFilter}
+              onValueChange={setTypeFilter}
+              disabled={stallTypeOptions.length === 0 && !hasUnspecifiedType}
+            >
+              <SelectTrigger>
+                <LayoutGrid className="mr-2 h-4 w-4" />
+                <SelectValue placeholder="Filter by type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                {hasUnspecifiedType && (
+                  <SelectItem value="Unspecified">Unspecified</SelectItem>
+                )}
+                {stallTypeOptions.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {type}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
 
-      {processedInvoices.length === 0 ? (
-        <Card>
-          <CardContent className="py-10 text-center text-muted-foreground">
-            <CheckCircle className="h-8 w-8 mx-auto mb-2 text-green-500" />
-            {searchTerm ? "No vendors match your search." : "All dues are paid. 🎉"}
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-3">
-          {processedInvoices.map((invoice) => (
-            <Card key={invoice.id}>
-              <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <AlertCircle className="h-5 w-5 text-destructive" />
-                  {invoice.vendor_name}
-                </CardTitle>
-                <Badge variant="destructive">Unpaid</Badge>
-              </CardHeader>
-
-              <CardContent className="space-y-2 text-sm">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-1">
-                  <p><strong>Stall:</strong> {invoice.stall_name}</p>
-                  <p><strong>Amount:</strong> ₱{invoice.amount.toLocaleString()}</p>
-                  <p className={isOverdue(invoice.due_date) ? 'text-destructive font-semibold' : ''}><strong>Due Date:</strong> {invoice.due_date}</p>
+      <Card>
+        <CardHeader>
+          <CardTitle>Unpaid Stalls</CardTitle>
+          <CardDescription>Select a stall to view details and mark as paid.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {Object.keys(filteredAndGroupedInvoices).length === 0 ? (
+            <div className="py-10 text-center text-muted-foreground">
+              <CheckCircle className="h-8 w-8 mx-auto mb-2 text-green-500" />
+              {searchTerm ? "No stalls match your search." : "All dues are paid. 🎉"}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {Object.entries(filteredAndGroupedInvoices).map(([section, stalls]) => (
+                <div key={section}>
+                  <h3 className="text-sm font-semibold text-muted-foreground mb-2">{section}</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {stalls.map((stall) => (
+                      <Button
+                        key={stall.id}
+                        variant={selectedInvoice?.id === stall.id ? "default" : "outline"}
+                        onClick={() => setSelectedInvoice(stall)}
+                        className="h-12 w-12 p-0 border-destructive/40 hover:bg-destructive/10"
+                      >
+                        <span className="font-bold text-xs leading-tight text-center">{stall.stall_name.split(' - ')[1] || stall.stall_name}</span>
+                      </Button>
+                    ))}
+                  </div>
                 </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-                <Button
-                  size="sm"
-                  disabled={marking === invoice.id}
-                  onClick={() => markAsPaid(invoice.id)}
-                  className="w-full sm:w-auto mt-2"
-                >
-                  {marking === invoice.id ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Updating...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle className="mr-2 h-4 w-4" />
-                      Mark as Paid
-                    </>
-                  )}
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+      <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && setSelectedInvoice(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+              Unpaid Invoice Details
+            </DialogTitle>
+            <DialogDescription>
+              Review the outstanding payment for {selectedInvoice?.vendor_name}.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedInvoice && (
+            <div className="space-y-3 text-sm">
+              <p><strong>Vendor:</strong> {selectedInvoice.vendor_name}</p>
+              <p><strong>Stall:</strong> {selectedInvoice.stall_name}</p>
+              <p><strong>Amount Due:</strong> <span className="font-bold text-destructive">₱{selectedInvoice.amount.toLocaleString()}</span></p>
+              <p className={isOverdue(selectedInvoice.due_date) ? 'text-destructive font-semibold' : ''}><strong>Due Date:</strong> {selectedInvoice.due_date}</p>
+              {selectedInvoice.collector_name && (
+                <p>
+                  <strong>Last collected by:</strong> {selectedInvoice.collector_name}
+                </p>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectedInvoice(null)}>Cancel</Button>
+            <Button
+              disabled={marking === selectedInvoice?.id}
+              onClick={() => selectedInvoice && markAsPaid(selectedInvoice.id)}
+            >
+              {marking === selectedInvoice?.id ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                <>
+                  <CheckCircle className="mr-2 h-4 w-4" />
+                  Mark as Paid
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
     </div>
   );

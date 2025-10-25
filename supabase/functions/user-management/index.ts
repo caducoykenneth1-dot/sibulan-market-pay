@@ -85,9 +85,29 @@ serve(async (req) => {
       })
     }
 
-    // ✅ UPDATE USER ROLE
+    // �o. UPDATE USER ROLE / MARKET ASSIGNMENT
     if (req.method === 'PATCH') {
-      const { user_id, role } = await req.json()
+      const body = await req.json()
+      const { user_id, role, market_section, market_type } = body
+
+      if (!user_id) {
+        return new Response(JSON.stringify({ error: 'Missing user_id' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      if (
+        typeof role === 'undefined' &&
+        typeof market_section === 'undefined' &&
+        typeof market_type === 'undefined'
+      ) {
+        return new Response(JSON.stringify({ error: 'No changes provided' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
       const { data: { user: target } } = await supabaseService.auth.admin.getUserById(user_id)
 
       if (target.user_metadata?.role === 'admin') {
@@ -97,8 +117,55 @@ serve(async (req) => {
         })
       }
 
+      const existingMeta = target.user_metadata ?? target.raw_user_meta_data ?? {}
+      const updatedMeta: Record<string, unknown> = { ...existingMeta }
+
+      if (typeof role === 'string' && role.length > 0) {
+        updatedMeta.role = role
+      }
+
+      const normalizeValue = (value: unknown) =>
+        typeof value === 'string' ? value.trim() : value === null ? null : undefined
+
+      const normalizedSection = normalizeValue(market_section)
+      const normalizedType = normalizeValue(market_type)
+
+      if (typeof market_section !== 'undefined') {
+        if (typeof normalizedSection === 'string' && normalizedSection.length > 0) {
+          updatedMeta.market_section = normalizedSection
+        } else {
+          delete updatedMeta.market_section
+        }
+      }
+
+      if (typeof market_type !== 'undefined') {
+        if (typeof normalizedType === 'string' && normalizedType.length > 0) {
+          updatedMeta.market_type = normalizedType
+        } else {
+          delete updatedMeta.market_type
+        }
+      }
+
+      if (
+        typeof market_section !== 'undefined' ||
+        typeof market_type !== 'undefined'
+      ) {
+        const combined = [
+          typeof updatedMeta.market_section === 'string' ? updatedMeta.market_section : null,
+          typeof updatedMeta.market_type === 'string' ? updatedMeta.market_type : null,
+        ]
+          .filter((value): value is string => Boolean(value && value.length > 0))
+          .join(' • ')
+
+        if (combined) {
+          updatedMeta.market = combined
+        } else {
+          delete updatedMeta.market
+        }
+      }
+
       const { data, error } = await supabaseService.auth.admin.updateUserById(user_id, {
-        user_metadata: { role },
+        user_metadata: updatedMeta,
       })
       if (error) throw error
 
@@ -107,7 +174,6 @@ serve(async (req) => {
         status: 200,
       })
     }
-
     // ✅ DELETE USER
     if (req.method === 'DELETE') {
       const url = new URL(req.url)
@@ -140,3 +206,4 @@ serve(async (req) => {
     })
   }
 })
+

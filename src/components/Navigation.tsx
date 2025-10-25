@@ -40,7 +40,7 @@ const adminNav = [
   { id: "stalls", label: "Stalls", icon: Building2 },
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "users", label: "User Management", icon: Users },
-  { id: "unpaid", label: "Unpaid", icon: AlertCircle },
+ // { id: "unpaid", label: "Unpaid", icon: AlertCircle },
   { id: "archived", label: "Archived", icon: Archive },
 ];
 
@@ -53,22 +53,7 @@ export const Navigation = ({
   userUsername,
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const normalizedRole = userRole?.toLowerCase();
-  const isCollector = normalizedRole === "collector";
-  const navItems = isCollector ? collectorNav : adminNav;
-  const mobileNavItems = isCollector
-    ? [
-        { id: "dashboard", icon: Home },
-        { id: "collect", icon: Receipt },
-        { id: "stalls", icon: Building2 },
-        { id: "archived", icon: Archive },
-      ]
-    : [
-        { id: "dashboard", icon: Home },
-        { id: "reports", icon: BarChart3 },
-        { id: "stalls", icon: Building2 },
-        { id: "archived", icon: Archive },
-      ];
+  const navItems = userRole === "collector" ? collectorNav : adminNav;
 
   const handleMobileNav = (page: string) => {
     onPageChange?.(page);
@@ -85,7 +70,12 @@ export const Navigation = ({
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg">
         <div className="grid grid-cols-4 items-center gap-2 px-2 py-2">
-          {mobileNavItems.map((item) => {
+          {[
+            { id: "dashboard", label: "Dashboard", icon: Home },
+            { id: "stalls", label: "Stalls", icon: Building2 },
+            { id: "collect", label: "Collect", icon: Receipt },
+            { id: "archived", label: "Archived", icon: Archive },
+          ].map((item) => {
             const Icon = item.icon;
             const active = currentPage === item.id;
             return (
