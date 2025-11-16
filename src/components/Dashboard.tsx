@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Receipt,
   DollarSign,
@@ -20,9 +20,10 @@ interface DashboardProps {
   onPageChange: (page: string) => void;
   stalls: StallRecord[];
   unpaidInvoices: Invoice[];
-  userRole: string; // ✅ Added userRole prop
+  userRole: string; // Added userRole prop
   userName: string;
   userUsername: string;
+  avatarUrl?: string | null;
 }
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
@@ -39,7 +40,7 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
-export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, userName, userUsername }: DashboardProps) => {
+export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, userName, userUsername, avatarUrl }: DashboardProps) => {
   const summary = useMemo(() => {
     const today = new Date();
     const todayDateString = today.toISOString().split('T')[0];
@@ -96,6 +97,14 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
 
   const formattedTotalCollectedThisMonth = useMemo(() => `PHP ${totalCollectedThisMonth.toLocaleString()}`, [totalCollectedThisMonth]);
   const occupancyRate = totalStalls === 0 ? 0 : Math.round((occupiedCount / totalStalls) * 100);
+  const initials = useMemo(() => {
+    if (userName?.trim()) {
+      const parts = userName.trim().split(" ");
+      const letters = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
+      return letters || "SM";
+    }
+    return (userUsername?.slice(0, 2) || "SM").toUpperCase();
+  }, [userName, userUsername]);
 
   const stats: Array<{ title: string; value: string; change: string; icon: any; className?: string }> = [
     {
@@ -182,9 +191,19 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Avatar>
-            <AvatarFallback>SM</AvatarFallback>
-          </Avatar>
+          <button
+            type="button"
+            onClick={() => onPageChange("profile")}
+            className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+            title="Change profile photo"
+          >
+            <Avatar className="h-12 w-12 border-2 border-transparent transition group-hover:border-primary">
+              {avatarUrl ? <AvatarImage src={avatarUrl} alt="Collector profile" /> : <AvatarFallback>{initials}</AvatarFallback>}
+            </Avatar>
+            <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-primary px-2 py-[2px] text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
+              Edit
+            </span>
+          </button>
           <div>
             <p className="text-sm font-medium text-primary">Welcome back</p>
             <h1 className="text-xl font-semibold">{userName || 'Sibulan Market Team'}</h1>
@@ -366,3 +385,5 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     </div>
   );
 };
+
+

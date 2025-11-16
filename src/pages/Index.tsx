@@ -9,6 +9,7 @@ import { UserManagement, type Account } from "@/components/UserManagement";
 import { ArchivedStalls } from "@/components/ArchivedStalls";
 import { UnpaidDues } from "@/components/UnpaidDues";
 import { type Invoice } from "@/components/UnpaidDues";
+import { CollectorProfile } from "@/components/CollectorProfile";
 import {
   computeStatusFromDueDate,
   getNextTypeSequence,
@@ -67,6 +68,10 @@ const Index = () => {
   const [dataVersion, setDataVersion] = useState(0);
   const [currentPage, setCurrentPage] = useState("dashboard");
   const [user, setUser] = useState<any>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage.getItem("collectorAvatarUrl");
+  });
 
   const [authMode, setAuthMode] = useState<
     "login" | "register" | "forgot_password" | "reset_password"
@@ -191,6 +196,15 @@ const Index = () => {
     };
     fetchUnpaid();
   }, [rawStalls, dataVersion]);
+
+  useEffect(() => {
+    if (typeof localStorage === "undefined") return;
+    if (avatarUrl) {
+      localStorage.setItem("collectorAvatarUrl", avatarUrl);
+    } else {
+      localStorage.removeItem("collectorAvatarUrl");
+    }
+  }, [avatarUrl]);
 
   // ✅ Load stalls
   useEffect(() => {
@@ -461,6 +475,7 @@ const Index = () => {
             userRole={user?.user_metadata?.role ?? ""}
             userName={user?.user_metadata?.full_name ?? ""}
             userUsername={user?.email?.split("@")[0] ?? ""}
+            avatarUrl={avatarUrl}
           />
         );
       case "collect":
@@ -494,6 +509,17 @@ const Index = () => {
         );
       case "unpaid":
         return <UnpaidDues />;
+      case "profile":
+        return (
+          <CollectorProfile
+            userName={user?.user_metadata?.full_name ?? ""}
+            userUsername={user?.email?.split("@")[0] ?? ""}
+            userRole={user?.user_metadata?.role ?? ""}
+            onBack={() => setCurrentPage("dashboard")}
+            avatarUrl={avatarUrl}
+            onAvatarChange={setAvatarUrl}
+          />
+        );
       default:
         return (
           <Dashboard
@@ -503,6 +529,7 @@ const Index = () => {
             userRole={user?.user_metadata?.role ?? ""}
             userName={user?.user_metadata?.full_name ?? ""}
             userUsername={user?.email?.split("@")[0] ?? ""}
+            avatarUrl={avatarUrl}
           />
         );
     }
