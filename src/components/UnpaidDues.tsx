@@ -18,9 +18,10 @@ import {
   RefreshCw,
   Users,
   DollarSign,
-  Search,  
+  Search,
   Filter,
   LayoutGrid,
+  CalendarDays,
 } from "lucide-react";
 import { STALL_TYPES } from "@/data/stalls";
 import {
@@ -32,6 +33,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { format } from "date-fns";
 
 export interface Invoice {
   id: number;
@@ -55,6 +57,9 @@ interface UnpaidStall extends Invoice {
 
 const sectionMap = new Map(STALL_TYPES.map((type) => [type.name, type.section]));
 
+const getMonthKey = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+
 export const UnpaidDues = () => {
   const { toast } = useToast();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -65,6 +70,7 @@ export const UnpaidDues = () => {
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [collectorName, setCollectorName] = useState("Unknown Collector");
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
 
   // 🧾 Fetch all unpaid invoices
   const fetchUnpaid = async () => {
@@ -222,32 +228,105 @@ export const UnpaidDues = () => {
     setTypeFilter("all");
   }, [sectionFilter]);
 
-  const filteredAndGroupedInvoices = useMemo(() => {
+  const baseFilteredInvoices = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
-    const processed = invoicesWithMeta
-      .filter((inv) => {
-        const matchesSection =
-          sectionFilter === "all" || inv.sectionTag === sectionFilter;
-        const matchesType =
-          typeFilter === "all" || inv.typeTag === typeFilter;
-        const matchesSearch =
-          !normalizedSearch ||
-          [
-            inv.vendor_name,
-            inv.stall_name,
-            inv.sectionTag,
-            inv.typeTag,
-          ]
-            .filter(Boolean)
-            .some((value) =>
-              value.toLowerCase().includes(normalizedSearch)
-            );
+    return invoicesWithMeta.filter((inv) => {
+      const matchesSection =
+        sectionFilter === "all" || inv.sectionTag === sectionFilter;
+      const matchesType = typeFilter === "all" || inv.typeTag === typeFilter;
+      const matchesSearch =
+        !normalizedSearch ||
+        [
+          inv.vendor_name,
+          inv.stall_name,
+          inv.sectionTag,
+          inv.typeTag,
+        ]
+          .filter(Boolean)
+          .some((value) => value.toLowerCase().includes(normalizedSearch));
 
-        return matchesSection && matchesType && matchesSearch;
-      });
+      return matchesSection && matchesType && matchesSearch;
+    });
+  }, [invoicesWithMeta, searchTerm, sectionFilter, typeFilter]);
 
-    return processed.reduce((acc, stall) => {
+  const monthSummaries = useMemo(() => {
+    const monthMap = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        count: number;
+        total: number;
+        monthStart: number;
+      }
+    >();
+
+    baseFilteredInvoices.forEach((inv) => {
+      const dueDate = new Date(inv.due_date);
+      if (Number.isNaN(dueDate.getTime())) return;
+
+      const monthStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), 1);
+      const key = getMonthKey(monthStart);
+
+      if (!monthMap.has(key)) {
+        monthMap.set(key, {
+          key,
+          label: format(monthStart, "MMMM yyyy"),
+          count: 0,
+          total: 0,
+          monthStart: monthStart.getTime(),
+        });
+      }
+
+      const entry = monthMap.get(key)!;
+      entry.count += 1;
+      entry.total += inv.amount;
+    });
+
+    return Array.from(monthMap.values()).sort(
+      (a, b) => b.monthStart - a.monthStart
+    );
+  }, [baseFilteredInvoices]);
+
+  useEffect(() => {
+    if (
+      selectedMonthKey &&
+      !monthSummaries.some((summary) => summary.key === selectedMonthKey)
+    ) {
+      setSelectedMonthKey(null);
+    }
+  }, [selectedMonthKey, monthSummaries]);
+
+  const visibleInvoices = useMemo(() => {
+    if (!selectedMonthKey) return baseFilteredInvoices;
+
+    return baseFilteredInvoices.filter((inv) => {
+      const dueDate = new Date(inv.due_date);
+      if (Number.isNaN(dueDate.getTime())) return false;
+      return getMonthKey(dueDate) === selectedMonthKey;
+    });
+  }, [baseFilteredInvoices, selectedMonthKey]);
+
+  useEffect(() => {
+    if (
+      selectedInvoice &&
+      !visibleInvoices.some((inv) => inv.id === selectedInvoice.id)
+    ) {
+      setSelectedInvoice(null);
+    }
+  }, [selectedInvoice, visibleInvoices]);
+
+  const selectedMonthLabel = useMemo(() => {
+    if (!selectedMonthKey) return null;
+    const match = monthSummaries.find(
+      (summary) => summary.key === selectedMonthKey
+    );
+    return match?.label ?? null;
+  }, [selectedMonthKey, monthSummaries]);
+
+  const filteredAndGroupedInvoices = useMemo(() => {
+    return visibleInvoices.reduce((acc, stall) => {
       const section = stall.sectionTag;
       if (!acc[section]) {
         acc[section] = [];
@@ -255,8 +334,7 @@ export const UnpaidDues = () => {
       acc[section].push(stall);
       return acc;
     }, {} as Record<string, UnpaidStall[]>);
-
-  }, [invoicesWithMeta, searchTerm, sectionFilter, typeFilter]);
+  }, [visibleInvoices]);
 
   if (loading) {
     return (
@@ -306,6 +384,75 @@ export const UnpaidDues = () => {
           </CardContent>
         </Card>
       </div>
+
+      {monthSummaries.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>Overdue Months</CardTitle>
+              <CardDescription>
+                Select a month to focus on stalls with unpaid dues during that period.
+              </CardDescription>
+            </div>
+            {selectedMonthKey && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedMonthKey(null)}
+              >
+                Clear month filter
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {monthSummaries.map((summary) => {
+              const isActive = summary.key === selectedMonthKey;
+
+              return (
+                <button
+                  key={summary.key}
+                  type="button"
+                  onClick={() =>
+                    setSelectedMonthKey(isActive ? null : summary.key)
+                  }
+                  className={`flex items-center justify-between rounded-lg border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+                    isActive
+                      ? "border-primary bg-primary/10"
+                      : "hover:bg-muted/40"
+                  }`}
+                  aria-pressed={isActive}
+                >
+                  <div className="flex items-center gap-4">
+                    <div
+                      className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                        isActive ? "bg-primary" : "bg-primary/10"
+                      }`}
+                    >
+                      <CalendarDays
+                        className={`h-5 w-5 ${
+                          isActive
+                            ? "text-primary-foreground"
+                            : "text-primary"
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <p className="font-medium">{summary.label}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {summary.count}{" "}
+                        {summary.count === 1 ? "stall" : "stalls"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right text-sm font-semibold text-destructive">
+                    PHP {summary.total.toLocaleString()}
+                  </div>
+                </button>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Search and Sort Controls */}
       <Card>
@@ -359,7 +506,11 @@ export const UnpaidDues = () => {
       <Card>
         <CardHeader>
           <CardTitle>Unpaid Stalls</CardTitle>
-          <CardDescription>Select a stall to view details and mark as paid.</CardDescription>
+          <CardDescription>
+            {selectedMonthLabel
+              ? `Showing stalls with dues in ${selectedMonthLabel}. Select a stall to view details and mark as paid.`
+              : "Select a stall to view details and mark as paid."}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {Object.keys(filteredAndGroupedInvoices).length === 0 ? (

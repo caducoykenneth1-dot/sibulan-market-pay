@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Filter, Download, Receipt, Eye, DollarSign } from "lucide-react";
+import { Search, Filter, Download, Receipt, Eye, DollarSign, CalendarDays } from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import {
@@ -36,6 +36,9 @@ import {
 } from "date-fns";
 import { type Invoice } from "./UnpaidDues";
 import { type StallRecord } from "@/data/stalls";
+
+const getMonthKey = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth()).padStart(2, "0")}`;
 
 // 🟩 Props
 interface PaymentHistoryProps {
@@ -96,6 +99,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
@@ -122,9 +126,10 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     }
   }, [filterType, stallTypeOptions]);
 
-  const filteredPayments = useMemo(() => {
+  const filteredBySearchAndType = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+
     return payments.filter((payment) => {
-      const normalizedSearch = searchTerm.trim().toLowerCase();
       const matchesSearch =
         normalizedSearch.length === 0 ||
         payment.stall_name.toLowerCase().includes(normalizedSearch) ||
@@ -138,10 +143,77 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     });
   }, [payments, searchTerm, filterType]);
 
+  const filteredPayments = useMemo(() => {
+    if (!selectedMonthKey) return filteredBySearchAndType;
+
+    return filteredBySearchAndType.filter(
+      (payment) =>
+        getMonthKey(new Date(payment.paid_at!)) === selectedMonthKey
+    );
+  }, [filteredBySearchAndType, selectedMonthKey]);
+
   const totalAmount = useMemo(
     () => filteredPayments.reduce((sum, p) => sum + p.amount, 0),
     [filteredPayments]
   );
+
+  const monthlySummaries = useMemo(() => {
+    const monthMap = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        total: number;
+        count: number;
+        monthStart: number;
+      }
+    >();
+
+    filteredBySearchAndType.forEach((payment) => {
+      if (!payment.paid_at) return;
+
+      const paidDate = new Date(payment.paid_at);
+      if (Number.isNaN(paidDate.getTime())) return;
+
+      const monthStartDate = new Date(paidDate.getFullYear(), paidDate.getMonth(), 1);
+      const key = getMonthKey(monthStartDate);
+
+      if (!monthMap.has(key)) {
+        monthMap.set(key, {
+          key,
+          label: format(monthStartDate, "MMMM yyyy"),
+          total: 0,
+          count: 0,
+          monthStart: monthStartDate.getTime(),
+        });
+      }
+
+      const entry = monthMap.get(key)!;
+      entry.total += payment.amount;
+      entry.count += 1;
+    });
+
+    return Array.from(monthMap.values()).sort(
+      (a, b) => b.monthStart - a.monthStart
+    );
+  }, [filteredBySearchAndType]);
+
+  useEffect(() => {
+    if (
+      selectedMonthKey &&
+      !monthlySummaries.some((summary) => summary.key === selectedMonthKey)
+    ) {
+      setSelectedMonthKey(null);
+    }
+  }, [selectedMonthKey, monthlySummaries]);
+
+  const selectedMonthLabel = useMemo(() => {
+    if (!selectedMonthKey) return null;
+    const match = monthlySummaries.find(
+      (summary) => summary.key === selectedMonthKey
+    );
+    return match?.label ?? null;
+  }, [selectedMonthKey, monthlySummaries]);
 
   const groupedPayments = useMemo(
     () => groupPaymentsByDate(filteredPayments),
@@ -308,11 +380,85 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         </Card>
       </div>
 
+      {monthlySummaries.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>Monthly Collections</CardTitle>
+              <CardDescription>
+                History of total payments grouped by month based on current
+                filters.
+              </CardDescription>
+            </div>
+            {selectedMonthKey && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedMonthKey(null)}
+              >
+                Clear month filter
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {monthlySummaries.map((summary) => {
+              const isActive = summary.key === selectedMonthKey;
+
+              return (
+                <button
+                  key={summary.key}
+                  type="button"
+                  onClick={() =>
+                    setSelectedMonthKey(isActive ? null : summary.key)
+                  }
+                  className={`flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+                    isActive
+                      ? "border-primary bg-primary/10"
+                      : "hover:bg-muted/40"
+                  }`}
+                  aria-pressed={isActive}
+                >
+                  <div className="flex items-center gap-4">
+                    <div
+                      className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                        isActive ? "bg-primary" : "bg-primary/10"
+                      }`}
+                    >
+                      <CalendarDays
+                        className={`h-5 w-5 ${
+                          isActive
+                            ? "text-primary-foreground"
+                            : "text-primary"
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <p className="font-medium">{summary.label}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {summary.count}{" "}
+                        {summary.count === 1 ? "payment" : "payments"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right font-semibold text-success">
+                    PHP {summary.total.toLocaleString()}
+                  </div>
+                </button>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Grouped Records */}
       <Card>
         <CardHeader>
           <CardTitle>Payment Records</CardTitle>
-          <CardDescription>Grouped by date of payment</CardDescription>
+          <CardDescription>
+            {selectedMonthLabel
+              ? `Showing payments for ${selectedMonthLabel}`
+              : "Grouped by date of payment"}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {sortedDates.map((dateKey) => {

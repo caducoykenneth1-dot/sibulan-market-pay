@@ -32,9 +32,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, ChevronLeft } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
+import { Textarea } from "@/components/ui/textarea";
 
 type AccountRole = "admin" | "collector";
 
@@ -76,6 +77,8 @@ const Index = () => {
   const [registerForm, setRegisterForm] = useState({
     name: "",
     username: "",
+    phone: "",
+    address: "",
     password: "",
     confirmPassword: "",
     role: "collector" as AccountRole,
@@ -87,8 +90,8 @@ const Index = () => {
     password: "",
     confirmPassword: "",
   });
-  const [resetPasswordVisible, setResetPasswordVisible] = useState(false);
-  const [resetConfirmVisible, setResetConfirmVisible] = useState(false);
+  const [resetPasswordVisible, setResetPasswordVisible] = useState(true);
+  const [resetConfirmVisible, setResetConfirmVisible] = useState(true);
   const [loginPasswordVisible, setLoginPasswordVisible] = useState(false);
   const [registerPasswordVisible, setRegisterPasswordVisible] = useState(false);
   const [registerConfirmVisible, setRegisterConfirmVisible] = useState(false);
@@ -313,12 +316,19 @@ const Index = () => {
 
     const name = registerForm.name.trim();
     const username = registerForm.username.trim();
+    const phone = registerForm.phone.trim();
+    const address = registerForm.address.trim();
     const password = registerForm.password.trim();
     const confirmPassword = registerForm.confirmPassword.trim();
     const role = registerForm.role;
 
-    if (!name || !username || !password || !confirmPassword) {
+    if (!name || !username || !phone || !address || !password || !confirmPassword) {
       setAuthError("Fill out all fields to create an account.");
+      return;
+    }
+
+    if (!/^\d{11}$/.test(phone)) {
+      setAuthError("Phone number must be exactly 11 digits.");
       return;
     }
 
@@ -339,6 +349,8 @@ const Index = () => {
         data: {
           full_name: name,
           role,
+          phone,
+          address,
         },
       },
     });
@@ -351,6 +363,8 @@ const Index = () => {
     setRegisterForm({
       name: "",
       username: "",
+      phone: "",
+      address: "",
       password: "",
       confirmPassword: "",
       role: "collector",
@@ -609,6 +623,20 @@ const Index = () => {
 
             {authMode === "register" && (
               <form className="space-y-4" onSubmit={handleRegister}>
+                <div className="flex justify-start">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="flex items-center gap-2 px-0 text-sm"
+                    onClick={() => {
+                      resetFeedback();
+                      setAuthMode("login");
+                    }}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Back to sign in
+                  </Button>
+                </div>
                 <div className="space-y-1">
                   <Label htmlFor="register-name">Full name</Label>
                   <Input
@@ -635,6 +663,38 @@ const Index = () => {
                       }))
                     }
                     autoComplete="username"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="register-phone">Phone number</Label>
+                  <Input
+                    id="register-phone"
+                    value={registerForm.phone}
+                    inputMode="numeric"
+                    maxLength={11}
+                    onChange={(event) =>
+                      setRegisterForm((prev) => ({
+                        ...prev,
+                        phone: event.target.value.replace(/\D/g, "").slice(0, 11),
+                      }))
+                    }
+                    placeholder="09XXXXXXXXX"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="register-address">Address</Label>
+                  <Textarea
+                    id="register-address"
+                    value={registerForm.address}
+                    onChange={(event) =>
+                      setRegisterForm((prev) => ({
+                        ...prev,
+                        address: event.target.value,
+                      }))
+                    }
+                    placeholder="House number, street, barangay, city"
                     required
                   />
                 </div>
@@ -825,7 +885,7 @@ const Index = () => {
                       onClick={() =>
                         setResetPasswordVisible((prev) => !prev)
                       }
-                      className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
+                      className="absolute inset-y-0 right-2 flex items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition hover:bg-muted/80 hover:text-foreground"
                       aria-label={
                         resetPasswordVisible
                           ? "Hide password"
@@ -837,6 +897,7 @@ const Index = () => {
                       ) : (
                         <Eye className="h-4 w-4" />
                       )}
+                      <span>{resetPasswordVisible ? "Hide" : "Show"}</span>
                     </button>
                   </div>
                 </div>
@@ -861,7 +922,7 @@ const Index = () => {
                       onClick={() =>
                         setResetConfirmVisible((prev) => !prev)
                       }
-                      className="absolute inset-y-0 right-2 flex items-center text-muted-foreground transition hover:text-foreground"
+                      className="absolute inset-y-0 right-2 flex items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition hover:bg-muted/80 hover:text-foreground"
                       aria-label={
                         resetConfirmVisible
                           ? "Hide password"
@@ -873,6 +934,7 @@ const Index = () => {
                       ) : (
                         <Eye className="h-4 w-4" />
                       )}
+                      <span>{resetConfirmVisible ? "Hide" : "Show"}</span>
                     </button>
                   </div>
                 </div>

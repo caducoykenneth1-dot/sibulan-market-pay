@@ -62,7 +62,7 @@ serve(async (req) => {
 
     // ✅ CREATE USER (Collector only)
     if (req.method === 'POST') {
-      const { email, password, full_name, role } = await req.json()
+      const { email, password, full_name, role, market, phone, address } = await req.json()
 
       if (role === 'admin') {
         return new Response(JSON.stringify({ error: 'Cannot create admin users.' }), {
@@ -71,11 +71,38 @@ serve(async (req) => {
         })
       }
 
+      if (typeof phone !== 'string' || !/^\d{11}$/.test(phone.trim())) {
+        return new Response(JSON.stringify({ error: 'Contact number must be exactly 11 digits.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const normalizedAddress = typeof address === 'string' ? address.trim() : ''
+      if (!normalizedAddress) {
+        return new Response(JSON.stringify({ error: 'Address is required.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const metadata: Record<string, unknown> = {
+        full_name,
+        role: 'collector',
+        phone: phone.trim(),
+        address: normalizedAddress,
+      }
+
+      const normalizedMarket = typeof market === 'string' ? market.trim() : ''
+      if (normalizedMarket.length > 0) {
+        metadata.market = normalizedMarket
+      }
+
       const { data, error } = await supabaseService.auth.admin.createUser({
         email,
         password,
         email_confirm: true,
-        user_metadata: { full_name, role: 'collector' },
+        user_metadata: metadata,
       })
       if (error) throw error
 
@@ -206,4 +233,3 @@ serve(async (req) => {
     })
   }
 })
-

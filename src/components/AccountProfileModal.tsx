@@ -61,6 +61,7 @@ export interface AccountProfileData {
   status: AccountStatus;
   email: string;
   phone: string;
+  address: string;
   market: string;
   userId: string;
   createdAt: string;
@@ -79,6 +80,7 @@ const mockAccount: AccountProfileData = {
   status: "active",
   email: "testcollector@example.com",
   phone: "+63 912 345 6789",
+  address: "123 Market Road, Barangay Poblacion, Sibulan",
   market: "Sibulan Public Market",
   userId: "usr_5f0b38d9c4",
   createdAt: "2024-01-12 08:45 AM",
@@ -191,7 +193,8 @@ export const AccountProfileModal: React.FC<AccountProfileModalProps> = ({
                 rows={[
                   { label: "Email", value: account.email, icon: Mail },
                   { label: "Phone", value: account.phone, icon: Phone },
-                  { label: "Assigned Market", value: account.market, icon: MapPin },
+                  { label: "Address", value: account.address, icon: MapPin },
+                  { label: "Assigned Market", value: account.market, icon: Globe },
                 ]}
                 columns={3}
               />

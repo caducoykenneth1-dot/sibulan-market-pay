@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -63,6 +64,8 @@ export const UserManagement = ({
   const [newAccount, setNewAccount] = React.useState({
     name: "",
     username: "",
+    contactNumber: "",
+    address: "",
     password: "",
     confirmPassword: "",
     market: "",
@@ -231,12 +234,19 @@ export const UserManagement = ({
 
     const name = newAccount.name.trim();
     const username = newAccount.username.trim().toLowerCase();
+    const contactNumber = newAccount.contactNumber.trim();
+    const address = newAccount.address.trim();
     const password = newAccount.password.trim();
     const confirmPassword = newAccount.confirmPassword.trim();
     const market = newAccount.market;
 
-    if (!name || !username || !password || !confirmPassword) {
+    if (!name || !username || !contactNumber || !address || !password || !confirmPassword) {
       setError("Please fill out all fields.");
+      setLoading(false);
+      return;
+    }
+    if (!/^\d{11}$/.test(contactNumber)) {
+      setError("Contact number must be exactly 11 digits.");
       setLoading(false);
       return;
     }
@@ -267,6 +277,8 @@ export const UserManagement = ({
         full_name: name,
         role: newAccount.role,
         market: market,
+        phone: contactNumber,
+        address,
       }),
     });
 
@@ -282,6 +294,8 @@ export const UserManagement = ({
     setNewAccount({
       name: "",
       username: "",
+      contactNumber: "",
+      address: "",
       password: "",
       confirmPassword: "",
       market: "",
@@ -514,6 +528,29 @@ export const UserManagement = ({
                 onChange={(e) =>
                   setNewAccount({ ...newAccount, username: e.target.value })
                 }
+              />
+            </div>
+            <div>
+              <Label>Contact Number</Label>
+              <Input
+                value={newAccount.contactNumber}
+                inputMode="numeric"
+                maxLength={11}
+                onChange={(e) => {
+                  const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 11);
+                  setNewAccount({ ...newAccount, contactNumber: digitsOnly });
+                }}
+                placeholder="09XXXXXXXXX"
+              />
+            </div>
+            <div>
+              <Label>Address</Label>
+              <Textarea
+                value={newAccount.address}
+                onChange={(e) =>
+                  setNewAccount({ ...newAccount, address: e.target.value })
+                }
+                placeholder="House number, street, barangay, city"
               />
             </div>
             <div>
@@ -813,6 +850,12 @@ const mapAccountToProfileData = (
       : typeof meta.phone_number === "string"
       ? meta.phone_number
       : "Not provided";
+  const address =
+    typeof meta.address === "string" && meta.address.trim().length > 0
+      ? meta.address.trim()
+      : typeof meta.home_address === "string" && meta.home_address.trim().length > 0
+      ? meta.home_address.trim()
+      : "Not provided";
   const sectionMeta =
     typeof meta.market_section === "string"
       ? meta.market_section.trim()
@@ -861,6 +904,7 @@ const mapAccountToProfileData = (
     status,
     email: account.email ?? "Not provided",
     phone,
+    address,
     market,
     userId: account.id,
     createdAt: formatDateTime(account.created_at),
