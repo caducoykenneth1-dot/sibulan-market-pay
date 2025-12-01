@@ -63,6 +63,7 @@ import {
   ArrowUp,
   ArrowDown,
 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 /* ======================================================================
    1. AUTO BILLING FUNCTION
@@ -230,6 +231,124 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
   };
 
   /* ======================================================================
+     INTERNAL FUNCTIONS
+  ====================================================================== */
+
+  const closeForm = () => {
+    setIsCreateOpen(false);
+    setIsEditMode(false);
+    setStallBeingEdited(null);
+    setFormState({
+      vendor: "",
+      contact: "",
+      type: "",
+      rentAmount: "",
+      rentalType: "monthly",
+      status: "vacant",
+      lastPayment: "",
+      nextDue: "",
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    const trimmedType = formState.type.trim();
+    const rent = Number(formState.rentAmount);
+
+    if (!trimmedType || Number.isNaN(rent)) return;
+
+    const shouldClear =
+      formState.status === "vacant" || formState.status === "archived";
+
+    const computed = computeStatusFromDueDate(
+      formState.nextDue,
+      formState.status,
+      undefined,
+      formState.rentalType
+    );
+
+    const finalStatus = shouldClear ? formState.status : computed;
+
+    try {
+      if (isEditMode && stallBeingEdited) {
+        await updateStall(stallBeingEdited.dbId, {
+          vendor: shouldClear ? "" : formState.vendor.trim(),
+          contact: shouldClear ? "" : formState.contact.trim(),
+          type: trimmedType,
+          rentAmount: rent,
+          rentalType: formState.rentalType,
+          status: finalStatus,
+          lastPayment: formState.lastPayment || null,
+          nextDue: formState.nextDue || null,
+        });
+
+        toast({
+          title: "Stall updated",
+          description: "Changes saved successfully.",
+        });
+      } else {
+        await createStall({
+          vendor: shouldClear ? "" : formState.vendor.trim(),
+          contact: shouldClear ? "" : formState.contact.trim(),
+          type: trimmedType,
+          rentAmount: rent,
+          rentalType: formState.rentalType,
+          status: finalStatus,
+          lastPayment: formState.lastPayment || null,
+          nextDue: formState.nextDue || null,
+        });
+
+        toast({
+          title: "Stall created",
+          description: "New stall added successfully.",
+        });
+      }
+
+      onStallsChange();
+      closeForm();
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: err.message || "Failed to save.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleArchive = async () => {
+    if (!stallToDelete) return;
+
+    try {
+      await updateStall(stallToDelete.dbId, {
+        status: "archived",
+        archive_reason: archiveReason.trim(),
+        occupied: false,
+      });
+
+      toast({
+        title: "Stall archived",
+        description: "Stall successfully archived.",
+      });
+
+      onStallsChange();
+      setStallToDelete(null);
+      setArchiveReason("");
+    } catch (err) {
+      toast({
+        title: "Archive failed",
+        description: err.message || "Could not archive stall.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // When the section filter changes, also reset the type filter.
+  useEffect(() => {
+    setTypeFilter("all");
+  }, [sectionFilter]);
+
+  /* ======================================================================
      4. SECTION MAPPING FROM STALL_TYPES
   ====================================================================== */
   const stallsWithSection = useMemo(() => {
@@ -242,6 +361,20 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
     });
   }, [stalls]);
 
+  // Get a unique, sorted list of stall types available for the selected section.
+  const availableStallTypes = useMemo(() => {
+    let types: string[];
+    if (sectionFilter === "all") {
+      // If "All" is selected, get all unique types from the master STALL_TYPES list.
+      types = STALL_TYPES.map((t) => t.name);
+    } else {
+      // Otherwise, get types only from the selected section from the master list.
+      types = STALL_TYPES.filter((t) => t.section === sectionFilter).map(
+        (t) => t.name
+      );
+    }
+    return [...new Set(types)].sort();
+  }, [sectionFilter]);
   /* ======================================================================
      5. FILTER RESULTS
   ====================================================================== */
@@ -294,9 +427,11 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
   ====================================================================== */
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold">Stall Management</h1>
+      {typeFilter === "all" ? (
+        <>
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold">Stall Management</h1>
           <p className="text-muted-foreground">
             Track occupied stalls, vacant slots, and upcoming dues.
           </p>
@@ -416,97 +551,69 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
         </CardContent>
       </Card>
 
-      {filtersVisible && (
+          {/* ======================================================================
+          Stall Type Buttons (conditionally rendered)
+      ====================================================================== */}
+          {filtersVisible && availableStallTypes.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base font-semibold">Search & Filters</CardTitle>
+            <CardTitle className="text-base font-semibold">
+              Filter by Stall Type
+            </CardTitle>
           </CardHeader>
-
-          <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 items-center">
-            <div className="relative">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search vendor, type, or ID"
-                className="pl-9"
-              />
-            </div>
-
-            <Select
-              value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v)}
-            >
-              <SelectTrigger>
-                <Filter className="mr-2 h-4 w-4" />
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="current">Current</SelectItem>
-                <SelectItem value="due">Due</SelectItem>
-                <SelectItem value="overdue">Overdue</SelectItem>
-                <SelectItem value="vacant">Vacant</SelectItem>
-                <SelectItem value="archived">Archived</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All types</SelectItem>
-                {BASE_TYPE_OPTIONS.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <div className="flex gap-2 justify-end">
-              <Select
-                value={sortConfig.key}
-                onValueChange={(v) =>
-                  setSortConfig({ ...sortConfig, key: v })
+          <CardContent className="flex flex-wrap gap-2">
+            {availableStallTypes.map((type) => (
+              <Button
+                key={type}
+                variant={typeFilter === type ? "default" : "outline"}
+                onClick={() =>
+                  setTypeFilter((prev) => (prev === type ? "all" : type))
                 }
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Sort by" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="stallNumber">Stall Number</SelectItem>
-                  <SelectItem value="status">Status</SelectItem>
-                  <SelectItem value="vendor">Vendor Name</SelectItem>
-                </SelectContent>
-              </Select>
-
+                {type}
+              </Button>
+            ))}
+          </CardContent>
+        </Card>
+          )}
+        </>
+      ) : (
+        <>
+          {/* ======================================================================
+              9. STALL GRID (shown only when a type is selected)
+          ====================================================================== */}
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-center gap-4">
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() =>
-                  setSortConfig((prev) => ({
-                    ...prev,
-                    direction: prev.direction === "asc" ? "desc" : "asc",
-                  }))
-                }
+                onClick={() => {
+                  setTypeFilter("all");
+                  setSearchTerm(""); // Clear search on exit
+                }}
               >
-                {sortConfig.direction === "asc" ? (
-                  <ArrowUp className="h-4 w-4" />
-                ) : (
-                  <ArrowDown className="h-4 w-4" />
-                )}
+                <ArrowLeft className="h-4 w-4" />
               </Button>
+              <div>
+                <h1 className="text-3xl font-bold">
+                  {typeFilter} Stalls
+                </h1>
+                <p className="text-muted-foreground">
+                  Select a stall to view its details or search below.
+                </p>
+              </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <div className="relative w-full md:max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by vendor or ID..."
+                className="pl-9"
+              />
+            </div>
+          </div>
 
-      {/* ======================================================================
-          9. STALL GRID (shown only when section is selected)
-      ====================================================================== */}
-      {filtersVisible && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base font-semibold">Stall Selection</CardTitle>
@@ -557,6 +664,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
             )}
           </CardContent>
         </Card>
+        </>
       )}
 
       {/* ======================================================================
@@ -948,116 +1056,3 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
     </div>
   );
 };
-
-/* ======================================================================
-   13. INTERNAL FUNCTIONS
-====================================================================== */
-
-function closeForm() {
-  setIsCreateOpen(false);
-  setIsEditMode(false);
-  setStallBeingEdited(null);
-  setFormState({
-    vendor: "",
-    contact: "",
-    type: "",
-    rentAmount: "",
-    rentalType: "monthly",
-    status: "vacant",
-    lastPayment: "",
-    nextDue: "",
-  });
-}
-
-async function handleSubmit(e) {
-  e.preventDefault();
-
-  const trimmedType = formState.type.trim();
-  const rent = Number(formState.rentAmount);
-
-  if (!trimmedType || Number.isNaN(rent)) return;
-
-  const shouldClear =
-    formState.status === "vacant" || formState.status === "archived";
-
-  const computed = computeStatusFromDueDate(
-    formState.nextDue,
-    formState.status,
-    undefined,
-    formState.rentalType
-  );
-
-  const finalStatus = shouldClear ? formState.status : computed;
-
-  try {
-    if (isEditMode && stallBeingEdited) {
-      await updateStall(stallBeingEdited.dbId, {
-        vendor: shouldClear ? "" : formState.vendor.trim(),
-        contact: shouldClear ? "" : formState.contact.trim(),
-        type: trimmedType,
-        rentAmount: rent,
-        rentalType: formState.rentalType,
-        status: finalStatus,
-        lastPayment: formState.lastPayment || null,
-        nextDue: formState.nextDue || null,
-      });
-
-      toast({
-        title: "Stall updated",
-        description: "Changes saved successfully.",
-      });
-    } else {
-      await createStall({
-        vendor: shouldClear ? "" : formState.vendor.trim(),
-        contact: shouldClear ? "" : formState.contact.trim(),
-        type: trimmedType,
-        rentAmount: rent,
-        rentalType: formState.rentalType,
-        status: finalStatus,
-        lastPayment: formState.lastPayment || null,
-        nextDue: formState.nextDue || null,
-      });
-
-      toast({
-        title: "Stall created",
-        description: "New stall added successfully.",
-      });
-    }
-
-    onStallsChange();
-    closeForm();
-  } catch (err) {
-    toast({
-      title: "Error",
-      description: err.message || "Failed to save.",
-      variant: "destructive",
-    });
-  }
-}
-
-async function handleArchive() {
-  if (!stallToDelete) return;
-
-  try {
-    await updateStall(stallToDelete.dbId, {
-      status: "archived",
-      archive_reason: archiveReason.trim(),
-      occupied: false,
-    });
-
-    toast({
-      title: "Stall archived",
-      description: "Stall successfully archived.",
-    });
-
-    onStallsChange();
-    setStallToDelete(null);
-    setArchiveReason("");
-  } catch (err) {
-    toast({
-      title: "Archive failed",
-      description: err.message || "Could not archive stall.",
-      variant: "destructive",
-    });
-  }
-}

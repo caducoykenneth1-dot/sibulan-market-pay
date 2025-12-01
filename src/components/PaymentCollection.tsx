@@ -225,6 +225,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
     const stallDbId = selectedStall.dbId;
     let lockAcquired = false;
+    let smsFailed = false; // Flag to track SMS status
 
     setLoading(true);
 
@@ -351,83 +352,108 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         return;
       }
 
-      const today = new Date();
-      let nextDueDate = new Date(selectedStall.nextDue || today);
+        // -----------------------------
+    // SEND SMS VIA PHILSMS
+    // -----------------------------
+    if (latestStall?.contact) {
+      try {
+        const smsPayload = {
+          contactNumber: latestStall.contact,
+          amount: Number(paymentData.amount),
+          stallName: stallLabel,
+        };
 
-      if (selectedStall.rentalType === "daily") {
-        nextDueDate.setDate(today.getDate() + 1);
-      } else {
-        nextDueDate.setMonth(today.getMonth() + 1);
-      }
-
-      const nextDueDateString = nextDueDate.toISOString().split("T")[0];
-      const updatedStatus = computeStatusFromDueDate(
-        nextDueDateString,
-        "current",
-        undefined,
-        selectedStall.rentalType
-      );
-
-      const { data: updateData, error: vendorUpdateError } = await supabase
-        .from("vendors")
-        .update({
-          last_payment: paymentDateString,
-          next_due: nextDueDateString,
-          status: updatedStatus,
-        })
-        .eq("id", stallDbId)
-        .select()
-        .single();
-
-      if (vendorUpdateError) {
-        console.error("Vendor update failed:", vendorUpdateError);
-        toast({
-          title: !navigator.onLine ? "No Internet Connection" : "Update failed",
-          description: !navigator.onLine
-            ? "Stall due date could not be updated. Please check your connection."
-            : vendorUpdateError.message,
-          variant: "destructive",
+        const { error: smsError } = await supabase.functions.invoke("send-sms-receipt", {
+          body: JSON.stringify(smsPayload),
+          headers: { "Content-Type": "application/json" },
         });
-      } else {
-        toast({
-          title: "Next due updated",
-          description: `Stall ${updateData.type} new due: ${updateData.next_due}`,
-        });
-      }
-      setReceiptNo(generateReceiptNo());
-      setReceiptContext({
-        stallLabel,
-        vendor: selectedStall.vendor || "No vendor",
-        amount: paymentData.amount,
-        paymentType,
-        paymentDate: paymentTimestamp.toLocaleString(),
-      });
-      setShowReceipt(true);
-      toast({
-        title: "Payment recorded",
-        description: `Payment of PHP ${paymentData.amount} saved for ${selectedStall.vendor || "No vendor"}.`,
-      });
-      await onPaymentSuccess();
 
-      // Send SMS Notification (fire-and-forget)
-      const smsMessage = `Sibulan MarketPay: Thank you for your payment of PHP ${paymentData.amount} for ${stallLabel} on ${paymentTimestamp.toLocaleDateString()}. Receipt: ${receiptNo}`;
-      sendSmsNotification(selectedStall.contact, smsMessage).catch(err => {
-        // Log SMS error without blocking UI
-        console.error("SMS notification failed to send:", err);
-      });
-
-    } finally {
-      if (lockAcquired) {
-        const { error: releaseError } = await supabase.rpc("release_stall_lock", {
-          p_stall_id: stallDbId,
-        });
-        if (releaseError) {
-          console.error("Error releasing stall lock:", releaseError);
+        if (smsError) {
+          console.error("SMS Function Error:", smsError);
+          smsFailed = true; // Set flag on failure
+        } else {
+          console.log("SMS sent successfully via PhilSMS");
         }
+      } catch (err) {
+        console.error("Unexpected SMS error:", err);
+        smsFailed = true; // Set flag on failure
       }
-      setLoading(false);
     }
-  };
+
+    // Continue with updating next due, receipt, and toast
+    const today = new Date();
+    let nextDueDate = new Date(selectedStall.nextDue || today);
+
+    if (selectedStall.rentalType === "daily") {
+      nextDueDate.setDate(today.getDate() + 1);
+    } else {
+      nextDueDate.setMonth(today.getMonth() + 1);
+    }
+
+    const nextDueDateString = nextDueDate.toISOString().split("T")[0];
+    const updatedStatus = computeStatusFromDueDate(
+      nextDueDateString,
+      "current",
+      undefined,
+      selectedStall.rentalType
+    );
+
+    const { data: updateData, error: vendorUpdateError } = await supabase
+      .from("vendors")
+      .update({
+        last_payment: paymentDateString,
+        next_due: nextDueDateString,
+        status: updatedStatus,
+      })
+      .eq("id", stallDbId)
+      .select()
+      .single();
+
+    if (vendorUpdateError) {
+      console.error("Vendor update failed:", vendorUpdateError);
+      toast({
+        title: !navigator.onLine ? "No Internet Connection" : "Update failed",
+        description: !navigator.onLine
+          ? "Stall due date could not be updated. Please check your connection."
+          : vendorUpdateError.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Next due updated",
+        description: `Stall ${updateData.type} new due: ${updateData.next_due}`,
+      });
+    }
+
+    setReceiptNo(generateReceiptNo());
+    setReceiptContext({
+      stallLabel,
+      vendor: selectedStall.vendor || "No vendor",
+      amount: paymentData.amount,
+      paymentType,
+      paymentDate: paymentTimestamp.toLocaleString(),
+    });
+    setShowReceipt(true);
+    toast({
+      title: "Payment recorded",
+      description: `PHP ${paymentData.amount} saved for ${selectedStall.vendor || "No vendor"}. ${
+        smsFailed ? "Warning: SMS receipt could not be sent." : ""
+      }`,
+    });
+    await onPaymentSuccess();
+
+  } finally {
+    if (lockAcquired) {
+      const { error: releaseError } = await supabase.rpc("release_stall_lock", {
+        p_stall_id: stallDbId,
+      });
+      if (releaseError) {
+        console.error("Error releasing stall lock:", releaseError);
+      }
+    }
+    setLoading(false);
+  }
+};
 
   /* ----------------------------------------------------------
      ÃƒÂ°Ã…Â¸Ã‚Â§Ã‚Â¾ RECEIPT VIEW
@@ -495,6 +521,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       </div>
     );
   }
+
+
 
   /* ----------------------------------------------------------
      ÃƒÂ°Ã…Â¸Ã‚Â§Ã‚Â¾ PAYMENT FORM

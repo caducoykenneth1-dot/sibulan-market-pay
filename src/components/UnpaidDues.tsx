@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { DataTable } from "./data-table"; // Import the generic DataTable
 import {
   Card,
   CardHeader,
@@ -22,6 +23,9 @@ import {
   Filter,
   LayoutGrid,
   CalendarDays,
+  ArrowLeft,
+  MessageSquare,
+  Eye,
 } from "lucide-react";
 import { STALL_TYPES } from "@/data/stalls";
 import {
@@ -34,6 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { format } from "date-fns";
+import { columns as createUnpaidDuesColumns } from "./unpaid-dues-columns"; // Import the new columns
 
 export interface Invoice {
   id: number;
@@ -50,7 +55,7 @@ export interface Invoice {
   notes?: string | null;
 }
 
-interface UnpaidStall extends Invoice {
+export interface UnpaidStall extends Invoice {
   sectionTag: string;
   typeTag: string;
 }
@@ -59,6 +64,8 @@ const sectionMap = new Map(STALL_TYPES.map((type) => [type.name, type.section]))
 
 const getMonthKey = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+
+type ViewMode = "dashboard" | "table" | "invoice";
 
 export const UnpaidDues = () => {
   const { toast } = useToast();
@@ -71,6 +78,8 @@ export const UnpaidDues = () => {
   const [typeFilter, setTypeFilter] = useState("all");
   const [collectorName, setCollectorName] = useState("Unknown Collector");
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
+  const [filtersVisible, setFiltersVisible] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
 
   // 🧾 Fetch all unpaid invoices
   const fetchUnpaid = async () => {
@@ -116,6 +125,20 @@ export const UnpaidDues = () => {
   const markAsPaid = async (id: number) => {
     if (!selectedInvoice) return;
     setMarking(selectedInvoice.id);
+
+    // --- Future SMS Feature: Fetch vendor contact number ---
+    // We fetch this now so we can use it in the success message.
+    const { data: vendorData } = await supabase
+      .from("vendors")
+      .select("contact")
+      .eq("id", selectedInvoice.vendor_id)
+      .single();
+
+    const contactNumber = vendorData?.contact;
+    // --- End of future feature data fetching ---
+
+
+    // Update the invoice status to 'paid'
     const { error } = await supabase
       .from("invoices")
       .update({
@@ -136,9 +159,11 @@ export const UnpaidDues = () => {
         title: "Payment Recorded",
         description: "The invoice has been marked as paid.",
       });
+
       // Optimistically update the UI for a faster experience
       setInvoices((prevInvoices) => prevInvoices.filter((invoice) => invoice.id !== id));
       setSelectedInvoice(null);
+      setViewMode("table"); // Go back to the table view after payment
     }
     setMarking(null);
   };  
@@ -204,28 +229,28 @@ export const UnpaidDues = () => {
     [invoices]
   );
 
-  const stallTypeOptions = useMemo(() => {
-    const scoped = invoicesWithMeta.filter(
-      (inv) => sectionFilter === "all" || inv.sectionTag === sectionFilter
-    );
-
-    return Array.from(
-      new Set(
-        scoped
-          .map((inv) => inv.typeTag)
-          .filter((type) => type && type !== "Unspecified")
-      )
-    ).sort((a, b) => a.localeCompare(b));
-  }, [invoicesWithMeta, sectionFilter]);
-
-  const hasUnspecifiedType = useMemo(
-    () => invoicesWithMeta.some((inv) => inv.typeTag === "Unspecified"),
-    [invoicesWithMeta]
-  );
+  // Get a unique, sorted list of stall types available for the selected section.
+  const availableStallTypes = useMemo(() => {
+    let types: string[];
+    if (sectionFilter === "all") {
+      // If "All" is selected, get all unique types from the master STALL_TYPES list.
+      types = STALL_TYPES.map((t) => t.name);
+    } else {
+      // Otherwise, get types only from the selected section from the master list.
+      types = STALL_TYPES.filter((t) => t.section === sectionFilter).map(
+        (t) => t.name
+      );
+    }
+    return [...new Set(types)].sort();
+  }, [sectionFilter]);
 
   // Reset type filter when section changes
   useEffect(() => {
     setTypeFilter("all");
+    // When section changes, if we are in the table view, go back to dashboard
+    if (viewMode === "table") {
+      setViewMode("dashboard");
+    }
   }, [sectionFilter]);
 
   const baseFilteredInvoices = useMemo(() => {
@@ -325,16 +350,19 @@ export const UnpaidDues = () => {
     return match?.label ?? null;
   }, [selectedMonthKey, monthSummaries]);
 
-  const filteredAndGroupedInvoices = useMemo(() => {
-    return visibleInvoices.reduce((acc, stall) => {
-      const section = stall.sectionTag;
-      if (!acc[section]) {
-        acc[section] = [];
-      }
-      acc[section].push(stall);
-      return acc;
-    }, {} as Record<string, UnpaidStall[]>);
-  }, [visibleInvoices]);
+  const handleSectionSelect = (value: "all" | "Dry Section" | "Wet Section") => {
+    setFiltersVisible((prev) => !(prev && sectionFilter === value));
+    setSectionFilter(value);
+    // Reset other filters for a clean slate
+    setSearchTerm("");
+    setTypeFilter("all");
+  };
+
+  const handleMonthClick = (key: string) => {
+    // Set the month filter and switch to the table view
+    setSelectedMonthKey(key);
+    setViewMode("table");
+  };
 
   if (loading) {
     return (
@@ -345,6 +373,120 @@ export const UnpaidDues = () => {
     );
   }
 
+  // When a stall type is clicked, switch to table view
+  const handleTypeClick = (type: string) => {
+    setTypeFilter((prev) => {
+      const newType = prev === type ? "all" : type;
+      setViewMode(newType === "all" ? "dashboard" : "table");
+      return newType;
+    });
+  };
+
+  const handleViewInvoice = (invoice: UnpaidStall) => {
+    setSelectedInvoice(invoice);
+    setViewMode("invoice");
+  };
+
+  const unpaidDuesColumns = createUnpaidDuesColumns(handleViewInvoice);
+
+  if (viewMode === "invoice" && selectedInvoice) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-4">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => {
+              setSelectedInvoice(null);
+              setViewMode("table");
+            }}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-3xl font-bold">Invoice Details</h1>
+            <p className="text-muted-foreground">
+              Review and confirm payment for {selectedInvoice.vendor_name}.
+            </p>
+          </div>
+        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+              Unpaid Invoice
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p><strong>Vendor:</strong> {selectedInvoice.vendor_name}</p>
+            <p><strong>Stall:</strong> {selectedInvoice.stall_name}</p>
+            <p><strong>Amount Due:</strong> <span className="font-bold text-destructive">₱{selectedInvoice.amount.toLocaleString()}</span></p>
+            <p className={isOverdue(selectedInvoice.due_date) ? 'text-destructive font-semibold' : ''}><strong>Due Date:</strong> {selectedInvoice.due_date}</p>
+            {selectedInvoice.collector_name && (
+              <p>
+                <strong>Last collected by:</strong> {selectedInvoice.collector_name}
+              </p>
+            )}
+          </CardContent>
+          <DialogFooter className="px-6 pb-6">
+            <Button
+              className="w-full"
+              disabled={marking === selectedInvoice?.id}
+              onClick={() => selectedInvoice && markAsPaid(selectedInvoice.id)}
+            >
+              {marking === selectedInvoice?.id ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Updating...</>
+              ) : (
+                <><CheckCircle className="mr-2 h-4 w-4" />Mark as Paid</>
+              )}
+            </Button>
+          </DialogFooter>
+        </Card>
+      </div>
+    );
+  }
+
+  if (viewMode === "table") {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => {
+                setViewMode("dashboard");
+                setSearchTerm(""); // Clear search on exit
+                setSelectedMonthKey(null); // Clear month filter on exit
+              }}
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div>
+              <h1 className="text-3xl font-bold">{typeFilter} Dues</h1>
+              <p className="text-muted-foreground">
+                {selectedMonthLabel
+                  ? `Showing dues for ${selectedMonthLabel}`
+                  : "Showing all unpaid dues for this stall type."}
+              </p>
+            </div>
+          </div>
+          <div className="relative w-full md:max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by vendor or stall..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </div>
+        <DataTable columns={unpaidDuesColumns} data={visibleInvoices} />
+      </div>
+    );
+  }
+
+  // Default to dashboard view
   return (
     <div className="space-y-6">
       <div className="space-y-4">
@@ -412,9 +554,7 @@ export const UnpaidDues = () => {
                 <button
                   key={summary.key}
                   type="button"
-                  onClick={() =>
-                    setSelectedMonthKey(isActive ? null : summary.key)
-                  }
+                  onClick={() => handleMonthClick(summary.key)}
                   className={`flex items-center justify-between rounded-lg border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
                     isActive
                       ? "border-primary bg-primary/10"
@@ -454,10 +594,58 @@ export const UnpaidDues = () => {
         </Card>
       )}
 
-      {/* Search and Sort Controls */}
+      {/* Section Selection */}
       <Card>
-        <CardContent className="grid gap-4 md:grid-cols-3 pt-6">
-          <div className="relative md:col-span-1">
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Choose Section</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-center gap-3">
+          <div className="flex flex-wrap justify-center gap-2">
+            {[
+              { label: "All", value: "all" },
+              { label: "Dry", value: "Dry Section" },
+              { label: "Wet", value: "Wet Section" },
+            ].map((opt) => (
+              <Button
+                key={opt.value}
+                size="sm"
+                className="h-9 px-4 min-w-[80px] rounded-full whitespace-nowrap"
+                variant={sectionFilter === opt.value ? "default" : "outline"}
+                onClick={() => handleSectionSelect(opt.value as "all" | "Dry Section" | "Wet Section")}
+              >
+                {opt.label}
+              </Button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Stall Type Buttons (conditionally rendered) */}
+      {filtersVisible && availableStallTypes.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">
+              Filter by Stall Type
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {availableStallTypes.map((type) => (
+              <Button
+                key={type}
+                variant={typeFilter === type ? "default" : "outline"}
+                onClick={() => handleTypeClick(type)}
+              >
+                {type}
+              </Button>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Search and Type Filters */}
+      <Card>
+        <CardContent className="grid gap-4 md:grid-cols-2 pt-6">
+          <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search by vendor or stall name..."
@@ -466,127 +654,8 @@ export const UnpaidDues = () => {
               className="pl-10"
             />
           </div>
-          <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select value={sectionFilter} onValueChange={setSectionFilter}>
-              <SelectTrigger>
-                <Filter className="mr-2 h-4 w-4" />
-                <SelectValue placeholder="Filter by section" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Sections</SelectItem>
-                <SelectItem value="Dry Section">Dry Section</SelectItem>
-                <SelectItem value="Wet Section">Wet Section</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={typeFilter}
-              onValueChange={setTypeFilter}
-              disabled={stallTypeOptions.length === 0 && !hasUnspecifiedType}
-            >
-              <SelectTrigger>
-                <LayoutGrid className="mr-2 h-4 w-4" />
-                <SelectValue placeholder="Filter by type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {hasUnspecifiedType && (
-                  <SelectItem value="Unspecified">Unspecified</SelectItem>
-                )}
-                {stallTypeOptions.map((type) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
         </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Unpaid Stalls</CardTitle>
-          <CardDescription>
-            {selectedMonthLabel
-              ? `Showing stalls with dues in ${selectedMonthLabel}. Select a stall to view details and mark as paid.`
-              : "Select a stall to view details and mark as paid."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {Object.keys(filteredAndGroupedInvoices).length === 0 ? (
-            <div className="py-10 text-center text-muted-foreground">
-              <CheckCircle className="h-8 w-8 mx-auto mb-2 text-green-500" />
-              {searchTerm ? "No stalls match your search." : "All dues are paid. 🎉"}
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {Object.entries(filteredAndGroupedInvoices).map(([section, stalls]) => (
-                <div key={section}>
-                  <h3 className="text-sm font-semibold text-muted-foreground mb-2">{section}</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {stalls.map((stall) => (
-                      <Button
-                        key={stall.id}
-                        variant={selectedInvoice?.id === stall.id ? "default" : "outline"}
-                        onClick={() => setSelectedInvoice(stall)}
-                        className="h-12 w-12 p-0 border-destructive/40 hover:bg-destructive/10"
-                      >
-                        <span className="font-bold text-xs leading-tight text-center">{stall.stall_name.split(' - ')[1] || stall.stall_name}</span>
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && setSelectedInvoice(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-destructive" />
-              Unpaid Invoice Details
-            </DialogTitle>
-            <DialogDescription>
-              Review the outstanding payment for {selectedInvoice?.vendor_name}.
-            </DialogDescription>
-          </DialogHeader>
-          {selectedInvoice && (
-            <div className="space-y-3 text-sm">
-              <p><strong>Vendor:</strong> {selectedInvoice.vendor_name}</p>
-              <p><strong>Stall:</strong> {selectedInvoice.stall_name}</p>
-              <p><strong>Amount Due:</strong> <span className="font-bold text-destructive">₱{selectedInvoice.amount.toLocaleString()}</span></p>
-              <p className={isOverdue(selectedInvoice.due_date) ? 'text-destructive font-semibold' : ''}><strong>Due Date:</strong> {selectedInvoice.due_date}</p>
-              {selectedInvoice.collector_name && (
-                <p>
-                  <strong>Last collected by:</strong> {selectedInvoice.collector_name}
-                </p>
-              )}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectedInvoice(null)}>Cancel</Button>
-            <Button
-              disabled={marking === selectedInvoice?.id}
-              onClick={() => selectedInvoice && markAsPaid(selectedInvoice.id)}
-            >
-              {marking === selectedInvoice?.id ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Updating...
-                </>
-              ) : (
-                <>
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                  Mark as Paid
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
     </div>
   );

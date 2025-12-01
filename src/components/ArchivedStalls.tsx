@@ -155,6 +155,12 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
     setTypeFilter("all");
   }, [sectionFilter]);
 
+  const handleSectionSelect = (value: "all" | "Dry Section" | "Wet Section") => {
+    setSectionFilter(value);
+    // Reset other filters for a clean slate
+    setSearchTerm("");
+  };
+
   const groupedArchived = useMemo(() => {
     return archivedStalls.reduce<Record<string, ArchivedStallRecord[]>>((acc, stall) => {
       const section = stall.section || "N/A";
@@ -232,73 +238,83 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
         <p className="text-muted-foreground">View and restore previously archived stalls.</p>
       </div>
 
-      {/* Search and Filter */}
+      {/* Section Selection */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold">Search & Filters</CardTitle>
+          <CardTitle className="text-base font-semibold">Choose Section</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-            <Input
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by vendor name..."
-              className="pl-9"
-            />
-          </div>
-          <Select value={sectionFilter} onValueChange={setSectionFilter}>
-            <SelectTrigger>
-              <Filter className="mr-2 h-4 w-4" />
-              <SelectValue placeholder="Filter by section" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Sections</SelectItem>
-              <SelectItem value="Dry Section">Dry Section</SelectItem>
-              <SelectItem value="Wet Section">Wet Section</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={typeFilter} onValueChange={setTypeFilter} disabled={stallTypeOptions.length === 0}>
-            <SelectTrigger>
-              <LayoutGrid className="mr-2 h-4 w-4" />
-              <SelectValue placeholder="Filter by type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Types</SelectItem>
-              {stallTypeOptions.map(type => (
-                <SelectItem key={type} value={type}>
-                  {type}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <CardContent className="flex flex-wrap justify-center gap-2">
+          {[
+            { label: "All", value: "all" },
+            { label: "Dry", value: "Dry Section" },
+            { label: "Wet", value: "Wet Section" },
+          ].map((opt) => (
+            <Button
+              key={opt.value}
+              size="sm"
+              className="h-9 px-4 min-w-[80px] rounded-full whitespace-nowrap"
+              variant={sectionFilter === opt.value ? "default" : "outline"}
+              onClick={() => handleSectionSelect(opt.value as "all" | "Dry Section" | "Wet Section")}
+            >
+              {opt.label}
+            </Button>
+          ))}
         </CardContent>
       </Card>
 
-      {loading ? (
-        <div className="flex justify-center items-center h-40"><Loader2 className="h-6 w-6 animate-spin" /></div>
-      ) : archivedStalls.length === 0 ? (
-        <Card><CardContent className="py-12 text-center text-muted-foreground">No archived stalls found.</CardContent></Card>
-      ) : (
-        <div className="space-y-5">
-          {Object.entries(groupedArchived).map(([section, stalls]) => (
-            <div key={section} className="space-y-2">
-              <h3 className="text-sm font-semibold text-muted-foreground">{section}</h3>
-              <div className="flex flex-wrap gap-2">
-                {stalls.map((stall) => (
-                  <Button
-                    key={stall.id}
-                    variant={selectedStall?.id === stall.id ? "default" : "outline"}
-                    className="h-12 w-12 p-0"
-                    onClick={() => setSelectedStall(prev => (prev?.id === stall.id ? null : stall))}
-                  >
-                    <span className="font-bold text-xs leading-tight text-center">{stall.name}</span>
-                  </Button>
-                ))}
-              </div>
+      {/* Stall Type Buttons (conditionally rendered) */}
+      {sectionFilter !== "all" && stallTypeOptions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base font-semibold">
+              Filter by Stall Type
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {stallTypeOptions.map((type) => (
+              <Button
+                key={type}
+                variant={typeFilter === type ? "default" : "outline"}
+                onClick={() =>
+                  setTypeFilter((prev) => (prev === type ? "all" : type))
+                }
+              >
+                {type}
+              </Button>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Stall Grid (conditionally rendered) */}
+      {typeFilter !== "all" && (
+        <>
+          {loading ? (
+            <div className="flex justify-center items-center h-40"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : archivedStalls.length === 0 ? (
+            <Card><CardContent className="py-12 text-center text-muted-foreground">No archived stalls found for this type.</CardContent></Card>
+          ) : (
+            <div className="space-y-5">
+              {Object.entries(groupedArchived).map(([section, stalls]) => (
+                <div key={section} className="space-y-2">
+                  <h3 className="text-sm font-semibold text-muted-foreground">{section}</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {stalls.map((stall) => (
+                      <Button
+                        key={stall.id}
+                        variant={selectedStall?.id === stall.id ? "default" : "outline"}
+                        className="h-12 w-12 p-0"
+                        onClick={() => setSelectedStall(prev => (prev?.id === stall.id ? null : stall))}
+                      >
+                        <span className="font-bold text-xs leading-tight text-center">{stall.name}</span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {/* ✅ Pagination Controls */}
