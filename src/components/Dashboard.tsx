@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { type StallRecord } from "@/data/stalls";
 import { type Invoice } from "./UnpaidDues";
+import { MonthlyCollections } from "./MonthlyCollections";
 
 interface DashboardProps {
   onPageChange: (page: string) => void;
@@ -41,6 +42,8 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 };
 
 export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, userName, userUsername, avatarUrl }: DashboardProps) => {
+  const [showMonthlyCollections, setShowMonthlyCollections] = useState(false);
+
   const summary = useMemo(() => {
     const today = new Date();
     const todayDateString = today.toISOString().split('T')[0];
@@ -157,6 +160,22 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
         amount: `PHP ${inv.amount.toLocaleString()}`,
         time: new Date(inv.paid_at!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }));
+  }, [unpaidInvoices]);
+
+  // 📊 Successful collections summary
+  const successfulCollections = useMemo(() => {
+    const todayString = new Date().toISOString().split('T')[0];
+    const paidToday = unpaidInvoices.filter(inv => 
+      inv.status === 'paid' && 
+      inv.paid_at && 
+      inv.paid_at.startsWith(todayString)
+    );
+    
+    return {
+      countToday: paidToday.length,
+      amountToday: paidToday.reduce((sum, inv) => sum + inv.amount, 0),
+      totalCount: unpaidInvoices.filter(inv => inv.status === 'paid').length,
+    };
   }, [unpaidInvoices]);
 
   const marketStatus = [
@@ -316,6 +335,41 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
 
       {/* Transactions + Market Status */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* Successful Collections Card */}
+        <Card className="rounded-2xl lg:col-span-1 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950 dark:to-emerald-950 border-green-200 dark:border-green-800">
+          <CardHeader>
+            <CardTitle className="text-green-900 dark:text-green-100">✅ Successful Collections</CardTitle>
+            <CardDescription className="text-green-700 dark:text-green-300">Today's progress</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-green-700 dark:text-green-300">Collections Today</span>
+                <span className="text-2xl font-bold text-green-600 dark:text-green-400">{successfulCollections.countToday}</span>
+              </div>
+              <div className="h-2 bg-green-200 dark:bg-green-800 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-green-600 dark:bg-green-500 rounded-full transition-all"
+                  style={{
+                    width: `${Math.min((successfulCollections.countToday / Math.max(1, successfulCollections.totalCount)) * 100, 100)}%`
+                  }}
+                />
+              </div>
+            </div>
+            <div className="pt-2 border-t border-green-200 dark:border-green-800">
+              <p className="text-xs text-green-600 dark:text-green-400 mb-1">Amount Collected Today</p>
+              <p className="text-2xl font-bold text-green-700 dark:text-green-200">PHP {successfulCollections.amountToday.toLocaleString()}</p>
+            </div>
+            <Button 
+              onClick={() => onPageChange("history")} 
+              className="w-full mt-4 bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
+              size="sm"
+            >
+              View All Collections
+            </Button>
+          </CardContent>
+        </Card>
+
         <Card className="rounded-2xl lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
@@ -363,25 +417,40 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
             <div className="flex flex-col divide-y divide-border/60">
               {marketStatus.map((status) => {
                 const Icon = status.icon;
+                const isMonthlyCollections = status.label === "Monthly Collections";
                 return (
-                  <div key={status.label} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+                  <button
+                    key={status.label}
+                    onClick={() => isMonthlyCollections && setShowMonthlyCollections(!showMonthlyCollections)}
+                    disabled={!isMonthlyCollections}
+                    className={`flex items-start gap-3 py-3 first:pt-0 last:pb-0 transition ${
+                      isMonthlyCollections
+                        ? "cursor-pointer hover:bg-muted/50 rounded px-2 -mx-2"
+                        : "cursor-default"
+                    }`}
+                  >
                     <span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
                       <Icon className="h-4 w-4" />
                     </span>
-                    <div className="flex-1 space-y-1">
+                    <div className="flex-1 space-y-1 text-left">
                       <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
                         {status.label}
                       </p>
                       <p className="text-sm font-semibold text-foreground">{status.value}</p>
                       <p className="text-xs text-muted-foreground">{status.description}</p>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* Monthly Collections */}
+      {showMonthlyCollections && (
+        <MonthlyCollections stalls={stalls} invoices={unpaidInvoices} />
+      )}
     </div>
   );
 };

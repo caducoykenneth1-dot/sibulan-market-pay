@@ -391,11 +391,12 @@ export const UnpaidDues = () => {
 
   if (viewMode === "invoice" && selectedInvoice) {
     return (
-      <div className="space-y-6">
-        <div className="flex items-center gap-4">
+      <div className="space-y-3 md:space-y-6">
+        <div className="flex items-start gap-2 md:gap-4">
           <Button
             variant="outline"
             size="icon"
+            className="mt-1 flex-shrink-0"
             onClick={() => {
               setSelectedInvoice(null);
               setViewMode("table");
@@ -403,17 +404,17 @@ export const UnpaidDues = () => {
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div>
-            <h1 className="text-3xl font-bold">Invoice Details</h1>
-            <p className="text-muted-foreground">
+          <div className="min-w-0">
+            <h1 className="text-xl md:text-3xl font-bold">Invoice Details</h1>
+            <p className="text-xs md:text-sm text-muted-foreground">
               Review and confirm payment for {selectedInvoice.vendor_name}.
             </p>
           </div>
         </div>
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-destructive" />
+            <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+              <AlertCircle className="h-4 w-4 md:h-5 md:w-5 text-destructive" />
               Unpaid Invoice
             </CardTitle>
           </CardHeader>
@@ -428,9 +429,9 @@ export const UnpaidDues = () => {
               </p>
             )}
           </CardContent>
-          <DialogFooter className="px-6 pb-6">
+          <DialogFooter className="px-4 md:px-6 pb-4 md:pb-6">
             <Button
-              className="w-full"
+              className="w-full text-sm md:text-base"
               disabled={marking === selectedInvoice?.id}
               onClick={() => selectedInvoice && markAsPaid(selectedInvoice.id)}
             >
@@ -448,9 +449,9 @@ export const UnpaidDues = () => {
 
   if (viewMode === "table") {
     return (
-      <div className="space-y-6">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="flex items-center gap-4">
+      <div className="space-y-4 md:space-y-6">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="icon"
@@ -462,22 +463,22 @@ export const UnpaidDues = () => {
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
-            <div>
-              <h1 className="text-3xl font-bold">{typeFilter} Dues</h1>
-              <p className="text-muted-foreground">
+            <div className="flex-1 min-w-0">
+              <h1 className="text-2xl md:text-3xl font-bold truncate">{typeFilter} Dues</h1>
+              <p className="text-xs md:text-sm text-muted-foreground truncate">
                 {selectedMonthLabel
                   ? `Showing dues for ${selectedMonthLabel}`
                   : "Showing all unpaid dues for this stall type."}
               </p>
             </div>
           </div>
-          <div className="relative w-full md:max-w-xs">
+          <div className="relative w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search by vendor or stall..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9"
+              className="pl-9 text-sm"
             />
           </div>
         </div>
@@ -488,40 +489,40 @@ export const UnpaidDues = () => {
 
   // Default to dashboard view
   return (
-    <div className="space-y-6">
-      <div className="space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold">Unpaid Dues</h1>
-          <p className="text-muted-foreground">Review and manage outstanding payments.</p>
+    <div className="space-y-4 md:space-y-6">
+      <div className="space-y-3 md:space-y-4">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl md:text-3xl font-bold">Unpaid Dues</h1>
+          <p className="text-xs md:text-sm text-muted-foreground">Review and manage outstanding payments.</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={fetchUnpaid} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          <Button size="sm" onClick={fetchUnpaid} disabled={loading} className="whitespace-nowrap text-xs md:text-sm">
+            <RefreshCw className={`mr-2 h-3 w-3 md:h-4 md:w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 xs:grid-cols-2 gap-3 md:gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Unpaid Dues</CardTitle>
+            <CardTitle className="text-xs md:text-sm font-medium">Total Unpaid Dues</CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{summary.count}</div>
+            <div className="text-xl md:text-2xl font-bold">{summary.count}</div>
             <p className="text-xs text-muted-foreground">invoices require attention</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Amount Due</CardTitle>
+            <CardTitle className="text-xs md:text-sm font-medium">Total Amount Due</CardTitle>
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-destructive">₱{summary.totalAmount.toLocaleString()}</div>
+            <div className="text-xl md:text-2xl font-bold text-destructive">₱{summary.totalAmount.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">outstanding balance</p>
           </CardContent>
         </Card>
@@ -529,10 +530,10 @@ export const UnpaidDues = () => {
 
       {monthSummaries.length > 0 && (
         <Card>
-          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle>Overdue Months</CardTitle>
-              <CardDescription>
+          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pb-3">
+            <div className="min-w-0">
+              <CardTitle className="text-base md:text-lg">Overdue Months</CardTitle>
+              <CardDescription className="text-xs md:text-sm mt-1">
                 Select a month to focus on stalls with unpaid dues during that period.
               </CardDescription>
             </div>
@@ -540,13 +541,14 @@ export const UnpaidDues = () => {
               <Button
                 variant="ghost"
                 size="sm"
+                className="text-xs md:text-sm w-full sm:w-auto"
                 onClick={() => setSelectedMonthKey(null)}
               >
                 Clear month filter
               </Button>
             )}
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <CardContent className="grid gap-2 xs:gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {monthSummaries.map((summary) => {
               const isActive = summary.key === selectedMonthKey;
 
@@ -555,37 +557,37 @@ export const UnpaidDues = () => {
                   key={summary.key}
                   type="button"
                   onClick={() => handleMonthClick(summary.key)}
-                  className={`flex items-center justify-between rounded-lg border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+                  className={`flex items-center justify-between rounded-lg border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary text-sm ${
                     isActive
                       ? "border-primary bg-primary/10"
                       : "hover:bg-muted/40"
                   }`}
                   aria-pressed={isActive}
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
                     <div
-                      className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                      className={`flex h-8 w-8 items-center justify-center rounded-full flex-shrink-0 ${
                         isActive ? "bg-primary" : "bg-primary/10"
                       }`}
                     >
                       <CalendarDays
-                        className={`h-5 w-5 ${
+                        className={`h-4 w-4 ${
                           isActive
                             ? "text-primary-foreground"
                             : "text-primary"
                         }`}
                       />
                     </div>
-                    <div>
-                      <p className="font-medium">{summary.label}</p>
+                    <div className="min-w-0">
+                      <p className="font-medium text-xs md:text-sm truncate">{summary.label}</p>
                       <p className="text-xs text-muted-foreground">
                         {summary.count}{" "}
                         {summary.count === 1 ? "stall" : "stalls"}
                       </p>
                     </div>
                   </div>
-                  <div className="text-right text-sm font-semibold text-destructive">
-                    PHP {summary.total.toLocaleString()}
+                  <div className="text-right text-xs md:text-sm font-semibold text-destructive flex-shrink-0 ml-2">
+                    ₱{summary.total.toLocaleString()}
                   </div>
                 </button>
               );
@@ -597,10 +599,10 @@ export const UnpaidDues = () => {
       {/* Section Selection */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold">Choose Section</CardTitle>
+          <CardTitle className="text-sm md:text-base font-semibold">Choose Section</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col items-center gap-3">
-          <div className="flex flex-wrap justify-center gap-2">
+        <CardContent className="flex flex-col items-center gap-2">
+          <div className="flex flex-wrap justify-center gap-2 w-full">
             {[
               { label: "All", value: "all" },
               { label: "Dry", value: "Dry Section" },
@@ -609,7 +611,7 @@ export const UnpaidDues = () => {
               <Button
                 key={opt.value}
                 size="sm"
-                className="h-9 px-4 min-w-[80px] rounded-full whitespace-nowrap"
+                className="h-8 md:h-9 px-3 md:px-4 text-xs md:text-sm rounded-full whitespace-nowrap"
                 variant={sectionFilter === opt.value ? "default" : "outline"}
                 onClick={() => handleSectionSelect(opt.value as "all" | "Dry Section" | "Wet Section")}
               >
@@ -624,34 +626,38 @@ export const UnpaidDues = () => {
       {filtersVisible && availableStallTypes.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base font-semibold">
+            <CardTitle className="text-sm md:text-base font-semibold">
               Filter by Stall Type
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            {availableStallTypes.map((type) => (
-              <Button
-                key={type}
-                variant={typeFilter === type ? "default" : "outline"}
-                onClick={() => handleTypeClick(type)}
-              >
-                {type}
-              </Button>
-            ))}
+          <CardContent className="overflow-x-auto -mx-6 px-6">
+            <div className="flex flex-wrap gap-2 md:gap-3 pb-2">
+              {availableStallTypes.map((type) => (
+                <Button
+                  key={type}
+                  size="sm"
+                  className="text-xs md:text-sm h-8 md:h-9 px-2 md:px-3 whitespace-nowrap flex-shrink-0"
+                  variant={typeFilter === type ? "default" : "outline"}
+                  onClick={() => handleTypeClick(type)}
+                >
+                  {type}
+                </Button>
+              ))}
+            </div>
           </CardContent>
         </Card>
       )}
 
       {/* Search and Type Filters */}
       <Card>
-        <CardContent className="grid gap-4 md:grid-cols-2 pt-6">
+        <CardContent className="grid gap-3 md:gap-4 grid-cols-1 md:grid-cols-2 pt-4 md:pt-6">
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search by vendor or stall name..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
+              className="pl-10 text-sm"
             />
           </div>
         </CardContent>

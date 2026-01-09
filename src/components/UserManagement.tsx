@@ -68,7 +68,7 @@ export const UserManagement = ({
     address: "",
     password: "",
     confirmPassword: "",
-    market: "",
+    market: "unassigned",
     role: "collector" as AccountRole,
   });
   const [error, setError] = React.useState("");
@@ -298,7 +298,7 @@ export const UserManagement = ({
       address: "",
       password: "",
       confirmPassword: "",
-      market: "",
+      market: "unassigned",
       role: "collector",
     });
     onAccountsChange();
@@ -386,7 +386,7 @@ export const UserManagement = ({
     });
   };
 
-  // ✅ Save all pending role updates
+  // ✅ Save all pending role updates and notify collectors
   const handleSaveChanges = async () => {
     const updates = Object.entries(pendingChanges).filter(
       ([, change]) =>
@@ -414,19 +414,25 @@ export const UserManagement = ({
 
     for (const [user_id, change] of updates) {
       const payload: Record<string, any> = { user_id };
+      let notificationMessage = "";
+      const account = accounts.find((acc) => acc.id === user_id);
+      const collectorName = account?.user_metadata?.full_name || account?.email || "Collector";
 
       if (typeof change.role !== "undefined") {
         payload.role = change.role;
+        notificationMessage += `Role updated to ${change.role}. `;
       }
 
       if (typeof change.section !== "undefined") {
         const normalized = change.section?.trim();
         payload.market_section = normalized && normalized.length > 0 ? normalized : null;
+        notificationMessage += `Assigned to ${normalized || "unassigned"} section. `;
       }
 
       if (typeof change.stallType !== "undefined") {
         const normalized = change.stallType?.trim();
         payload.market_type = normalized && normalized.length > 0 ? normalized : null;
+        notificationMessage += `Assigned to stall type: ${normalized || "all types"}. `;
       }
 
       if (
@@ -453,13 +459,32 @@ export const UserManagement = ({
           description: err?.message || "Unable to update account.",
           variant: "destructive",
         });
+        continue;
+      }
+
+      // 📢 Send notification to the collector
+      const { error: notificationError } = await supabase
+        .from("notifications")
+        .insert({
+          user_id: user_id,
+          message: `You have been assigned new duties: ${notificationMessage.trim()}`,
+          type: "assignment",
+          read: false,
+          created_at: new Date().toISOString(),
+        });
+
+      if (notificationError) {
+        console.error("Failed to create notification:", notificationError);
       }
     }
 
     setPendingChanges({});
     setLoading(false);
     onAccountsChange();
-    toast({ title: "Account assignments updated" });
+    toast({ 
+      title: "Account assignments updated",
+      description: "Collectors have been notified of their new assignments."
+    });
   };
 
   // ✅ Delete user (collectors only)
@@ -563,7 +588,7 @@ export const UserManagement = ({
                   <SelectValue placeholder="Assign a market" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Unassigned</SelectItem>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
                   {MARKET_OPTIONS.map((market) => (
                     <SelectItem key={market} value={market}>{market}</SelectItem>
                   ))}

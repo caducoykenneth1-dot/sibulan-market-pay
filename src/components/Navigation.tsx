@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Users,
   Calendar,
+  Bell,
 } from "lucide-react";
 
 interface NavigationProps {
@@ -22,6 +23,8 @@ interface NavigationProps {
   userName?: string;
   userRole?: string;
   userUsername?: string;
+  unreadNotifications?: number;
+  newCollections?: number;
 }
 
 const collectorNav = [
@@ -29,6 +32,7 @@ const collectorNav = [
   // { id: "scheduled", label: "Scheduled Collections", icon: Calendar },
   { id: "collect", label: "Collect", icon: Receipt },
   { id: "history", label: "History", icon: History },
+  { id: "notifications", label: "Notifications", icon: Bell },
   { id: "stalls", label: "Stalls", icon: Building2 },
   { id: "unpaid", label: "Unpaid", icon: AlertCircle },
   { id: "archived", label: "Archived", icon: Archive },
@@ -51,6 +55,8 @@ export const Navigation = ({
   userName,
   userRole,
   userUsername,
+  unreadNotifications = 0,
+  newCollections = 0,
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const navItems = userRole === "collector" ? collectorNav : adminNav;
@@ -69,32 +75,41 @@ export const Navigation = ({
     <>
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg">
-        <div className="grid grid-cols-4 items-center gap-2 px-2 py-2">
+        <div className="grid grid-cols-5 items-center gap-2 px-2 py-2">
           {[
             { id: "dashboard", label: "Dashboard", icon: Home },
+            { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
             { id: "stalls", label: "Stalls", icon: Building2 },
             { id: "collect", label: "Collect", icon: Receipt },
             { id: "archived", label: "Archived", icon: Archive },
           ].map((item) => {
             const Icon = item.icon;
             const active = currentPage === item.id;
+            const badgeCount = item.badge || 0;
             return (
               <button
                 key={item.id}
                 onClick={() => handleMobileNav(item.id)}
-                className={`flex flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-xs font-medium transition-all ${
+                className={`flex flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-xs font-medium transition-all relative ${
                   active
                     ? "text-primary bg-primary/10 font-semibold"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
                 }`}
               >
-                <Icon
-                  className={`h-5 w-5 transition-transform duration-200 ${
-                    active
-                      ? "scale-110"
-                      : "text-muted-foreground group-hover:text-foreground"
-                  }`}
-                />
+                <div className="relative">
+                  <Icon
+                    className={`h-5 w-5 transition-transform duration-200 ${
+                      active
+                        ? "scale-110"
+                        : "text-muted-foreground group-hover:text-foreground"
+                    }`}
+                  />
+                  {badgeCount > 0 && (
+                    <div className="absolute -top-2 -right-2 bg-destructive text-white rounded-full w-4 h-4 flex items-center justify-center text-xs font-bold">
+                      {badgeCount > 9 ? '9+' : badgeCount}
+                    </div>
+                  )}
+                </div>
               </button>
             );
           })}
@@ -156,11 +171,19 @@ export const Navigation = ({
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = currentPage === item.id;
+                let badgeCount = 0;
+                
+                if (item.id === "notifications") {
+                  badgeCount = unreadNotifications;
+                } else if (item.id === "history") {
+                  badgeCount = newCollections;
+                }
+                
                 return (
                   <Button
                     key={item.id}
                     variant={isActive ? "default" : "ghost"}
-                    className={`group w-full justify-start items-center gap-2.5 text-sm px-3 py-2 h-auto ${
+                    className={`group w-full justify-start items-center gap-2.5 text-sm px-3 py-2 h-auto relative ${
                       isActive
                         ? "font-semibold"
                         : "text-muted-foreground hover:text-foreground"
@@ -169,13 +192,20 @@ export const Navigation = ({
                       handleMobileNav(item.id);
                     }}
                   >
-                    <Icon
-                      className={`h-5 w-5 transition-transform duration-200 group-hover:scale-110 ${
-                        isActive
-                          ? ""
-                          : "text-muted-foreground group-hover:text-foreground"
-                      }`}
-                    />
+                    <div className="relative">
+                      <Icon
+                        className={`h-5 w-5 transition-transform duration-200 group-hover:scale-110 ${
+                          isActive
+                            ? ""
+                            : "text-muted-foreground group-hover:text-foreground"
+                        }`}
+                      />
+                      {badgeCount > 0 && (
+                        <div className="absolute -top-2 -right-2 bg-destructive text-white rounded-full w-4 h-4 flex items-center justify-center text-xs font-bold">
+                          {badgeCount > 9 ? '9+' : badgeCount}
+                        </div>
+                      )}
+                    </div>
                     {item.label}
                   </Button>
                 );

@@ -1,235 +1,77 @@
-// File: supabase/functions/user-management/index.ts
+// supabase/functions/send-sms-receipt/index.ts
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-
-// ✅ CORS headers
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-}
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+const PHILSMS_API_TOKEN = Deno.env.get("PHILSMS_API_TOKEN");
+
+
+serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
 
   try {
-    // ✅ Validate caller (must be logged-in admin)
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      {
-        global: { headers: { Authorization: req.headers.get('Authorization')! } },
-        auth: { autoRefreshToken: false, persistSession: false },
-      }
-    )
+    const { contactNumber, amount, stallName } = await req.json();
 
-    const { data: { user } } = await supabaseAdmin.auth.getUser()
-    if (!user || user.user_metadata?.role !== 'admin') {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+    if (!contactNumber || !amount || !stallName) {
+      throw new Error("Missing required fields.");
     }
 
-    // ✅ Admin client with service role
-    const supabaseService = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
+    // Format number to 639XXXXXXXXX
+    let recipient = contactNumber.toString().trim();
+    if (recipient.startsWith("09")) recipient = "63" + recipient.substring(1);
+    else if (recipient.startsWith("9") && recipient.length === 10) recipient = "63" + recipient;
+    else if (recipient.startsWith("63")) recipient = recipient;
+    else throw new Error("Invalid phone number format.");
 
-    // ✅ LIST USERS (HIDE ADMINS)
-    if (req.method === 'GET') {
-      const { data: { users }, error } = await supabaseService.auth.admin.listUsers()
-      if (error) throw error
+    const payload = {
+      recipients: [recipient],
+      message: `Thank you! Payment received for ${stallName}. Amount: PHP ${amount}.`,
+      sender_id: "MARKET", // make sure this is approved
+    };
 
-      // ✅ Filter out all admins
-      const collectorsOnly = users.filter(u => {
-        const role =
-          u.user_metadata?.role ||
-          u.raw_user_meta_data?.role ||
-          'collector'
-        return role !== 'admin'
-      })
+    console.log("Sending SMS with payload:", payload);
 
-      return new Response(JSON.stringify({ users: collectorsOnly }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
+    const response = await fetch("https://app.philsms.com/api/v3/sms/send", {
+  method: "POST",
+  headers: {
+    "Authorization": `Bearer ${PHILSMS_API_TOKEN}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify(payload),
+});
+
+
+    console.log("PhilSMS response status:", response.status);
+    const responseText = await response.text();
+    console.log("PhilSMS response body:", responseText);
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = { raw: responseText };
     }
 
-    // ✅ CREATE USER (Collector only)
-    if (req.method === 'POST') {
-      const { email, password, full_name, role, market, phone, address } = await req.json()
+    return new Response(JSON.stringify({ success: true, data }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
 
-      if (role === 'admin') {
-        return new Response(JSON.stringify({ error: 'Cannot create admin users.' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
-
-      if (typeof phone !== 'string' || !/^\d{11}$/.test(phone.trim())) {
-        return new Response(JSON.stringify({ error: 'Contact number must be exactly 11 digits.' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
-
-      const normalizedAddress = typeof address === 'string' ? address.trim() : ''
-      if (!normalizedAddress) {
-        return new Response(JSON.stringify({ error: 'Address is required.' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
-
-      const metadata: Record<string, unknown> = {
-        full_name,
-        role: 'collector',
-        phone: phone.trim(),
-        address: normalizedAddress,
-      }
-
-      const normalizedMarket = typeof market === 'string' ? market.trim() : ''
-      if (normalizedMarket.length > 0) {
-        metadata.market = normalizedMarket
-      }
-
-      const { data, error } = await supabaseService.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: metadata,
-      })
-      if (error) throw error
-
-      return new Response(JSON.stringify(data), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 201,
-      })
-    }
-
-    // �o. UPDATE USER ROLE / MARKET ASSIGNMENT
-    if (req.method === 'PATCH') {
-      const body = await req.json()
-      const { user_id, role, market_section, market_type } = body
-
-      if (!user_id) {
-        return new Response(JSON.stringify({ error: 'Missing user_id' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
-
-      if (
-        typeof role === 'undefined' &&
-        typeof market_section === 'undefined' &&
-        typeof market_type === 'undefined'
-      ) {
-        return new Response(JSON.stringify({ error: 'No changes provided' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
-
-      const { data: { user: target } } = await supabaseService.auth.admin.getUserById(user_id)
-
-      if (target.user_metadata?.role === 'admin') {
-        return new Response(JSON.stringify({ error: 'Cannot modify admin users.' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
-
-      const existingMeta = target.user_metadata ?? target.raw_user_meta_data ?? {}
-      const updatedMeta: Record<string, unknown> = { ...existingMeta }
-
-      if (typeof role === 'string' && role.length > 0) {
-        updatedMeta.role = role
-      }
-
-      const normalizeValue = (value: unknown) =>
-        typeof value === 'string' ? value.trim() : value === null ? null : undefined
-
-      const normalizedSection = normalizeValue(market_section)
-      const normalizedType = normalizeValue(market_type)
-
-      if (typeof market_section !== 'undefined') {
-        if (typeof normalizedSection === 'string' && normalizedSection.length > 0) {
-          updatedMeta.market_section = normalizedSection
-        } else {
-          delete updatedMeta.market_section
-        }
-      }
-
-      if (typeof market_type !== 'undefined') {
-        if (typeof normalizedType === 'string' && normalizedType.length > 0) {
-          updatedMeta.market_type = normalizedType
-        } else {
-          delete updatedMeta.market_type
-        }
-      }
-
-      if (
-        typeof market_section !== 'undefined' ||
-        typeof market_type !== 'undefined'
-      ) {
-        const combined = [
-          typeof updatedMeta.market_section === 'string' ? updatedMeta.market_section : null,
-          typeof updatedMeta.market_type === 'string' ? updatedMeta.market_type : null,
-        ]
-          .filter((value): value is string => Boolean(value && value.length > 0))
-          .join(' • ')
-
-        if (combined) {
-          updatedMeta.market = combined
-        } else {
-          delete updatedMeta.market
-        }
-      }
-
-      const { data, error } = await supabaseService.auth.admin.updateUserById(user_id, {
-        user_metadata: updatedMeta,
-      })
-      if (error) throw error
-
-      return new Response(JSON.stringify(data), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
-    // ✅ DELETE USER
-    if (req.method === 'DELETE') {
-      const url = new URL(req.url)
-      const userId = url.pathname.split('/').pop()
-
-      const { data: { user: target } } = await supabaseService.auth.admin.getUserById(userId!)
-      if (target.user_metadata?.role === 'admin') {
-        return new Response(JSON.stringify({ error: 'Cannot delete admin users.' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        })
-      }
-
-      await supabaseService.auth.admin.deleteUser(userId!)
-      return new Response(JSON.stringify({ message: 'User deleted' }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
-
-    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
-      status: 405,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
-
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+  } catch (err) {
+    console.error("SMS Function Error:", err);
+    return new Response(JSON.stringify({ error: true, message: err.message }), {
+      status: 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
-})
+});

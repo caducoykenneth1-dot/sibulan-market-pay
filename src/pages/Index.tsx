@@ -8,6 +8,7 @@ import { Reports } from "@/components/Reports";
 import { UserManagement, type Account } from "@/components/UserManagement";
 import { ArchivedStalls } from "@/components/ArchivedStalls";
 import { UnpaidDues } from "@/components/UnpaidDues";
+import { NotificationsPanel } from "@/components/NotificationsPanel";
 import { type Invoice } from "@/components/UnpaidDues";
 import { CollectorProfile } from "@/components/CollectorProfile";
 import {
@@ -68,6 +69,8 @@ const Index = () => {
   const [dataVersion, setDataVersion] = useState(0);
   const [currentPage, setCurrentPage] = useState("dashboard");
   const [user, setUser] = useState<any>(null);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [newCollections, setNewCollections] = useState(0);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
     if (typeof localStorage === "undefined") return null;
     return localStorage.getItem("collectorAvatarUrl");
@@ -89,8 +92,10 @@ const Index = () => {
     role: "collector" as AccountRole,
   });
   const [forgotPasswordForm, setForgotPasswordForm] = useState({
-    username: "",
+    phone: "",
+    code: "",
   });
+  const [forgotStage, setForgotStage] = useState<"request" | "verify">("request");
   const [resetPasswordForm, setResetPasswordForm] = useState({
     password: "",
     confirmPassword: "",
@@ -123,6 +128,116 @@ const Index = () => {
 
     return () => authListener.subscription.unsubscribe();
   }, []);
+
+  // ✅ Fetch unread notifications badge count
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const fetchUnreadCount = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("notifications")
+          .select("id", { count: "exact" })
+          .eq("user_id", user.id)
+          .eq("read", false);
+
+        if (!error && data) {
+          setUnreadNotifications(data.length);
+        }
+      } catch (err) {
+        console.error("Error fetching notifications:", err);
+      }
+    };
+
+    fetchUnreadCount();
+
+    // Subscribe to notification changes
+    const subscription = supabase
+      .channel(`notifications:${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          fetchUnreadCount();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [user?.id]);
+
+  // ✅ Mark notifications as read when user opens notifications page
+  useEffect(() => {
+    if (currentPage === "notifications" && user?.id) {
+      const markAsRead = async () => {
+        try {
+          console.log("🔔 Marking all unread notifications as read...");
+          
+          // First, fetch all unread notifications to see what we're updating
+          const { data: unreadBefore } = await supabase
+            .from("notifications")
+            .select("id, read")
+            .eq("user_id", user.id)
+            .eq("read", false);
+          
+          console.log("📋 Unread notifications BEFORE update:", unreadBefore);
+          
+          // Now update them
+          const { data: updateResult, error } = await supabase
+            .from("notifications")
+            .update({ read: true })
+            .eq("user_id", user.id)
+            .eq("read", false)
+            .select();
+          
+          if (error) {
+            console.error("❌ Error marking notifications as read:", error);
+            console.error("Error details:", error.details, error.message);
+          } else {
+            console.log("✅ Updated notifications:", updateResult);
+            
+            // Verify the update actually happened
+            const { data: unreadAfter, error: refetchError } = await supabase
+              .from("notifications")
+              .select("id, read")
+              .eq("user_id", user.id)
+              .eq("read", false);
+            
+            if (refetchError) {
+              console.error("❌ Error refetching:", refetchError);
+            } else {
+              console.log("📋 Unread notifications AFTER update:", unreadAfter);
+              setUnreadNotifications(unreadAfter?.length || 0);
+            }
+          }
+        } catch (err) {
+          console.error("❌ Exception in markAsRead:", err);
+        }
+      };
+      markAsRead();
+    }
+  }, [currentPage, user?.id]);
+
+  // ✅ Clear collections badge when user opens history page
+  useEffect(() => {
+    if (currentPage === "history") {
+      setNewCollections(0);
+    }
+  }, [currentPage]);
+  useEffect(() => {
+    const today = new Date().toISOString().split("T")[0];
+    const todaysPaid = allInvoices.filter(
+      (inv) => inv.status === "paid" && inv.paid_at?.startsWith(today)
+    );
+    setNewCollections(todaysPaid.length);
+  }, [allInvoices]);
 
   // ✅ Fetch all user accounts for the admin via Edge Function (secure)
   useEffect(() => {
@@ -397,25 +512,80 @@ const Index = () => {
     event.preventDefault();
     resetFeedback();
 
-    const username = forgotPasswordForm.username.trim();
-    if (!username) {
-      setAuthError("Enter your username to receive a reset link.");
+    const phone = forgotPasswordForm.phone.trim();
+    if (!phone) {
+      setAuthError("Enter your phone number to receive a reset code.");
       return;
     }
 
-    const { error } = await supabase.auth.resetPasswordForEmail(
-      `${username}${DUMMY_EMAIL_DOMAIN}`,
-      {
-        redirectTo: window.location.origin,
+    try {
+      const res = await fetch("/api/send-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setAuthError(result?.message || "Failed to send reset code.");
+        return;
       }
-    );
+      setAuthMessage(
+        "If this number is registered, an SMS with a code has been sent. It may take a minute."
+      );
+      setForgotStage("verify");
+    } catch (e: any) {
+      setAuthError(e?.message ?? "Network error sending SMS.");
+    }
+  };
 
-    if (error) {
-      setAuthError(error.message);
+  const handleVerifyReset = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    resetFeedback();
+
+    const phone = forgotPasswordForm.phone.trim();
+    const code = forgotPasswordForm.code.trim();
+    const password = resetPasswordForm.password.trim();
+    const confirmPassword = resetPasswordForm.confirmPassword.trim();
+
+    if (!code) {
+      setAuthError("Enter the verification code you received.");
       return;
     }
 
-    setAuthMessage("A password reset link has been sent to your email.");
+    if (!password || !confirmPassword) {
+      setAuthError("Complete both password fields.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setAuthError("Password must be at least 6 characters long.");
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/verify-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, code, newPassword: password }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setAuthError(result?.message || "Verification failed.");
+        return;
+      }
+      setAuthMessage("Password updated. You can now sign in.");
+      setAuthMode("login");
+      setForgotStage("request");
+      setForgotPasswordForm({ phone: "", code: "" });
+      setResetPasswordForm({ password: "", confirmPassword: "" });
+    } catch (e: any) {
+      setAuthError(e?.message ?? "Network error verifying code.");
+    }
   };
 
   const handleResetPassword = async (
@@ -509,6 +679,8 @@ const Index = () => {
         );
       case "unpaid":
         return <UnpaidDues />;
+      case "notifications":
+        return <NotificationsPanel userId={user?.id} />;
       case "profile":
         return (
           <CollectorProfile
@@ -847,46 +1019,151 @@ const Index = () => {
             )}
 
             {authMode === "forgot_password" && (
-              <form className="space-y-4" onSubmit={handleForgotPassword}>
-                <div className="space-y-1">
-                  <Label htmlFor="forgot-username">Username</Label>
-                  <Input
-                    id="forgot-username"
-                    value={forgotPasswordForm.username}
-                    onChange={(event) =>
-                      setForgotPasswordForm({
-                        username: event.target.value,
-                      })
-                    }
-                    autoComplete="username"
-                    required
-                  />
-                </div>
+              <>
+                {forgotStage === "request" ? (
+                  <form className="space-y-4" onSubmit={handleForgotPassword}>
+                    <div className="space-y-1">
+                      <Label htmlFor="forgot-phone">Phone number</Label>
+                      <Input
+                        id="forgot-phone"
+                        value={forgotPasswordForm.phone}
+                        inputMode="numeric"
+                        maxLength={11}
+                        onChange={(event) =>
+                          setForgotPasswordForm((prev) => ({
+                            ...prev,
+                            phone: event.target.value.replace(/\D/g, "").slice(0, 11),
+                          }))
+                        }
+                        placeholder="09XXXXXXXXX"
+                        required
+                      />
+                    </div>
 
-                {authError && (
-                  <p className="text-sm text-destructive">{authError}</p>
-                )}
-                {authMessage && (
-                  <p className="text-sm text-emerald-600">{authMessage}</p>
-                )}
+                    {authError && <p className="text-sm text-destructive">{authError}</p>}
+                    {authMessage && <p className="text-sm text-emerald-600">{authMessage}</p>}
 
-                <Button type="submit" className="w-full">
-                  Send reset link
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  Remembered your password?{" "}
-                  <button
-                    type="button"
-                    className="text-primary underline"
-                    onClick={() => {
-                      resetFeedback();
-                      setAuthMode("login");
-                    }}
-                  >
-                    Back to sign in
-                  </button>
-                </p>
-              </form>
+                    <Button type="submit" className="w-full">
+                      Send code
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center">
+                      Remembered your password?{" "}
+                      <button
+                        type="button"
+                        className="text-primary underline"
+                        onClick={() => {
+                          resetFeedback();
+                          setAuthMode("login");
+                        }}
+                      >
+                        Back to sign in
+                      </button>
+                    </p>
+                  </form>
+                ) : (
+                  <form className="space-y-4" onSubmit={handleVerifyReset}>
+                    <div className="space-y-1">
+                      <Label htmlFor="forgot-code">Verification code</Label>
+                      <Input
+                        id="forgot-code"
+                        value={forgotPasswordForm.code}
+                        onChange={(event) =>
+                          setForgotPasswordForm((prev) => ({
+                            ...prev,
+                            code: event.target.value.replace(/\D/g, "").slice(0, 6),
+                          }))
+                        }
+                        inputMode="numeric"
+                        maxLength={6}
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="reset-password">New password</Label>
+                      <div className="relative">
+                        <Input
+                          id="reset-password"
+                          type={resetPasswordVisible ? "text" : "password"}
+                          value={resetPasswordForm.password}
+                          onChange={(event) =>
+                            setResetPasswordForm((prev) => ({
+                              ...prev,
+                              password: event.target.value,
+                            }))
+                          }
+                          className="pr-10"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setResetPasswordVisible((prev) => !prev)}
+                          className="absolute inset-y-0 right-2 flex items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition hover:bg-muted/80 hover:text-foreground"
+                          aria-label={resetPasswordVisible ? "Hide password" : "Show password"}
+                        >
+                          {resetPasswordVisible ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                          <span>{resetPasswordVisible ? "Hide" : "Show"}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="reset-confirm">Confirm new password</Label>
+                      <div className="relative">
+                        <Input
+                          id="reset-confirm"
+                          type={resetConfirmVisible ? "text" : "password"}
+                          value={resetPasswordForm.confirmPassword}
+                          onChange={(event) =>
+                            setResetPasswordForm((prev) => ({
+                              ...prev,
+                              confirmPassword: event.target.value,
+                            }))
+                          }
+                          className="pr-10"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setResetConfirmVisible((prev) => !prev)}
+                          className="absolute inset-y-0 right-2 flex items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition hover:bg-muted/80 hover:text-foreground"
+                          aria-label={resetConfirmVisible ? "Hide password" : "Show password"}
+                        >
+                          {resetConfirmVisible ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                          <span>{resetConfirmVisible ? "Hide" : "Show"}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {authError && <p className="text-sm text-destructive">{authError}</p>}
+                    {authMessage && <p className="text-sm text-emerald-600">{authMessage}</p>}
+
+                    <Button type="submit" className="w-full">
+                      Verify & set new password
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center">
+                      <button
+                        type="button"
+                        className="text-primary underline"
+                        onClick={() => {
+                          resetFeedback();
+                          setForgotStage("request");
+                        }}
+                      >
+                        Back
+                      </button>
+                    </p>
+                  </form>
+                )}
+              </>
             )}
 
             {authMode === "reset_password" && (
@@ -1007,6 +1284,8 @@ const Index = () => {
             userName={user?.user_metadata?.full_name}
             userRole={user?.user_metadata?.role}
             userUsername={user?.email?.split("@")[0]}
+            unreadNotifications={unreadNotifications}
+            newCollections={newCollections}
           />
         </div>
 

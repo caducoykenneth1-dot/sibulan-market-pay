@@ -99,6 +99,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "paid" | "unpaid">("paid");
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
@@ -107,12 +108,19 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   const payments = useMemo(
     () =>
       invoices
-        .filter((inv) => inv.status === "paid" && inv.paid_at)
+        .filter((inv) => {
+          if (statusFilter === "paid") return inv.status === "paid" && inv.paid_at;
+          if (statusFilter === "unpaid") return inv.status === "unpaid";
+          return true;
+        })
         .sort(
-          (a, b) =>
-            new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime()
+          (a, b) => {
+            const aTime = a.paid_at ? new Date(a.paid_at).getTime() : 0;
+            const bTime = b.paid_at ? new Date(b.paid_at).getTime() : 0;
+            return bTime - aTime;
+          }
         ),
-    [invoices]
+    [invoices, statusFilter]
   );
 
   const stallTypeOptions = useMemo(() => {
@@ -313,7 +321,33 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
 
       {/* Search + Filters */}
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="pt-6 space-y-4">
+          {/* Status Filter Buttons */}
+          <div className="flex gap-2">
+            <Button
+              variant={statusFilter === "all" ? "default" : "outline"}
+              onClick={() => setStatusFilter("all")}
+              className="flex-1 sm:flex-none"
+            >
+              All ({invoices.length})
+            </Button>
+            <Button
+              variant={statusFilter === "paid" ? "default" : "outline"}
+              onClick={() => setStatusFilter("paid")}
+              className="flex-1 sm:flex-none bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+            >
+              ✓ Paid ({invoices.filter(inv => inv.status === "paid").length})
+            </Button>
+            <Button
+              variant={statusFilter === "unpaid" ? "default" : "outline"}
+              onClick={() => setStatusFilter("unpaid")}
+              className="flex-1 sm:flex-none bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+            >
+              ✗ Unpaid ({invoices.filter(inv => inv.status === "unpaid").length})
+            </Button>
+          </div>
+
+          {/* Search + Type Filter */}
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />

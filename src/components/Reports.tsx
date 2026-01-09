@@ -387,16 +387,6 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
               <SelectItem value={new Date().toLocaleString('default', { month: 'long' })}>{new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}</SelectItem>
             </SelectContent>
           </Select>
-          <Button onClick={handleExport} disabled={isDownloading} variant="secondary">
-            {isDownloading ? (
-              "Preparing..."
-            ) : (
-              <>
-                <Download className="mr-2 h-4 w-4" />
-                Export PDF
-              </>
-            )}
-          </Button>
         </div>
       </div>
 

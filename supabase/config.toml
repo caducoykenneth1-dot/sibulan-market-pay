@@ -7,3 +7,7 @@
 verify_jwt = false
 import_map = "functions/user-management/import_map.json"
 entrypoint = "functions/user-management/index.ts"
+
+[functions.send-sms-receipt]
+verify_jwt = false
+entrypoint = "functions/send-sms-receipt/index.ts"

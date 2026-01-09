@@ -363,19 +363,30 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
           stallName: stallLabel,
         };
 
-        const { error: smsError } = await supabase.functions.invoke("send-sms-receipt", {
+        const { data: smsData, error: smsError } = await supabase.functions.invoke("send-sms-receipt", {
           body: JSON.stringify(smsPayload),
           headers: { "Content-Type": "application/json" },
         });
 
         if (smsError) {
           console.error("SMS Function Error:", smsError);
+          console.error("SMS Error Details:", JSON.stringify(smsError, null, 2));
           smsFailed = true; // Set flag on failure
+        } else if (smsData) {
+          console.log("SMS Response:", JSON.stringify(smsData, null, 2));
+          if (smsData.success) {
+            console.log("SMS sent successfully via PhilSMS");
+          } else {
+            console.warn("SMS API returned non-success status:", smsData);
+            smsFailed = true;
+          }
         } else {
-          console.log("SMS sent successfully via PhilSMS");
+          console.warn("No SMS response data returned");
+          smsFailed = true;
         }
-      } catch (err) {
+      } catch (err: unknown) {
         console.error("Unexpected SMS error:", err);
+        console.error("SMS Error Details:", err instanceof Error ? err.message : JSON.stringify(err));
         smsFailed = true; // Set flag on failure
       }
     }
@@ -440,6 +451,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         smsFailed ? "Warning: SMS receipt could not be sent." : ""
       }`,
     });
+    setSelectedStallId(""); // Reset selected stall
     await onPaymentSuccess();
 
   } finally {
@@ -517,6 +529,9 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
         <Button className="w-full" onClick={handlePrintReceipt}>
           Print Receipt
+        </Button>
+        <Button className="w-full mt-2" variant="default" onClick={() => setShowReceipt(false)}>
+          Done
         </Button>
       </div>
     );
