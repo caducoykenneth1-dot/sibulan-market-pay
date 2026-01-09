@@ -322,29 +322,31 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
       {/* Search + Filters */}
       <Card>
         <CardContent className="pt-6 space-y-4">
-          {/* Status Filter Buttons */}
-          <div className="flex gap-2">
-            <Button
-              variant={statusFilter === "all" ? "default" : "outline"}
-              onClick={() => setStatusFilter("all")}
-              className="flex-1 sm:flex-none"
-            >
-              All ({invoices.length})
-            </Button>
-            <Button
-              variant={statusFilter === "paid" ? "default" : "outline"}
-              onClick={() => setStatusFilter("paid")}
-              className="flex-1 sm:flex-none bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
-            >
-              ✓ Paid ({invoices.filter(inv => inv.status === "paid").length})
-            </Button>
-            <Button
-              variant={statusFilter === "unpaid" ? "default" : "outline"}
-              onClick={() => setStatusFilter("unpaid")}
-              className="flex-1 sm:flex-none bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
-            >
-              ✗ Unpaid ({invoices.filter(inv => inv.status === "unpaid").length})
-            </Button>
+          {/* Status Filter Buttons - Mobile Friendly */}
+          <div className="overflow-x-auto -mx-6 px-6 md:mx-0 md:px-0">
+            <div className="flex gap-2 w-max md:w-auto">
+              <Button
+                variant={statusFilter === "all" ? "default" : "outline"}
+                onClick={() => setStatusFilter("all")}
+                className="whitespace-nowrap"
+              >
+                All ({invoices.length})
+              </Button>
+              <Button
+                variant={statusFilter === "paid" ? "default" : "outline"}
+                onClick={() => setStatusFilter("paid")}
+                className="whitespace-nowrap bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+              >
+                ✓ Paid ({invoices.filter(inv => inv.status === "paid").length})
+              </Button>
+              <Button
+                variant={statusFilter === "unpaid" ? "default" : "outline"}
+                onClick={() => setStatusFilter("unpaid")}
+                className="whitespace-nowrap bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+              >
+                ✗ Unpaid ({invoices.filter(inv => inv.status === "unpaid").length})
+              </Button>
+            </div>
           </div>
 
           {/* Search + Type Filter */}
