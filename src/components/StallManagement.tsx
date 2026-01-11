@@ -34,6 +34,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+
+import {
   BASE_TYPE_OPTIONS,
   STALL_TYPES,
   computeStatusFromDueDate,
@@ -218,11 +227,8 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [filtersVisible, setFiltersVisible] = useState(false);
 
   const handleSectionSelect = (value) => {
-    // Toggle visibility when clicking the same section; otherwise force visible.
-    setFiltersVisible((prev) => !(prev && sectionFilter === value));
     setSectionFilter(value);
     setSearchTerm("");
     setStatusFilter("all");
@@ -549,32 +555,6 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
         </CardContent>
       </Card>
 
-          {/* ======================================================================
-          Stall Type Buttons (conditionally rendered)
-      ====================================================================== */}
-          {filtersVisible && availableStallTypes.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">
-              Filter by Stall Type
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            {availableStallTypes.map((type) => (
-              <Button
-                key={type}
-                variant={typeFilter === type ? "default" : "outline"}
-                onClick={() =>
-                  setTypeFilter((prev) => (prev === type ? "all" : type))
-                }
-              >
-                {type}
-              </Button>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
       {/* ======================================================================
           9. STALL GRID
       ====================================================================== */}
@@ -583,6 +563,44 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
           <h2 className="text-xl font-semibold">
             {typeFilter === "all" ? (sectionFilter === "all" ? "All Stalls" : sectionFilter) : typeFilter}
           </h2>
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            {availableStallTypes.length > 0 && (
+              <Sheet>
+                <SheetTrigger asChild>
+                  <Button variant="outline" className="gap-2 shrink-0">
+                    <Filter className="h-4 w-4" />
+                    <span className="hidden sm:inline">Filter Types</span>
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="right" className="w-[300px] sm:w-[400px] overflow-y-auto">
+                  <SheetHeader>
+                    <SheetTitle>Filter by Stall Type</SheetTitle>
+                    <SheetDescription>
+                      Select a stall type to filter the list.
+                    </SheetDescription>
+                  </SheetHeader>
+                  <div className="grid gap-2 py-4">
+                    <Button
+                      variant={typeFilter === "all" ? "default" : "outline"}
+                      className="justify-start"
+                      onClick={() => setTypeFilter("all")}
+                    >
+                      All Types
+                    </Button>
+                    {availableStallTypes.map((type) => (
+                      <Button
+                        key={type}
+                        variant={typeFilter === type ? "default" : "outline"}
+                        className="justify-start"
+                        onClick={() => setTypeFilter(type)}
+                      >
+                        {type}
+                      </Button>
+                    ))}
+                  </div>
+                </SheetContent>
+              </Sheet>
+            )}
             <div className="relative w-full md:max-w-xs">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -592,6 +610,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
                 className="pl-9"
               />
             </div>
+          </div>
         </div>
 
         <Card>
