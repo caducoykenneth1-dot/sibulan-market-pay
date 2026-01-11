@@ -44,18 +44,27 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, userName, userUsername, avatarUrl }: DashboardProps) => {
   const [showMonthlyCollections, setShowMonthlyCollections] = useState(false);
 
+  // ✅ Filter paid invoices: If collector, show only their own. If admin, show all.
+  const relevantPaidInvoices = useMemo(() => {
+    const allPaid = unpaidInvoices.filter(inv => inv.status === 'paid' && inv.paid_at);
+    
+    if (userRole?.toLowerCase() === 'collector' && userName) {
+      return allPaid.filter(inv => inv.collector_name === userName);
+    }
+    return allPaid;
+  }, [unpaidInvoices, userRole, userName]);
+
   const summary = useMemo(() => {
     const today = new Date();
     const todayDateString = today.toISOString().split('T')[0];
     const currentMonth = today.getMonth();
     const currentYear = today.getFullYear();
 
-    const paidInvoices = unpaidInvoices.filter(inv => inv.status === 'paid' && inv.paid_at);
-
-    const todaysPaidInvoices = paidInvoices.filter(inv => inv.paid_at!.startsWith(todayDateString));
+    // Use relevantPaidInvoices for collection stats
+    const todaysPaidInvoices = relevantPaidInvoices.filter(inv => inv.paid_at!.startsWith(todayDateString));
     const totalCollectedToday = todaysPaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
 
-    const currentMonthPaidInvoices = paidInvoices.filter(inv => {
+    const currentMonthPaidInvoices = relevantPaidInvoices.filter(inv => {
       const paidDate = new Date(inv.paid_at!);
       return paidDate.getMonth() === currentMonth && paidDate.getFullYear() === currentYear;
     });
@@ -93,7 +102,7 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
         pendingCount++;
       }
     });
-    return { totalCollectedToday, totalCollectedThisMonth, occupiedCount, vacantCount, pendingCount, overdueCount };}, [stalls, unpaidInvoices]);
+    return { totalCollectedToday, totalCollectedThisMonth, occupiedCount, vacantCount, pendingCount, overdueCount };}, [stalls, unpaidInvoices, relevantPaidInvoices]);
 
   const { totalCollectedToday, totalCollectedThisMonth, occupiedCount, vacantCount, pendingCount, overdueCount } = summary;
   const totalStalls = stalls.length;
@@ -148,9 +157,8 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
   const recentPayments = useMemo(() => {
-    // ✅ Use the full list of invoices to find the most recent PAID transactions.
-    return unpaidInvoices
-      .filter(inv => inv.status === 'paid' && inv.paid_at)
+    // ✅ Use the filtered list of invoices to find the most recent PAID transactions.
+    return relevantPaidInvoices
       .sort((a, b) => new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime())
       .slice(0, 4)
       .map((inv) => ({
@@ -160,13 +168,12 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
         amount: `PHP ${inv.amount.toLocaleString()}`,
         time: new Date(inv.paid_at!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }));
-  }, [unpaidInvoices]);
+  }, [relevantPaidInvoices]);
 
   // 📊 Successful collections summary
   const successfulCollections = useMemo(() => {
     const todayString = new Date().toISOString().split('T')[0];
-    const paidToday = unpaidInvoices.filter(inv => 
-      inv.status === 'paid' && 
+    const paidToday = relevantPaidInvoices.filter(inv => 
       inv.paid_at && 
       inv.paid_at.startsWith(todayString)
     );
@@ -174,9 +181,9 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     return {
       countToday: paidToday.length,
       amountToday: paidToday.reduce((sum, inv) => sum + inv.amount, 0),
-      totalCount: unpaidInvoices.filter(inv => inv.status === 'paid').length,
+      totalCount: relevantPaidInvoices.length,
     };
-  }, [unpaidInvoices]);
+  }, [relevantPaidInvoices]);
 
   const marketStatus = [
     {
