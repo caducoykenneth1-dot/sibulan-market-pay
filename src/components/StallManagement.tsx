@@ -427,11 +427,9 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
   ====================================================================== */
   return (
     <div className="space-y-6">
-      {typeFilter === "all" ? (
-        <>
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold">Stall Management</h1>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold">Stall Management</h1>
           <p className="text-muted-foreground">
             Track occupied stalls, vacant slots, and upcoming dues.
           </p>
@@ -575,34 +573,16 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
             ))}
           </CardContent>
         </Card>
-          )}
-        </>
-      ) : (
-        <>
-          {/* ======================================================================
-              9. STALL GRID (shown only when a type is selected)
-          ====================================================================== */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  setTypeFilter("all");
-                  setSearchTerm(""); // Clear search on exit
-                }}
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-              <div>
-                <h1 className="text-3xl font-bold">
-                  {typeFilter} Stalls
-                </h1>
-                <p className="text-muted-foreground">
-                  Select a stall to view its details or search below.
-                </p>
-              </div>
-            </div>
+      )}
+
+      {/* ======================================================================
+          9. STALL GRID
+      ====================================================================== */}
+      <div className="space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <h2 className="text-xl font-semibold">
+            {typeFilter === "all" ? (sectionFilter === "all" ? "All Stalls" : sectionFilter) : typeFilter}
+          </h2>
             <div className="relative w-full md:max-w-xs">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -612,14 +592,10 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
                 className="pl-9"
               />
             </div>
-          </div>
+        </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">Stall Selection</CardTitle>
-          </CardHeader>
-
-          <CardContent>
+          <CardContent className="pt-6">
             {filteredStalls.length === 0 ? (
               <div className="py-10 text-center text-muted-foreground">
                 No stalls match your filters.
@@ -664,8 +640,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
             )}
           </CardContent>
         </Card>
-        </>
-      )}
+      </div>
 
       {/* ======================================================================
           10. STALL VIEW MODAL

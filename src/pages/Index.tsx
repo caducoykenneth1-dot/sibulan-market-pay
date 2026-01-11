@@ -519,11 +519,29 @@ const Index = () => {
     }
 
     try {
-      const res = await fetch("/api/send-reset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
-      });
+      const { data: sessionData } = await supabase.auth.getSession();
+const token = sessionData.session?.access_token;
+
+const formattedPhone = phone.startsWith("09")
+  ? "+63" + phone.slice(1)
+  : phone;
+
+const res = await fetch(
+  "https://sibulan-market-pay.fwh.is/send-sms.php",
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      phone,
+      message: "Your reset code has been sent.",
+    }),
+  }
+);
+
+
+
       const result = await res.json();
       if (!res.ok) {
         setAuthError(result?.message || "Failed to send reset code.");
@@ -568,11 +586,14 @@ const Index = () => {
     }
 
     try {
-      const res = await fetch("/api/verify-reset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, code, newPassword: password }),
-      });
+      const res = await fetch(
+        "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/verify-reset-otp",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone, code, newPassword: password }),
+        }
+      );
       const result = await res.json();
       if (!res.ok) {
         setAuthError(result?.message || "Verification failed.");

@@ -1,18 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient"; // ✅ Added useMemo
+import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button"; // ✅ Added Chevron icons
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 import {
-  Loader2, ArchiveRestore, Building2, User, Phone, Info, Layers, Droplets, ChevronLeft, ChevronRight, Search, Filter, LayoutGrid, Calendar, DollarSign
+  Loader2,
+  ArchiveRestore,
+  Building2,
+  User,
+  Phone,
+  Info,
+  Layers,
+  Droplets,
+  ChevronLeft,
+  ChevronRight,
+  Calendar,
+  DollarSign,
 } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,77 +30,71 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { type StallRecord, updateStall, STALL_TYPES } from "@/data/stalls";
- 
-// ✅ Pagination constants and state
-const STALLS_PER_PAGE = 5;
 
-// ✅ Create a lookup map for stall sections
-const sectionMap = new Map(STALL_TYPES.map(type => [type.name, type.section]));
+const STALLS_PER_PAGE = 5;
+const sectionMap = new Map(STALL_TYPES.map(t => [t.name, t.section]));
 
 interface ArchivedStallRecord extends StallRecord {
-  section: 'Dry Section' | 'Wet Section' | 'N/A';
+  section: "Dry Section" | "Wet Section" | "N/A";
 }
 
 interface ArchivedStallsProps {
   onDataChange: () => void;
-  allStalls: StallRecord[]; // ✅ Accept all stalls to derive correct names
+  allStalls: StallRecord[];
 }
 
 export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps) => {
   const { toast } = useToast();
+
   const [archivedStalls, setArchivedStalls] = useState<ArchivedStallRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalStalls, setTotalStalls] = useState(0);
-  const [searchTerm, setSearchTerm] = useState("");
+
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
-  const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
+  const [showStalls, setShowStalls] = useState(false);
 
-  // ✅ Create a lookup map for original stall names from the full list
-  const nameMap = useMemo(() => new Map(allStalls.map(s => [s.dbId, s.name])), [allStalls]);
+  const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
+  const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
+
+  const nameMap = useMemo(
+    () => new Map(allStalls.map(s => [s.dbId, s.name])),
+    [allStalls]
+  );
 
   const totalPages = Math.ceil(totalStalls / STALLS_PER_PAGE);
 
-  // ✅ Create a sorted list of unique stall types for the filter dropdown
   const stallTypeOptions = useMemo(() => {
-    const types = STALL_TYPES.filter(t => sectionFilter === 'all' || t.section === sectionFilter).map(t => t.name);
-    return [...new Set(types)].sort();
+    return [
+      ...new Set(
+        STALL_TYPES
+          .filter(t => sectionFilter === "all" || t.section === sectionFilter)
+          .map(t => t.name)
+      ),
+    ].sort();
   }, [sectionFilter]);
 
-
   const fetchArchivedStalls = async (page: number) => {
-    // Don't set loading to true if it's just a search/filter change on the first page
-    if (page === currentPage) {
-      setLoading(true);
-    }
+    setLoading(true);
 
     const from = (page - 1) * STALLS_PER_PAGE;
     const to = from + STALLS_PER_PAGE - 1;
 
     let query = supabase
       .from("vendors")
-      .select("id, vendor, contact, type, monthly_rent, last_payment, next_due, status, rental_type, archive_reason", {
-        count: "exact", // ✅ Fetch total count efficiently
-      })
+      .select(
+        "id, vendor, contact, type, monthly_rent, last_payment, next_due, status, rental_type, archive_reason",
+        { count: "exact" }
+      )
       .eq("status", "archived")
-      .order("id", { ascending: true });
+      .order("id");
 
-    // Apply search filter
-    if (searchTerm) {
-      query = query.ilike("vendor", `%${searchTerm}%`);
-    }
-
-    // Apply section filter
     if (sectionFilter !== "all") {
-      const typesInSection = STALL_TYPES.filter(t => t.section === sectionFilter).map(t => t.name);
-      if (typesInSection.length > 0) {
-        query = query.in("type", typesInSection);
-      }
+      const types = STALL_TYPES.filter(t => t.section === sectionFilter).map(t => t.name);
+      query = query.in("type", types);
     }
 
-    // Apply type filter
     if (typeFilter !== "all") {
       query = query.eq("type", typeFilter);
     }
@@ -102,302 +102,142 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
     const { data, error, count } = await query.range(from, to);
 
     if (error) {
-      if (!navigator.onLine) {
-        toast({
-          title: "No Internet Connection",
-          description: "Could not fetch archived stalls. Please check your connection.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Error fetching archived stalls",
-          description: error.message,
-          variant: "destructive",
-        });
-      }
+      toast({ title: "Error", description: error.message, variant: "destructive" });
       setArchivedStalls([]);
       setTotalStalls(0);
     } else {
-      const mapped: ArchivedStallRecord[] = (data || []).map(row => ({
-        id: `stall-${row.id}`,
-        dbId: row.id,
-        name: nameMap.get(row.id) ?? `Stall ${row.id}`, // ✅ Use original name from map
-        vendor: row.vendor ?? "",
-        contact: row.contact ?? "",
-        type: row.type ?? "N/A",
-        rentAmount: row.monthly_rent ?? 0,
-        rentalType: row.rental_type ?? 'monthly',
-        lastPayment: row.last_payment ?? "",
-        nextDue: row.next_due ?? "",
-        status: 'archived',
-        occupied: false,
-        archive_reason: row.archive_reason ?? "No reason provided.", // ✅ Map the reason
-        section: sectionMap.get(row.type ?? '') ?? 'N/A', // ✅ Add section
-      }));
-      setArchivedStalls(mapped);
+      setArchivedStalls(
+        (data || []).map(row => ({
+          id: `stall-${row.id}`,
+          dbId: row.id,
+          name: nameMap.get(row.id) ?? `Stall ${row.id}`,
+          vendor: row.vendor ?? "",
+          contact: row.contact ?? "",
+          type: row.type ?? "N/A",
+          rentAmount: row.monthly_rent ?? 0,
+          rentalType: row.rental_type ?? "monthly",
+          lastPayment: row.last_payment ?? "",
+          nextDue: row.next_due ?? "",
+          status: "archived",
+          occupied: false,
+          archive_reason: row.archive_reason ?? "No reason provided.",
+          section: sectionMap.get(row.type ?? "") ?? "N/A",
+        }))
+      );
       setTotalStalls(count ?? 0);
     }
+
     setLoading(false);
   };
 
   useEffect(() => {
     fetchArchivedStalls(currentPage);
-  }, [currentPage, nameMap]); // nameMap dependency ensures fetch runs after names are ready
+  }, [currentPage, sectionFilter, typeFilter, nameMap]);
 
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    if (currentPage !== 1) setCurrentPage(1);
-    else fetchArchivedStalls(1); // fetch on page 1 if already there
-  }, [searchTerm, sectionFilter, typeFilter]);
-
-  // Reset type filter when section changes
   useEffect(() => {
     setTypeFilter("all");
+    setShowStalls(false);
   }, [sectionFilter]);
-
-  const handleSectionSelect = (value: "all" | "Dry Section" | "Wet Section") => {
-    setSectionFilter(value);
-    // Reset other filters for a clean slate
-    setSearchTerm("");
-  };
-
-  const groupedArchived = useMemo(() => {
-    return archivedStalls.reduce<Record<string, ArchivedStallRecord[]>>((acc, stall) => {
-      const section = stall.section || "N/A";
-      if (!acc[section]) {
-        acc[section] = [];
-      }
-      acc[section].push(stall);
-      return acc;
-    }, {});
-  }, [archivedStalls]);
-
-  useEffect(() => {
-    if (selectedStall && !archivedStalls.find(s => s.dbId === selectedStall.dbId)) {
-      setSelectedStall(null);
-    }
-  }, [archivedStalls, selectedStall]);
-
-
-  const handleRestore = async () => {
-    if (!stallToRestore) return;
-
-    // 1. Cache the current state for potential rollback
-    const originalStalls = [...archivedStalls];
-    const originalTotal = totalStalls;
-    const stallToRestoreCopy = { ...stallToRestore };
-  
-    // 2. Optimistically update the UI
-    setArchivedStalls(prev => prev.filter(s => s.id !== stallToRestoreCopy.id));
-    setTotalStalls(prev => prev - 1);
-    setStallToRestore(null); // Close the dialog immediately
-    setSelectedStall(prev => (prev?.id === stallToRestoreCopy.id ? null : prev));
-  
-    // If the last item on a page is restored, navigate to the previous page
-    if (originalStalls.length === 1 && currentPage > 1) {
-      setCurrentPage(currentPage - 1);
-    }
-  
-    // 3. Perform the async operation
-    try {
-      await updateStall(stallToRestoreCopy.dbId, {
-        status: 'vacant', // Restore to vacant status
-        occupied: false,
-      });
-  
-      // 4. On success, show toast and refresh parent data
-      toast({
-        title: "Stall Restored",
-        description: `${stallToRestoreCopy.type} - ${stallToRestoreCopy.name} is now active again.`,
-      });
-      onDataChange(); // Refresh the main app data
-    } catch (error: any) {
-      // 5. On failure, revert the UI and show an error
-      if (!navigator.onLine) {
-        toast({
-          title: "No Internet Connection",
-          description: "Could not restore stall. Please check your connection.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Restore Failed",
-          description: error.message,
-          variant: "destructive",
-        });
-      }
-      setArchivedStalls(originalStalls);
-      setTotalStalls(originalTotal);
-    }
-  };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">Archived Stalls</h1>
-        <p className="text-muted-foreground">View and restore previously archived stalls.</p>
-      </div>
+      <h1 className="text-3xl font-bold">Archived Stalls</h1>
 
-      {/* Section Selection */}
+      {/* SECTION FILTER */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold">Choose Section</CardTitle>
+          <CardTitle>Choose Section</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap justify-center gap-2">
-          {[
-            { label: "All", value: "all" },
-            { label: "Dry", value: "Dry Section" },
-            { label: "Wet", value: "Wet Section" },
-          ].map((opt) => (
+        <CardContent className="flex gap-2">
+          {["all", "Dry Section", "Wet Section"].map(sec => (
             <Button
-              key={opt.value}
-              size="sm"
-              className="h-9 px-4 min-w-[80px] rounded-full whitespace-nowrap"
-              variant={sectionFilter === opt.value ? "default" : "outline"}
-              onClick={() => handleSectionSelect(opt.value as "all" | "Dry Section" | "Wet Section")}
+              key={sec}
+              variant={sectionFilter === sec ? "default" : "outline"}
+              onClick={() => setSectionFilter(sec)}
             >
-              {opt.label}
+              {sec === "all" ? "All" : sec.replace(" Section", "")}
             </Button>
           ))}
         </CardContent>
       </Card>
 
-      {/* Stall Type Buttons (conditionally rendered) */}
-      {sectionFilter !== "all" && stallTypeOptions.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">
-              Filter by Stall Type
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            {stallTypeOptions.map((type) => (
-              <Button
-                key={type}
-                variant={typeFilter === type ? "default" : "outline"}
-                onClick={() =>
-                  setTypeFilter((prev) => (prev === type ? "all" : type))
+      {/* STALL TYPE FILTER */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Filter by Stall Type</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          {stallTypeOptions.map(type => (
+            <Button
+              key={type}
+              variant={typeFilter === type ? "default" : "outline"}
+              onClick={() => {
+                if (typeFilter === type) {
+                  setTypeFilter("all");
+                  setShowStalls(false);
+                } else {
+                  setTypeFilter(type);
+                  setShowStalls(true);
                 }
-              >
-                {type}
-              </Button>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+              }}
+            >
+              {type}
+            </Button>
+          ))}
+        </CardContent>
+      </Card>
 
-      {/* Stall Grid (conditionally rendered) */}
-      {typeFilter !== "all" && (
+      {/* STALL GRID */}
+      {showStalls && (
         <>
           {loading ? (
-            <div className="flex justify-center items-center h-40"><Loader2 className="h-6 w-6 animate-spin" /></div>
+            <div className="flex justify-center py-10">
+              <Loader2 className="animate-spin" />
+            </div>
           ) : archivedStalls.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">No archived stalls found for this type.</CardContent></Card>
+            <Card>
+              <CardContent className="py-10 text-center text-muted-foreground">
+                No archived stalls found
+              </CardContent>
+            </Card>
           ) : (
-            <div className="space-y-5">
-              {Object.entries(groupedArchived).map(([section, stalls]) => (
-                <div key={section} className="space-y-2">
-                  <h3 className="text-sm font-semibold text-muted-foreground">{section}</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {stalls.map((stall) => (
-                      <Button
-                        key={stall.id}
-                        variant={selectedStall?.id === stall.id ? "default" : "outline"}
-                        className="h-12 w-12 p-0"
-                        onClick={() => setSelectedStall(prev => (prev?.id === stall.id ? null : stall))}
-                      >
-                        <span className="font-bold text-xs leading-tight text-center">{stall.name}</span>
-                      </Button>
-                    ))}
-                  </div>
-                </div>
+            <div className="flex flex-wrap gap-2">
+              {archivedStalls.map(stall => (
+                <Button
+                  key={stall.id}
+                  variant={selectedStall?.id === stall.id ? "default" : "outline"}
+                  className="h-12 w-12 text-xs"
+                  onClick={() => setSelectedStall(stall)}
+                >
+                  {stall.name}
+                </Button>
               ))}
             </div>
           )}
         </>
       )}
 
-      {/* ✅ Pagination Controls */}
+      {/* PAGINATION */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-end space-x-4 pt-4">
-          <span className="text-sm text-muted-foreground">
-            Page {currentPage} of {totalPages}
-          </span>
-          <div className="flex items-center space-x-2">
-            <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => p - 1)} disabled={currentPage === 1}>
-              <ChevronLeft className="h-4 w-4" />
-              <span className="sr-only">Previous Page</span>
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => p + 1)} disabled={currentPage === totalPages}>
-              <span className="sr-only">Next Page</span>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => p - 1)}
+          >
+            <ChevronLeft />
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => p + 1)}
+          >
+            <ChevronRight />
+          </Button>
         </div>
       )}
-
-      <Dialog open={Boolean(selectedStall)} onOpenChange={(open) => (!open ? setSelectedStall(null) : null)}>
-        <DialogContent className="sm:max-w-lg md:max-w-xl border-none p-0 overflow-hidden px-4">
-          {selectedStall && (
-            <Card key={selectedStall.id} className="border-none shadow-none">
-              <CardHeader className="px-6 pt-6 pb-0">
-                <div className="flex items-start justify-between gap-3">
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <Building2 className="h-5 w-5 text-muted-foreground" />
-                    {selectedStall.name}
-                  </CardTitle>
-                  <Badge variant="outline" className="uppercase tracking-wide">
-                    Archived
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4 text-sm px-6 pb-6">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="flex items-center gap-2"><User className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.vendor || "No vendor assigned"}</span></div>
-                  <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><span>{selectedStall.contact || "N/A"}</span></div>
-                  <div className="flex items-center gap-2">
-                    {selectedStall.section === "Wet Section" ? (
-                      <Droplets className="h-4 w-4 text-muted-foreground" />
-                    ) : (
-                      <Layers className="h-4 w-4 text-muted-foreground" />
-                    )}
-                    <span>Section: {selectedStall.section}</span>
-                  </div>
-                  <div className="flex items-center gap-2"><Building2 className="h-4 w-4 text-muted-foreground" /><span>Type: {selectedStall.type}</span></div>
-                  <div className="flex items-center gap-2"><DollarSign className="h-4 w-4 text-muted-foreground" /><span>Rent: ₱{selectedStall.rentAmount.toLocaleString()} / {selectedStall.rentalType}</span></div>
-                  <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Last Payment: {selectedStall.lastPayment || "N/A"}</span></div>
-                  <div className="flex items-center gap-2"><Calendar className="h-4 w-4 text-muted-foreground" /><span>Next Due: {selectedStall.nextDue || "N/A"}</span></div>
-                </div>
-                <div className="flex items-start gap-2 border-t pt-3">
-                  <Info className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-                  <span>Reason: <span className="italic">{selectedStall.archive_reason || "No reason provided."}</span></span>
-                </div>
-                <div className="flex flex-wrap gap-2 pt-2">
-                  <Button size="sm" onClick={() => setStallToRestore(selectedStall)}>
-                    <ArchiveRestore className="mr-2 h-4 w-4" /> Restore
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setSelectedStall(null)}>
-                    Close
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={Boolean(stallToRestore)} onOpenChange={(open) => !open && setStallToRestore(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Restore Stall</AlertDialogTitle>
-            <AlertDialogDescription>Are you sure you want to restore this stall? It will become 'vacant' and appear in the main stall list.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleRestore}>Restore</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 };

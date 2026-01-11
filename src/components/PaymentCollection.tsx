@@ -353,18 +353,23 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       }
 
         // -----------------------------
-    // SEND SMS VIA PHILSMS
+    // SEND SMS RECEIPT VIA SMS GATEWAY
     // -----------------------------
     if (latestStall?.contact) {
       try {
         const smsPayload = {
-          contactNumber: latestStall.contact,
+          phone: latestStall.contact,
           amount: Number(paymentData.amount),
           stallName: stallLabel,
+          vendorName: selectedStall.vendor,
+          paymentDate: paymentDateString,
+          paymentType: paymentType,
+          collectorName: collectorName,
+          receiptNumber: `Receipt #${Math.floor(100000 + Math.random() * 900000)}`,
         };
 
         const { data: smsData, error: smsError } = await supabase.functions.invoke("send-sms-receipt", {
-          body: JSON.stringify(smsPayload),
+          body: smsPayload,
           headers: { "Content-Type": "application/json" },
         });
 
@@ -375,7 +380,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         } else if (smsData) {
           console.log("SMS Response:", JSON.stringify(smsData, null, 2));
           if (smsData.success) {
-            console.log("SMS sent successfully via PhilSMS");
+            console.log("SMS receipt sent successfully via SMS Gateway");
           } else {
             console.warn("SMS API returned non-success status:", smsData);
             smsFailed = true;

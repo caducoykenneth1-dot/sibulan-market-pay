@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Home,
@@ -59,6 +59,31 @@ export const Navigation = ({
   newCollections = 0,
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isNavVisible, setIsNavVisible] = useState(true);
+  const lastScrollY = useRef(0);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+
+      if (currentScrollY < 10) {
+        setIsNavVisible(true);
+      } else if (currentScrollY > lastScrollY.current) {
+        // Scrolling down
+        setIsNavVisible(false);
+        setIsMenuOpen(false); // Close sidebar drawer when scrolling down
+      } else {
+        // Scrolling up
+        setIsNavVisible(true);
+      }
+
+      lastScrollY.current = currentScrollY;
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
   const navItems = userRole === "collector" ? collectorNav : adminNav;
 
   const handleMobileNav = (page: string) => {
@@ -74,7 +99,7 @@ export const Navigation = ({
   return (
     <>
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg">
+      <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg transition-transform duration-300 ${isNavVisible ? "translate-y-0" : "translate-y-full"}`}>
         <div className="grid grid-cols-5 items-center gap-2 px-2 py-2">
           {[
             { id: "dashboard", label: "Dashboard", icon: Home },
@@ -118,7 +143,7 @@ export const Navigation = ({
 
       {/* Floating toggle for slide-in drawer */}
       <div
-        className="md:hidden fixed left-3 z-40"
+        className={`md:hidden fixed left-3 z-40 transition-transform duration-300 ${isNavVisible ? "translate-y-0" : "-translate-y-20"}`}
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
       >
         <Button

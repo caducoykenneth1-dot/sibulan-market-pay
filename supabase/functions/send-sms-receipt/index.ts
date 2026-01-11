@@ -1,83 +1,84 @@
-supabase/functions/send-sms-receipt/index.ts
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.58.0";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SMS_GATEWAY_API_KEY = Deno.env.get("SMS_GATEWAY_API_KEY")!;
+const SMS_GATEWAY_URL = "https://api.smstext.app/push";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-const PHILSMS_API_TOKEN = Deno.env.get("PHILSMS_API_TOKEN");
+function normalizePhone(phone: string) {
+  return phone.replace(/\D/g, "");
+}
 
-serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+async function sendSMS(phone: string, message: string): Promise<boolean> {
+  const auth = btoa(`apikey:${SMS_GATEWAY_API_KEY}`);
 
-  if (req.method !== "POST") {
-    return new Response("Method Not Allowed", {
-      status: 405,
-      headers: corsHeaders,
-    });
-  }
+  const res = await fetch(SMS_GATEWAY_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify([{ mobile: phone, text: message }]),
+  });
 
+  return res.ok;
+}
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
+export async function POST(req: Request) {
   try {
-    const { contactNumber, amount, stallName } = await req.json();
+    const body = await req.json();
+    const phone = normalizePhone(body.phone);
+    const reference = body.receiptNumber;
 
-    if (!contactNumber || !amount || !stallName) {
-      throw new Error("Missing required fields.");
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    // Idempotency check
+    const { data: existing } = await supabase
+      .from("sms_logs")
+      .select("id")
+      .eq("reference", reference)
+      .single();
+
+    if (existing) {
+      return new Response(
+        JSON.stringify({ success: true, message: "Receipt already sent." }),
+        { status: 200, headers: corsHeaders }
+      );
     }
 
-    // Format mobile number to 639xxxxxxxxx
-    let recipient = contactNumber.toString().trim();
+    const message = `Payment received: PHP ${body.amount.toFixed(
+      2
+    )}. Receipt ${reference}. Thank you.`;
 
-    if (recipient.startsWith("09")) {
-      recipient = "63" + recipient.substring(1);
-    } else if (recipient.startsWith("9") && recipient.length === 10) {
-      recipient = "63" + recipient;
-    } else if (recipient.startsWith("63")) {
-      // already correct
-    } else {
-      throw new Error("Invalid phone number format.");
-    }
+    await sendSMS(phone, message);
 
-    const payload = {
-      recipients: [recipient], // array format required by PhilSMS
-      message: `Thank you! Payment received for ${stallName}. Amount: PHP ${amount}.`,
-      sender_id: "MARKET",
-    };
-
-    const response = await fetch("https://app.philsms.com/api/v3/sms/send", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${PHILSMS_API_TOKEN}`,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
-      body: JSON.stringify(payload),
+    await supabase.from("sms_logs").insert({
+      phone,
+      message,
+      type: "receipt",
+      reference,
+      sent_at: new Date().toISOString(),
     });
 
-    const data = await response.json();
-
-    // Log response for debugging
-    console.log("PhilSMS Response Status:", response.status);
-    console.log("PhilSMS Response Data:", JSON.stringify(data));
-
-    // Check if the API returned an error
-    if (!response.ok || data.status === 0 || data.error) {
-      const errorMsg = data.message || data.error || `PhilSMS API returned status ${response.status}`;
-      throw new Error(`PhilSMS API Error: ${errorMsg}`);
-    }
-
-    return new Response(JSON.stringify({ success: true, data, message: "SMS sent successfully" }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-
+    return new Response(
+      JSON.stringify({ success: true, message: "Receipt sent." }),
+      { status: 200, headers: corsHeaders }
+    );
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.error(err);
+    return new Response(
+      JSON.stringify({ success: false, message: "Server error." }),
+      { status: 500, headers: corsHeaders }
+    );
   }
-});
+}
