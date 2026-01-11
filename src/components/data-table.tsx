@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import {
   type ColumnDef,
   flexRender,
@@ -18,7 +17,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
@@ -38,37 +36,38 @@ export function DataTable<TData, TValue>({
 
   return (
     <div>
-      {/* Desktop Table View */}
+      {/* ===================== */}
+      {/* DESKTOP TABLE VIEW */}
+      {/* ===================== */}
       <div className="hidden md:block rounded-md border overflow-x-auto">
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => {
-                  return (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )}
-                    </TableHead>
-                  );
-                })}
+                {headerGroup.headers.map((header) => (
+                  <TableHead key={header.id}>
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(
+                          header.column.columnDef.header,
+                          header.getContext()
+                        )}
+                  </TableHead>
+                ))}
               </TableRow>
             ))}
           </TableHeader>
+
           <TableBody>
-            {table.getRowModel().rows?.length ? (
+            {table.getRowModel().rows.length ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  data-state={row.getIsSelected() && "selected"}
-                >
+                <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext()
+                      )}
                     </TableCell>
                   ))}
                 </TableRow>
@@ -84,43 +83,48 @@ export function DataTable<TData, TValue>({
         </Table>
       </div>
 
-      {/* Mobile Card View */}
-      <div className="md:hidden space-y-3">
-        {table.getRowModel().rows?.length ? (
+      {/* ===================== */}
+      {/* MOBILE CLEAN LIST */}
+      {/* ===================== */}
+      <div className="md:hidden divide-y rounded-md border">
+        {table.getRowModel().rows.length ? (
           table.getRowModel().rows.map((row) => (
-            <Card key={row.id} className="overflow-hidden">
-              <CardContent className="p-4 space-y-2">
+            <div key={row.id} className="px-4 py-3">
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1">
                 {row.getVisibleCells().map((cell) => {
                   const header = cell.column.columnDef.header;
-                  const headerText = 
-                    typeof header === 'function' 
-                      ? 'Details'
-                      : typeof header === 'string'
+                  const label =
+                    typeof header === "string"
                       ? header
                       : cell.column.id;
-                  
+
                   return (
                     <div key={cell.id} className="flex flex-col">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase">
-                        {headerText}
+                      <span className="text-xs text-muted-foreground">
+                        {label}
                       </span>
-                      <div className="text-sm mt-1">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      <div className="text-sm">
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
                       </div>
                     </div>
                   );
                 })}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ))
         ) : (
-          <Card>
-            <CardContent className="p-8 text-center text-muted-foreground">
-              No results.
-            </CardContent>
-          </Card>
+          <div className="p-6 text-center text-muted-foreground">
+            No results.
+          </div>
         )}
       </div>
+
+      {/* ===================== */}
+      {/* PAGINATION */}
+      {/* ===================== */}
       <div className="flex items-center justify-end space-x-2 py-4">
         <Button
           variant="outline"

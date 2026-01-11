@@ -24,18 +24,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Filter, Download, Receipt, Eye, DollarSign, CalendarDays } from "lucide-react";
+import { Search, Filter, Download, Eye, CalendarDays } from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import {
   format,
-  parseISO,
-  isToday,
-  isYesterday,
-  isThisWeek,
 } from "date-fns";
 import { type Invoice } from "./UnpaidDues";
 import { type StallRecord } from "@/data/stalls";
+import { DataTable } from "./data-table";
+import { type ColumnDef } from "@tanstack/react-table";
 
 const getMonthKey = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth()).padStart(2, "0")}`;
@@ -73,26 +71,6 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
-// 🟦 Group by date
-const groupPaymentsByDate = (payments: Invoice[]) => {
-  const groups: Record<string, Invoice[]> = {};
-  payments.forEach((p) => {
-    const date = new Date(p.paid_at!);
-    const key = format(date, "yyyy-MM-dd");
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(p);
-  });
-  return groups;
-};
-
-// 🟦 Format date headers
-const getDateLabel = (dateString: string) => {
-  const date = parseISO(dateString);
-  if (isToday(date)) return "Today";
-  if (isYesterday(date)) return "Yesterday";
-  if (isThisWeek(date)) return format(date, "EEEE");
-  return format(date, "MMMM d, yyyy — EEEE");
-};
 
 export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   const [selectedPayment, setSelectedPayment] = useState<Invoice | null>(null);
@@ -223,15 +201,6 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     return match?.label ?? null;
   }, [selectedMonthKey, monthlySummaries]);
 
-  const groupedPayments = useMemo(
-    () => groupPaymentsByDate(filteredPayments),
-    [filteredPayments]
-  );
-
-  const sortedDates = Object.keys(groupedPayments).sort((a, b) =>
-    a < b ? 1 : -1
-  );
-
   const handleViewDetails = (payment: Invoice) => {
     setSelectedPayment(payment);
     setIsDialogOpen(true);
@@ -241,6 +210,81 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     setIsDialogOpen(false);
     setSelectedPayment(null);
   };
+
+  // 🧾 Define Columns for DataTable
+  const columns = useMemo<ColumnDef<Invoice>[]>(
+    () => [
+      {
+        accessorKey: "id",
+        header: "Receipt",
+        cell: ({ row }) => (
+          <span className="font-mono text-xs">
+            DPM-{String(row.original.id).padStart(6, "0")}
+          </span>
+        ),
+      },
+      {
+        accessorKey: "paid_at",
+        header: "Date",
+        cell: ({ row }) => {
+          if (!row.original.paid_at) return "-";
+          return (
+            <div className="flex flex-col">
+              <span className="font-medium">
+                {format(new Date(row.original.paid_at), "MMM d, yyyy")}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {format(new Date(row.original.paid_at), "h:mm a")}
+              </span>
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: "vendor_name",
+        header: "Vendor",
+        cell: ({ row }) => (
+          <div className="flex flex-col">
+            <span className="font-medium">{row.original.vendor_name}</span>
+            <span className="text-xs text-muted-foreground">
+              {row.original.stall_name}
+            </span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: "amount",
+        header: "Amount",
+        cell: ({ row }) => (
+          <div className="font-medium text-success">
+            PHP {row.original.amount.toLocaleString()}
+          </div>
+        ),
+      },
+      {
+        accessorKey: "payment_type",
+        header: "Type",
+        cell: ({ row }) => (
+          <Badge variant="outline" className="capitalize text-[10px] px-1 py-0 h-5">
+            {row.original.payment_type?.replace(/-/g, " ") || "Monthly"}
+          </Badge>
+        ),
+      },
+      {
+        id: "actions",
+        cell: ({ row }) => (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => handleViewDetails(row.original)}
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+        ),
+      },
+    ],
+    []
+  );
 
   // 🧾 Export PDF
   const handleExport = async () => {
@@ -486,88 +530,18 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         </Card>
       )}
 
-      {/* Grouped Records */}
+      {/* Payment Records Table */}
       <Card>
         <CardHeader>
           <CardTitle>Payment Records</CardTitle>
           <CardDescription>
             {selectedMonthLabel
               ? `Showing payments for ${selectedMonthLabel}`
-              : "Grouped by date of payment"}
+              : "All payment records"}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {sortedDates.map((dateKey) => {
-            const dayTotal = groupedPayments[dateKey].reduce(
-              (sum, p) => sum + p.amount,
-              0
-            );
-            return (
-              <div key={dateKey} className="mb-8">
-                <div className="flex items-center justify-between mb-3 border-b pb-1">
-                  <h3 className="text-lg font-semibold text-muted-foreground">
-                    {getDateLabel(dateKey)}
-                  </h3>
-                  <div className="flex items-center gap-1 text-sm font-semibold text-emerald-600">
-                    <DollarSign className="h-4 w-4" />
-                    <span>Total: PHP {dayTotal.toLocaleString()}</span>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  {groupedPayments[dateKey].map((payment) => (
-                    <div
-                      key={payment.id}
-                      className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center">
-                          <Receipt className="h-6 w-6 text-primary" />
-                        </div>
-                        <div>
-                          <div className="font-medium">
-                            {payment.vendor_name}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            {payment.stall_name} - DPM-
-                            {String(payment.id).padStart(6, "0")}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {format(new Date(payment.paid_at!), "PPpp")}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="text-right">
-                          <div className="font-medium text-success">
-                            PHP {payment.amount.toLocaleString()}
-                          </div>
-                          <Badge variant="outline" className="text-xs capitalize">
-                            {payment.payment_type?.replace(/-/g, " ") ||
-                              "Monthly Rent"}
-                          </Badge>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleViewDetails(payment)}
-                          aria-label="View payment details"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-
-          {filteredPayments.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">
-              No payments found matching your criteria.
-            </div>
-          )}
+          <DataTable columns={columns} data={filteredPayments} />
         </CardContent>
       </Card>
 

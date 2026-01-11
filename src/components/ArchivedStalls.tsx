@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Loader2,
   ArchiveRestore,
@@ -17,6 +18,8 @@ import {
   ChevronRight,
   Calendar,
   DollarSign,
+  Filter,
+  Search,
 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
@@ -30,6 +33,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { type StallRecord, updateStall, STALL_TYPES } from "@/data/stalls";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 
 const STALLS_PER_PAGE = 5;
 const sectionMap = new Map(STALL_TYPES.map(t => [t.name, t.section]));
@@ -55,6 +66,9 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
   const [typeFilter, setTypeFilter] = useState("all");
   const [showStalls, setShowStalls] = useState(false);
 
+  const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
   const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
   const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
 
@@ -74,6 +88,13 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       ),
     ].sort();
   }, [sectionFilter]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   const fetchArchivedStalls = async (page: number) => {
     setLoading(true);
@@ -97,6 +118,15 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
     if (typeFilter !== "all") {
       query = query.eq("type", typeFilter);
+    }
+
+    if (debouncedSearch) {
+      const term = debouncedSearch.trim();
+      if (!isNaN(Number(term)) && term !== "") {
+        query = query.or(`vendor.ilike.%${term}%,id.eq.${term}`);
+      } else {
+        query = query.ilike("vendor", `%${term}%`);
+      }
     }
 
     const { data, error, count } = await query.range(from, to);
@@ -132,7 +162,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   useEffect(() => {
     fetchArchivedStalls(currentPage);
-  }, [currentPage, sectionFilter, typeFilter, nameMap]);
+  }, [currentPage, sectionFilter, typeFilter, debouncedSearch, nameMap]);
 
   useEffect(() => {
     setTypeFilter("all");
@@ -161,31 +191,68 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
         </CardContent>
       </Card>
 
-      {/* STALL TYPE FILTER */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Filter by Stall Type</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          {stallTypeOptions.map(type => (
-            <Button
-              key={type}
-              variant={typeFilter === type ? "default" : "outline"}
-              onClick={() => {
-                if (typeFilter === type) {
-                  setTypeFilter("all");
-                  setShowStalls(false);
-                } else {
-                  setTypeFilter(type);
-                  setShowStalls(true);
-                }
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <h2 className="text-xl font-semibold">
+          {typeFilter === "all" ? (sectionFilter === "all" ? "All Archived Stalls" : sectionFilter) : typeFilter}
+        </h2>
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          {stallTypeOptions.length > 0 && (
+            <Sheet>
+              <SheetTrigger asChild>
+                <Button variant="outline" className="gap-2 shrink-0">
+                  <Filter className="h-4 w-4" />
+                  <span className="hidden sm:inline">Filter Types</span>
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="right" className="w-[300px] sm:w-[400px] overflow-y-auto">
+                <SheetHeader>
+                  <SheetTitle>Filter by Stall Type</SheetTitle>
+                  <SheetDescription>
+                    Select a stall type to filter the list.
+                  </SheetDescription>
+                </SheetHeader>
+                <div className="grid gap-2 py-4">
+                  <Button
+                    variant={typeFilter === "all" ? "default" : "outline"}
+                    className="justify-start"
+                    onClick={() => {
+                      setTypeFilter("all");
+                      setShowStalls(true);
+                    }}
+                  >
+                    All Types
+                  </Button>
+                  {stallTypeOptions.map((type) => (
+                    <Button
+                      key={type}
+                      variant={typeFilter === type ? "default" : "outline"}
+                      className="justify-start"
+                      onClick={() => {
+                        setTypeFilter(type);
+                        setShowStalls(true);
+                      }}
+                    >
+                      {type}
+                    </Button>
+                  ))}
+                </div>
+              </SheetContent>
+            </Sheet>
+          )}
+          <div className="relative w-full md:max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(1);
               }}
-            >
-              {type}
-            </Button>
-          ))}
-        </CardContent>
-      </Card>
+              placeholder="Search vendor or ID..."
+              className="pl-9"
+            />
+          </div>
+        </div>
+      </div>
 
       {/* STALL GRID */}
       {showStalls && (
