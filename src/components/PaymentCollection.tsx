@@ -324,21 +324,25 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
       const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
 
-      const { error: invoiceError } = await supabase.from("invoices").insert([
-        {
-          vendor_id: stallDbId,
-          vendor_name: selectedStall.vendor || "No vendor",
-          stall_name: stallLabel,
-          stall_type: selectedStall.type,
-          amount: Number(paymentData.amount),
-          payment_type: paymentType,
-          notes: paymentData.notes || null,
-          due_date: paymentDateString,
-          status: "paid",
-          paid_at: paymentTimestamp.toISOString(),
-          collector_name: collectorName,
-        },
-      ]);
+     const { error: invoiceError } = await supabase.from("invoices").insert([
+  {
+    vendor_id: stallDbId,
+    vendor_name: selectedStall.vendor || "No vendor",
+    stall_name: stallLabel,
+    stall_type: selectedStall.type,
+    amount: Number(paymentData.amount),
+    payment_type: paymentType,
+    notes: paymentData.notes || null,
+    due_date: paymentDateString,
+    status: "paid",
+    paid_at: paymentTimestamp.toISOString(),
+
+    // ✅ THIS IS THE MISSING PIECE
+    collector_id: collectorId,
+    collector_name: collectorName,
+  },
+]);
+
 
       if (invoiceError) {
         console.error("Error saving payment:", invoiceError);

@@ -365,7 +365,7 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
               className="w-full mt-4 bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
               size="sm"
             >
-              View All Collections
+              {userRole?.toLowerCase() === "collector" ? "View My Collections" : "View All Collections"}
             </Button>
           </CardContent>
         </Card>
@@ -454,5 +454,3 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     </div>
   );
 };
-
-
