@@ -64,7 +64,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [showStalls, setShowStalls] = useState(false);
+  const [showStalls, setShowStalls] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -166,11 +166,34 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   useEffect(() => {
     setTypeFilter("all");
-    setShowStalls(false);
   }, [sectionFilter]);
 
+  const handleRestore = async () => {
+    if (!stallToRestore) return;
+
+    try {
+      await updateStall(stallToRestore.dbId, {
+        status: "vacant",
+        archive_reason: null,
+        occupied: false,
+        vendor: "",
+        contact: "",
+        last_payment: null,
+        next_due: null,
+      });
+
+      toast({ title: "Stall Restored", description: "Stall moved to active list." });
+      onDataChange();
+      fetchArchivedStalls(currentPage);
+      setStallToRestore(null);
+      setSelectedStall(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    }
+  };
+
   return (
-    <div className="space-y-6">
+   <div className="space-y-6">
       <h1 className="text-3xl font-bold">Archived Stalls</h1>
 
       {/* SECTION FILTER */}
@@ -180,7 +203,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
         </CardHeader>
         <CardContent className="flex gap-2">
           {["all", "Dry Section", "Wet Section"].map(sec => (
-            <Button
+           <Button
               key={sec}
               variant={sectionFilter === sec ? "default" : "outline"}
               onClick={() => setSectionFilter(sec)}
@@ -192,7 +215,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       </Card>
 
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <h2 className="text-xl font-semibold">
+       <h2 className="text-xl font-semibold">
           {typeFilter === "all" ? (sectionFilter === "all" ? "All Archived Stalls" : sectionFilter) : typeFilter}
         </h2>
         <div className="flex items-center gap-2 w-full md:w-auto">
@@ -286,7 +309,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
       {/* PAGINATION */}
       {totalPages > 1 && (
-        <div className="flex justify-end gap-2">
+       <div className="flex justify-end gap-2">
           <Button
             size="sm"
             variant="outline"
@@ -305,6 +328,65 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
           </Button>
         </div>
       )}
-    </div>
+
+      <Dialog open={!!selectedStall} onOpenChange={(open) => !open && setSelectedStall(null)}>
+        <DialogContent>
+          {selectedStall && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  <Building2 className="h-5 w-5" />
+                  {selectedStall.name}
+                </h2>
+                <Badge variant="secondary">Archived</Badge>
+              </div>
+              
+              <div className="grid gap-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <User className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Previous Vendor:</span>
+                  <span>{selectedStall.vendor || "N/A"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Phone className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Contact:</span>
+                  <span>{selectedStall.contact || "N/A"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Info className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Archive Reason:</span>
+                </div>
+                <div className="p-2 bg-muted rounded-md text-sm italic">
+                  {selectedStall.archive_reason}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-4">
+                <Button variant="outline" onClick={() => setSelectedStall(null)}>Close</Button>
+                <Button onClick={() => setStallToRestore(selectedStall)}>
+                  <ArchiveRestore className="mr-2 h-4 w-4" />
+                  Restore Stall
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!stallToRestore} onOpenChange={(open) => !open && setStallToRestore(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore Stall?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will move <strong>{stallToRestore?.name}</strong> back to the active list as a vacant stall.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRestore}>Confirm Restore</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+   </div>
   );
 };
