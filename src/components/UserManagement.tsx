@@ -667,7 +667,7 @@ export const UserManagement = ({
               No accounts match your search.
             </div>
           ) : (
-            filteredAccounts.map((acc) => {
+            filteredAccounts.map((acc, index) => {
               const meta = acc.user_metadata || acc.raw_user_meta_data;
               const storedMarket =
                 typeof meta?.market === "string" ? meta.market.trim() : "";
@@ -720,7 +720,11 @@ export const UserManagement = ({
               return (
                 <Card
                   key={acc.id}
-                  className="flex h-full min-h-[230px] flex-col border border-border/70 shadow-sm transition-shadow hover:shadow-lg"
+                  className="flex h-full min-h-[230px] flex-col border border-border/70 shadow-sm transition-all hover:shadow-lg hover:-translate-y-1 animate-in fade-in slide-in-from-bottom-4 duration-500"
+                  style={{
+                    animationDelay: `${index * 50}ms`,
+                    animationFillMode: "backwards",
+                  }}
                 >
                   <CardContent className="relative flex h-full flex-col gap-5 p-6 pt-8">
                     <Badge

@@ -20,6 +20,7 @@ import {
   DollarSign,
   Filter,
   Search,
+  Archive,
 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
@@ -42,7 +43,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-const STALLS_PER_PAGE = 5;
+const STALLS_PER_PAGE = 10;
 const sectionMap = new Map(STALL_TYPES.map(t => [t.name, t.section]));
 
 
@@ -233,22 +234,47 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       {showStalls && (
         <>
           {paginatedStalls.length === 0 ? (
-            <Card>
-              <CardContent className="py-10 text-center text-muted-foreground">
-                No archived stalls found
-              </CardContent>
-            </Card>
+            <div className="flex flex-col items-center justify-center py-16 text-center space-y-4 border-2 border-dashed rounded-xl bg-muted/30 animate-in fade-in zoom-in-95 duration-500">
+              <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center">
+                <Archive className="h-8 w-8 text-muted-foreground/50" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-semibold text-lg">No archived stalls found</h3>
+                <p className="text-sm text-muted-foreground max-w-xs mx-auto">
+                  Archived stalls will appear here. They are hidden from the main dashboard but can be restored at any time.
+                </p>
+              </div>
+            </div>
           ) : (
-            <div className="flex flex-wrap gap-2">
-              {paginatedStalls.map(stall => (
-                <Button
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {paginatedStalls.map((stall, i) => (
+                <Card 
                   key={stall.id}
-                  variant={selectedStall?.id === stall.id ? "default" : "outline"}
-                  className="h-12 w-12 text-xs"
+                  className={`cursor-pointer transition-all duration-300 hover:shadow-lg hover:-translate-y-1 group relative overflow-hidden ${selectedStall?.id === stall.id ? "ring-2 ring-primary border-primary bg-primary/5" : "hover:border-primary/50"}`}
                   onClick={() => setSelectedStall(stall as ArchivedStallRecord)}
+                  style={{ animationDelay: `${i * 50}ms`, animationFillMode: 'backwards' }}
                 >
-                  {stall.name}
-                </Button>
+                  <CardContent className="p-4 flex flex-col items-center text-center gap-3">
+                    <div className={`h-12 w-12 rounded-full flex items-center justify-center transition-colors duration-300 ${selectedStall?.id === stall.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"}`}>
+                      <Building2 className="h-6 w-6" />
+                    </div>
+                    
+                    <div className="space-y-1 w-full">
+                      <h3 className="font-bold text-sm truncate">{stall.name}</h3>
+                      <Badge variant="secondary" className="text-[10px] px-1.5 h-5 font-normal">
+                        {stall.type}
+                      </Badge>
+                    </div>
+
+                    <div className="w-full pt-3 border-t mt-1">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1 font-semibold">Last Vendor</p>
+                      <div className="flex items-center justify-center gap-1.5 text-xs font-medium truncate text-foreground/80">
+                        <User className="h-3 w-3" />
+                        <span className="truncate">{stall.vendor || "Unknown"}</span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               ))}
             </div>
           )}

@@ -216,24 +216,34 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => onPageChange("profile")}
-            className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
-            title="Change profile photo"
-          >
-            <Avatar className="h-12 w-12 border-2 border-transparent transition group-hover:border-primary">
-              {avatarUrl ? <AvatarImage src={avatarUrl} alt="Collector profile" /> : <AvatarFallback>{initials}</AvatarFallback>}
-            </Avatar>
+        <div className="flex items-center gap-3 md:gap-4">
+  <button
+    type="button"
+    onClick={() => onPageChange("profile")}
+    className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+    title="Change profile photo"
+                              >
+                                <Avatar className="h-12 w-12 md:h-16 md:w-16 border-2 border-transparent transition group-hover:border-primary">
+                                  {avatarUrl ? (
+                                    <AvatarImage src={avatarUrl} alt="Collector profile" />
+                                  ) : (
+                                    <AvatarFallback className="text-sm md:text-lg font-semibold">
+                                      {initials}
+                                    </AvatarFallback>
+                                  )}
+                                </Avatar>
             <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-primary px-2 py-[2px] text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
               Edit
             </span>
           </button>
-          <div>
-            <p className="text-sm font-medium text-primary">Welcome back</p>
-            <h1 className="text-xl font-semibold">{userName || 'Sibulan Market Team'}</h1>
-            <div className="text-xs text-muted-foreground">
+         <div>
+              <p className="text-sm md:text-base font-medium text-primary">
+                Welcome back
+              </p>
+              <h1 className="text-xl md:text-2xl font-semibold leading-tight">
+                {userName || "Sibulan Market Team"}
+              </h1>
+              <div className="text-xs md:text-sm text-muted-foreground">
               <span>
                 {userUsername}
               </span>
