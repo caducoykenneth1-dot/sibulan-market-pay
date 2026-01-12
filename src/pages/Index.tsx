@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { Navigation } from "@/components/Navigation.tsx";
 import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection";
@@ -63,7 +63,6 @@ const USER_MGMT_FN =
 
 const Index = () => {
   const [rawStalls, setRawStalls] = useState<StallRecord[]>([]);
-  const [unpaidInvoices, setUnpaidInvoices] = useState<Invoice[]>([]);
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [dataVersion, setDataVersion] = useState(0);
@@ -173,6 +172,10 @@ const Index = () => {
     };
   }, [user?.id]);
 
+  const unpaidInvoices = useMemo(() => {
+    return allInvoices.filter((inv) => inv.status === "unpaid");
+  }, [allInvoices]);
+
   // ✅ Mark notifications as read when user opens notifications page
   useEffect(() => {
     if (currentPage === "notifications" && user?.id) {
@@ -277,9 +280,59 @@ const Index = () => {
     fetchAccounts();
   }, [user, dataVersion, toast]);
 
-  const refreshData = () => setDataVersion((v) => v + 1);
+  const refreshData = useCallback(() => setDataVersion((v) => v + 1), []);
+
+  // ✅ Real-time Data Sync
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel("global-db-changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "invoices" },
+        (payload) => {
+          console.log("🔔 Realtime Invoice Update:", payload);
+          refreshData();
+
+          // Notify Admin when a payment is marked as PAID
+          if (user?.user_metadata?.role === "admin") {
+            const newRecord = payload.new as any;
+            const oldRecord = payload.old as any;
+            
+            // Check for INSERT of paid invoice OR UPDATE to paid status
+            const isNewPayment = 
+              (payload.eventType === "INSERT" && newRecord?.status === "paid") ||
+              (payload.eventType === "UPDATE" && newRecord?.status === "paid" && oldRecord?.status !== "paid");
+
+            if (isNewPayment) {
+              toast({
+                title: "New Collection",
+                description: `Payment received from ${newRecord?.vendor_name || "a vendor"}.`,
+              });
+            }
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "vendors" },
+        (payload) => {
+          console.log("🔔 Realtime Vendor Update:", payload);
+          refreshData();
+        }
+      )
+      .subscribe((status) => {
+        console.log("📡 Realtime Status:", status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, toast, refreshData]);
 
   // ✅ Load ALL invoices for reports
+  // This runs on mount and when dataVersion changes (manual refresh or vendor change)
   useEffect(() => {
     const fetchAllInvoices = async () => {
       const { data, error } = await supabase
@@ -293,24 +346,7 @@ const Index = () => {
       }
     };
     fetchAllInvoices();
-  }, [rawStalls, dataVersion]);
-
-  // ✅ Load unpaid invoices
-  useEffect(() => {
-    const fetchUnpaid = async () => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(
-          "id, vendor_id, vendor_name, stall_name, amount, due_date, status"
-        )
-        .eq("status", "unpaid");
-
-      if (!error) {
-        setUnpaidInvoices(data || []);
-      }
-    };
-    fetchUnpaid();
-  }, [rawStalls, dataVersion]);
+  }, [dataVersion]);
 
   useEffect(() => {
     if (typeof localStorage === "undefined") return;
@@ -506,99 +542,97 @@ const Index = () => {
     setAuthMode("login");
   };
 
-  const handleForgotPassword = async (
-    event: React.FormEvent<HTMLFormElement>
-  ) => {
-    event.preventDefault();
-    resetFeedback();
+ const handleForgotPassword = async (
+  event: React.FormEvent<HTMLFormElement>
+) => {
+  event.preventDefault();
+  resetFeedback();
 
-    const phone = forgotPasswordForm.phone.trim();
-    if (!phone) {
-      setAuthError("Enter your phone number to receive a reset code.");
+  const phone = forgotPasswordForm.phone.trim();
+  if (!phone) {
+    setAuthError("Enter your phone number to receive a reset code.");
+    return;
+  }
+
+  try {
+    const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    const formattedPhone = phone.startsWith("09")
+      ? "+63" + phone.slice(1)
+      : phone;
+
+    const res = await fetch(
+      "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/send-reset-otp",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, // ✅ REQUIRED
+        },
+        body: JSON.stringify({
+          phone: formattedPhone,
+        }),
+      }
+    );
+
+    const result = await res.json();
+
+    if (!res.ok) {
+      setAuthError(result?.message || "Failed to send reset code.");
       return;
     }
 
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-const token = sessionData.session?.access_token;
-
-const formattedPhone = phone.startsWith("09")
-  ? "+63" + phone.slice(1)
-  : phone;
-
-const res = await fetch(
-  "https://sibulan-market-pay.fwh.is/send-sms.php",
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      phone,
-      message: "Your reset code has been sent.",
-    }),
+    setAuthMessage(
+      "If this number is registered, an SMS with a code has been sent."
+    );
+    setForgotStage("verify");
+  } catch (e: any) {
+    setAuthError(e?.message ?? "Network error sending SMS.");
   }
-);
+};
 
-
-
-      const result = await res.json();
-      if (!res.ok) {
-        setAuthError(result?.message || "Failed to send reset code.");
-        return;
-      }
-      setAuthMessage(
-        "If this number is registered, an SMS with a code has been sent. It may take a minute."
-      );
-      setForgotStage("verify");
-    } catch (e: any) {
-      setAuthError(e?.message ?? "Network error sending SMS.");
-    }
-  };
 
   const handleVerifyReset = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    resetFeedback();
+  event.preventDefault();
+  resetFeedback();
 
-    const phone = forgotPasswordForm.phone.trim();
-    const code = forgotPasswordForm.code.trim();
-    const password = resetPasswordForm.password.trim();
-    const confirmPassword = resetPasswordForm.confirmPassword.trim();
+  const phone = forgotPasswordForm.phone.trim();
+  const code = forgotPasswordForm.code.trim();
+  const password = resetPasswordForm.password.trim();
+  const confirmPassword = resetPasswordForm.confirmPassword.trim();
 
-    if (!code) {
-      setAuthError("Enter the verification code you received.");
-      return;
-    }
+  // ... existing validation ...
 
-    if (!password || !confirmPassword) {
-      setAuthError("Complete both password fields.");
-      return;
-    }
+  console.log("🔍 handleVerifyReset: Starting fetch with:", { phone, code, newPassword: "***" });  // Log inputs (hide password)
 
-    if (password.length < 6) {
-      setAuthError("Password must be at least 6 characters long.");
-      return;
-    }
+  try {
+    const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-    if (password !== confirmPassword) {
-      setAuthError("Passwords do not match.");
-      return;
-    }
-
-    try {
-      const res = await fetch(
-        "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/verify-reset-otp",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone, code, newPassword: password }),
-        }
-      );
-      const result = await res.json();
-      if (!res.ok) {
-        setAuthError(result?.message || "Verification failed.");
-        return;
+    const res = await fetch(
+      "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/verify-reset-otp",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          phone,
+          code,
+          newPassword: password,
+        }),
       }
+    );
+
+    console.log("✅ Fetch response status:", res.status, res.statusText);  // Log status
+
+    const result = await res.json();
+    console.log("📄 Response JSON:", result);  // Log full response
+
+    if (!res.ok) {
+      setAuthError(result?.error || "Verification failed.");  // Use 'error' key from server
+      return;
+    }
       setAuthMessage("Password updated. You can now sign in.");
       setAuthMode("login");
       setForgotStage("request");
@@ -662,7 +696,7 @@ const res = await fetch(
           <Dashboard
             onPageChange={setCurrentPage}
             stalls={stalls}
-            unpaidInvoices={allInvoices}
+            unpaidInvoices={allInvoices} // Dashboard uses all invoices to calculate stats
             userRole={user?.user_metadata?.role ?? ""}
             userName={user?.user_metadata?.full_name ?? ""}
             userUsername={user?.email?.split("@")[0] ?? ""}
@@ -699,7 +733,7 @@ const res = await fetch(
           <ArchivedStalls onDataChange={refreshData} allStalls={rawStalls} />
         );
       case "unpaid":
-        return <UnpaidDues />;
+        return <UnpaidDues invoices={allInvoices} />;
       case "notifications":
         return <NotificationsPanel userId={user?.id} />;
       case "profile":
@@ -718,7 +752,7 @@ const res = await fetch(
           <Dashboard
             onPageChange={setCurrentPage}
             stalls={stalls}
-            unpaidInvoices={allInvoices}
+            unpaidInvoices={allInvoices} // Dashboard uses all invoices to calculate stats
             userRole={user?.user_metadata?.role ?? ""}
             userName={user?.user_metadata?.full_name ?? ""}
             userUsername={user?.email?.split("@")[0] ?? ""}

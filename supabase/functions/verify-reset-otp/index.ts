@@ -1,87 +1,97 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.58.0";
+// supabase/functions/verify-reset-otp/index.ts
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+export const config = {
+  verify_jwt: false,
+};
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-async function hashOTP(otp: string): Promise<string> {
-  const data = new TextEncoder().encode(otp);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+serve(async (req) => {
+  // ✅ Handle CORS preflight requests
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
 
-export async function OPTIONS() {
-  return new Response(null, { status: 204, headers: corsHeaders });
-}
-
-export async function POST(req: Request) {
   try {
     const { phone, code, newPassword } = await req.json();
-    const normalizedPhone = phone.replace(/\D/g, "");
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    if (!phone || !code || !newPassword) {
+      return new Response(
+        JSON.stringify({ error: "Phone, code, and new password are required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    const { data: reset } = await supabase
+    // Normalize phone
+    const formattedPhone = phone.startsWith("09")
+      ? "+63" + phone.slice(1)
+      : phone;
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    // 1. Hash the provided code to compare with DB (SHA-256)
+    const encoder = new TextEncoder();
+    const hashBuffer = await crypto.subtle.digest(
+      "SHA-256",
+      encoder.encode(code)
+    );
+    const codeHash = Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    // 2. Find the OTP record
+    const { data: otpRecord, error: otpError } = await supabase
       .from("password_reset_codes")
       .select("*")
-      .eq("phone", normalizedPhone)
-      .eq("used", false)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
+      .eq("phone", formattedPhone)
+      .eq("code_hash", codeHash)
+      .gt("expires_at", new Date().toISOString()) // Ensure not expired
+      .maybeSingle();
 
-    if (!reset) {
+    if (otpError || !otpRecord) {
+      console.error("OTP Verification failed:", otpError || "No record found");
       return new Response(
-        JSON.stringify({ success: false, message: "Invalid or expired code." }),
-        { status: 400, headers: corsHeaders }
+        JSON.stringify({ error: "Invalid or expired code" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (new Date(reset.expires_at) < new Date() || reset.attempts >= 3) {
-      return new Response(
-        JSON.stringify({ success: false, message: "Code expired or locked." }),
-        { status: 400, headers: corsHeaders }
-      );
+    // 3. Update the user's password
+    const { error: updateError } = await supabase.auth.admin.updateUserById(
+      otpRecord.user_id,
+      { password: newPassword }
+    );
+
+    if (updateError) {
+      throw updateError;
     }
 
-    const hashedInput = await hashOTP(code);
-    if (hashedInput !== reset.code_hash) {
-      await supabase
-        .from("password_reset_codes")
-        .update({ attempts: reset.attempts + 1 })
-        .eq("id", reset.id);
-
-      return new Response(
-        JSON.stringify({ success: false, message: "Incorrect code." }),
-        { status: 400, headers: corsHeaders }
-      );
-    }
-
-    await supabase.auth.admin.updateUserById(reset.user_id, {
-      password: newPassword,
-    });
-
+    // 4. Delete the used OTP to prevent replay
     await supabase
       .from("password_reset_codes")
-      .update({ used: true })
-      .eq("id", reset.id);
+      .delete()
+      .eq("id", otpRecord.id);
 
     return new Response(
-      JSON.stringify({ success: true, message: "Password updated successfully." }),
-      { status: 200, headers: corsHeaders }
+      JSON.stringify({ success: true, message: "Password updated successfully" }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (err) {
-    console.error(err);
+
+  } catch (error: any) {
+    console.error("Verify OTP Error:", error);
     return new Response(
-      JSON.stringify({ success: false, message: "Server error." }),
-      { status: 500, headers: corsHeaders }
+      JSON.stringify({ error: error.message || "Internal Server Error" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-}
+});

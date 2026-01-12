@@ -1,5 +1,5 @@
 {
-  "importMap": "./functions/import_map.json",
+  "importMap": "./import_map.json",
   "compilerOptions": {
     "lib": ["deno.ns", "dom"],
     "strict": false

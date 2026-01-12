@@ -67,9 +67,13 @@ const getMonthKey = (date: Date) =>
 
 type ViewMode = "dashboard" | "table" | "invoice";
 
-export const UnpaidDues = () => {
+interface UnpaidDuesProps {
+  invoices?: Invoice[];
+}
+
+export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   const { toast } = useToast();
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [localInvoices, setLocalInvoices] = useState<Invoice[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<UnpaidStall | null>(null);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState<number | null>(null);
@@ -80,6 +84,13 @@ export const UnpaidDues = () => {
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
   const [filtersVisible, setFiltersVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
+
+  const invoices = useMemo(() => {
+    if (externalInvoices) {
+      return externalInvoices.filter((inv) => ["unpaid", "overdue"].includes(inv.status));
+    }
+    return localInvoices;
+  }, [externalInvoices, localInvoices]);
 
   // 🧾 Fetch all unpaid invoices
   const fetchUnpaid = async () => {
@@ -97,14 +108,16 @@ export const UnpaidDues = () => {
         variant: "destructive",
       });
     } else {
-      setInvoices(data || []);
+      setLocalInvoices(data || []);
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchUnpaid();
-  }, []);
+    if (!externalInvoices) {
+      fetchUnpaid();
+    }
+  }, [externalInvoices]);
 
   useEffect(() => {
     const fetchCollector = async () => {
@@ -161,7 +174,9 @@ export const UnpaidDues = () => {
       });
 
       // Optimistically update the UI for a faster experience
-      setInvoices((prevInvoices) => prevInvoices.filter((invoice) => invoice.id !== id));
+      if (!externalInvoices) {
+        setLocalInvoices((prevInvoices) => prevInvoices.filter((invoice) => invoice.id !== id));
+      }
       setSelectedInvoice(null);
       setViewMode("table"); // Go back to the table view after payment
     }
@@ -364,7 +379,7 @@ export const UnpaidDues = () => {
     setViewMode("table");
   };
 
-  if (loading) {
+  if (loading && !externalInvoices) {
     return (
       <div className="flex justify-center items-center h-40">
         <Loader2 className="h-6 w-6 animate-spin" />
@@ -497,7 +512,7 @@ export const UnpaidDues = () => {
           <p className="text-xs md:text-sm text-muted-foreground">Review and manage outstanding payments.</p>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" onClick={fetchUnpaid} disabled={loading} className="whitespace-nowrap text-xs md:text-sm">
+          <Button size="sm" onClick={fetchUnpaid} disabled={loading || !!externalInvoices} className="whitespace-nowrap text-xs md:text-sm">
             <RefreshCw className={`mr-2 h-3 w-3 md:h-4 md:w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>

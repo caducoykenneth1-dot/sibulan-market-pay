@@ -402,15 +402,29 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
     // Continue with updating next due, receipt, and toast
     const today = new Date();
-    let nextDueDate = new Date(selectedStall.nextDue || today);
+    // ✅ FIX: Start from 'today' to ensure the new date is in the future.
+    // Using selectedStall.nextDue (which might be years old) caused the year to stay in the past.
+    let nextDueDate = new Date(today);
 
     if (selectedStall.rentalType === "daily") {
       nextDueDate.setDate(today.getDate() + 1);
     } else {
       nextDueDate.setMonth(today.getMonth() + 1);
+      // Preserve the original due day (e.g., 15th) if available
+      if (selectedStall.nextDue) {
+        const oldDue = new Date(selectedStall.nextDue);
+        if (!isNaN(oldDue.getTime())) {
+          nextDueDate.setDate(oldDue.getDate());
+        }
+      }
     }
 
-    const nextDueDateString = nextDueDate.toISOString().split("T")[0];
+    // ✅ FIX: Use local date components to avoid timezone shifts (toISOString uses UTC)
+    const year = nextDueDate.getFullYear();
+    const month = String(nextDueDate.getMonth() + 1).padStart(2, "0");
+    const day = String(nextDueDate.getDate()).padStart(2, "0");
+    const nextDueDateString = `${year}-${month}-${day}`;
+
     const updatedStatus = computeStatusFromDueDate(
       nextDueDateString,
       "current",
