@@ -31,7 +31,7 @@ import {
   format,
 } from "date-fns";
 import { type Invoice } from "./UnpaidDues";
-import { type StallRecord } from "@/data/stalls";
+import { type StallRecord, STALL_TYPES } from "@/data/stalls";
 import { DataTable } from "./data-table";
 import { type ColumnDef } from "@tanstack/react-table";
 
@@ -101,16 +101,19 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     [invoices, statusFilter]
   );
 
-  const stallTypeOptions = useMemo(() => {
-    const types = new Set(payments.map((p) => p.stall_type).filter(Boolean));
-    return Array.from(types).sort((a, b) => a!.localeCompare(b!));
-  }, [payments]);
+  const sectionOptions = useMemo(() => {
+    const sections = new Set<string>();    
+    STALL_TYPES.forEach((t) => {
+      if (t.section) sections.add(t.section);
+    });
+    return Array.from(sections).sort();
+  }, []);
 
   useEffect(() => {
-    if (filterType !== "all" && !stallTypeOptions.includes(filterType)) {
+    if (filterType !== "all" && !sectionOptions.includes(filterType)) {
       setFilterType("all");
     }
-  }, [filterType, stallTypeOptions]);
+  }, [filterType, sectionOptions]);
 
   const filteredBySearchAndType = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -122,8 +125,9 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         payment.vendor_name.toLowerCase().includes(normalizedSearch) ||
         String(payment.id).toLowerCase().includes(normalizedSearch);
 
+      const paymentSection = STALL_TYPES.find((t) => t.name === payment.stall_type)?.section;
       const matchesType =
-        filterType === "all" || payment.stall_type === filterType;
+        filterType === "all" || paymentSection === filterType;
 
       return matchesSearch && matchesType;
     });
@@ -412,11 +416,11 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Sections</SelectItem>
-                  {stallTypeOptions.map(
-                    (type) =>
-                      type && (
-                        <SelectItem key={type} value={type}>
-                          {type.charAt(0).toUpperCase() + type.slice(1)}
+                  {sectionOptions.map(
+                    (section) =>
+                      section && (
+                        <SelectItem key={section} value={section}>
+                          {section}
                         </SelectItem>
                       )
                   )}

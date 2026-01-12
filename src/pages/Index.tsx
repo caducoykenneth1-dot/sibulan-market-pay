@@ -51,6 +51,7 @@ type VendorRow = {
   next_due: string | null;
   rental_type: "monthly" | "daily" | null;
   status: string | null;
+  archive_reason?: string | null;
 };
 
 // A dummy domain to append to usernames to make them valid for Supabase Auth.
@@ -365,7 +366,7 @@ const Index = () => {
       const { data, error } = await supabase
         .from("vendors")
         .select(
-          "id,vendor,contact,type,monthly_rent,last_payment,next_due,status,rental_type"
+          "id,vendor,contact,type,monthly_rent,last_payment,next_due,status,rental_type,archive_reason"
         )
         .order("id", { ascending: true });
 
@@ -427,6 +428,7 @@ const Index = () => {
           status: statusValue,
           occupied: statusValue !== "vacant" && statusValue !== "archived",
           section,
+          archive_reason: row.archive_reason ?? null,
         };
       });
 
@@ -1330,8 +1332,8 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary/10 via-secondary/30 to-background">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-2 md:flex-row md:gap-6 md:px-4">
-        <div className="md:sticky md:top-6 md:w-72 md:flex-shrink-0">
+      <div className="flex w-full flex-col gap-4 px-2 md:flex-row md:gap-0 md:px-0">
+        <div className="md:sticky md:top-0 md:w-80 md:flex-shrink-0 md:h-screen">
           <Navigation
             currentPage={currentPage}
             onPageChange={setCurrentPage}

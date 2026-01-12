@@ -45,6 +45,7 @@ import {
 const STALLS_PER_PAGE = 5;
 const sectionMap = new Map(STALL_TYPES.map(t => [t.name, t.section]));
 
+
 interface ArchivedStallRecord extends StallRecord {
   section: "Dry Section" | "Wet Section" | "N/A";
 }
@@ -57,10 +58,7 @@ interface ArchivedStallsProps {
 export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps) => {
   const { toast } = useToast();
 
-  const [archivedStalls, setArchivedStalls] = useState<ArchivedStallRecord[]>([]);
-  const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalStalls, setTotalStalls] = useState(0);
 
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -71,13 +69,6 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
   const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
-
-  const nameMap = useMemo(
-    () => new Map(allStalls.map(s => [s.dbId, s.name])),
-    [allStalls]
-  );
-
-  const totalPages = Math.ceil(totalStalls / STALLS_PER_PAGE);
 
   const stallTypeOptions = useMemo(() => {
     return [
@@ -96,73 +87,35 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  const fetchArchivedStalls = async (page: number) => {
-    setLoading(true);
+  const filteredStalls = useMemo(() => {
+    const normalizedSearch = debouncedSearch.trim().toLowerCase();
+    
+    return allStalls.filter(stall => {
+      if (stall.status !== 'archived') return false;
 
-    const from = (page - 1) * STALLS_PER_PAGE;
-    const to = from + STALLS_PER_PAGE - 1;
+      const matchesSection = sectionFilter === 'all' || stall.section === sectionFilter;
+      const matchesType = typeFilter === 'all' || stall.type === typeFilter;
+      const matchesSearch = !normalizedSearch || 
+        stall.vendor.toLowerCase().includes(normalizedSearch) ||
+        stall.name.toLowerCase().includes(normalizedSearch) ||
+        String(stall.dbId).includes(normalizedSearch);
 
-    let query = supabase
-      .from("vendors")
-      .select(
-        "id, vendor, contact, type, monthly_rent, last_payment, next_due, status, rental_type, archive_reason",
-        { count: "exact" }
-      )
-      .eq("status", "archived")
-      .order("id");
+      return matchesSection && matchesType && matchesSearch;
+    });
+  }, [allStalls, sectionFilter, typeFilter, debouncedSearch]);
 
-    if (sectionFilter !== "all") {
-      const types = STALL_TYPES.filter(t => t.section === sectionFilter).map(t => t.name);
-      query = query.in("type", types);
-    }
+  const totalStalls = filteredStalls.length;
+  const totalPages = Math.ceil(totalStalls / STALLS_PER_PAGE);
 
-    if (typeFilter !== "all") {
-      query = query.eq("type", typeFilter);
-    }
-
-    if (debouncedSearch) {
-      const term = debouncedSearch.trim();
-      if (!isNaN(Number(term)) && term !== "") {
-        query = query.or(`vendor.ilike.%${term}%,id.eq.${term}`);
-      } else {
-        query = query.ilike("vendor", `%${term}%`);
-      }
-    }
-
-    const { data, error, count } = await query.range(from, to);
-
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-      setArchivedStalls([]);
-      setTotalStalls(0);
-    } else {
-      setArchivedStalls(
-        (data || []).map(row => ({
-          id: `stall-${row.id}`,
-          dbId: row.id,
-          name: nameMap.get(row.id) ?? `Stall ${row.id}`,
-          vendor: row.vendor ?? "",
-          contact: row.contact ?? "",
-          type: row.type ?? "N/A",
-          rentAmount: row.monthly_rent ?? 0,
-          rentalType: row.rental_type ?? "monthly",
-          lastPayment: row.last_payment ?? "",
-          nextDue: row.next_due ?? "",
-          status: "archived",
-          occupied: false,
-          archive_reason: row.archive_reason ?? "No reason provided.",
-          section: sectionMap.get(row.type ?? "") ?? "N/A",
-        }))
-      );
-      setTotalStalls(count ?? 0);
-    }
-
-    setLoading(false);
-  };
+  const paginatedStalls = useMemo(() => {
+    const from = (currentPage - 1) * STALLS_PER_PAGE;
+    return filteredStalls.slice(from, from + STALLS_PER_PAGE);
+  }, [filteredStalls, currentPage]);
 
   useEffect(() => {
-    fetchArchivedStalls(currentPage);
-  }, [currentPage, sectionFilter, typeFilter, debouncedSearch, nameMap]);
+    // Reset to page 1 when filters change
+    setCurrentPage(1);
+  }, [sectionFilter, typeFilter, debouncedSearch]);
 
   useEffect(() => {
     setTypeFilter("all");
@@ -184,7 +137,6 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
       toast({ title: "Stall Restored", description: "Stall moved to active list." });
       onDataChange();
-      fetchArchivedStalls(currentPage);
       setStallToRestore(null);
       setSelectedStall(null);
     } catch (err: any) {
@@ -280,11 +232,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       {/* STALL GRID */}
       {showStalls && (
         <>
-          {loading ? (
-            <div className="flex justify-center py-10">
-              <Loader2 className="animate-spin" />
-            </div>
-          ) : archivedStalls.length === 0 ? (
+          {paginatedStalls.length === 0 ? (
             <Card>
               <CardContent className="py-10 text-center text-muted-foreground">
                 No archived stalls found
@@ -292,12 +240,12 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
             </Card>
           ) : (
             <div className="flex flex-wrap gap-2">
-              {archivedStalls.map(stall => (
+              {paginatedStalls.map(stall => (
                 <Button
                   key={stall.id}
                   variant={selectedStall?.id === stall.id ? "default" : "outline"}
                   className="h-12 w-12 text-xs"
-                  onClick={() => setSelectedStall(stall)}
+                  onClick={() => setSelectedStall(stall as ArchivedStallRecord)}
                 >
                   {stall.name}
                 </Button>
@@ -357,7 +305,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
                   <span className="font-medium">Archive Reason:</span>
                 </div>
                 <div className="p-2 bg-muted rounded-md text-sm italic">
-                  {selectedStall.archive_reason}
+                  {(selectedStall as any).archive_reason || "No reason provided."}
                 </div>
               </div>
 

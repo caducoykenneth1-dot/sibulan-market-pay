@@ -71,8 +71,13 @@ import {
   User,
   ArrowUp,
   ArrowDown,
+  Loader2,
+  CheckCircle,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
-import { ArrowLeft } from "lucide-react";
 
 /* ======================================================================
    1. AUTO BILLING FUNCTION
@@ -157,20 +162,6 @@ async function generateMonthlyInvoices() {
     invoiceLookup.add(lookupKey);
     result.generatedCount++;
 
-    const newDueDate = new Date(nextDue);
-
-    if (stall.rental_type === "daily") {
-      newDueDate.setUTCDate(newDueDate.getUTCDate() + 1);
-    } else {
-      newDueDate.setUTCMonth(newDueDate.getUTCMonth() + 1);
-    }
-
-    const newDueDateString = newDueDate.toISOString().split("T")[0];
-
-    await supabase
-      .from("vendors")
-      .update({ next_due: newDueDateString })
-      .eq("id", stall.id);
   }
 
   return result;
@@ -227,6 +218,36 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
+  
+  // Transaction History State
+  const [showTransactions, setShowTransactions] = useState(false);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState(false);
+  const [calendarDate, setCalendarDate] = useState(new Date());
+
+  useEffect(() => {
+    if (showTransactions && selectedStall) {
+      const fetchTransactions = async () => {
+        setIsLoadingTransactions(true);
+        const { data } = await supabase
+          .from("invoices")
+          .select("*")
+          .eq("vendor_id", selectedStall.dbId)
+          .order("paid_at", { ascending: false });
+        setTransactions(data || []);
+        setIsLoadingTransactions(false);
+      };
+      fetchTransactions();
+    }
+  }, [showTransactions, selectedStall]);
+
+const hasDueStalls = useMemo(() => {
+  return stalls.some(
+    (s) => s.status === "due" || s.status === "overdue"
+  );
+}, [stalls]);
+
 
   const handleSectionSelect = (value) => {
     setSectionFilter(value);
@@ -263,6 +284,19 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
     const rent = Number(formState.rentAmount);
 
     if (!trimmedType || Number.isNaN(rent)) return;
+
+    if (
+      formState.status !== "vacant" &&
+      formState.contact &&
+      !/^\d{11}$/.test(formState.contact)
+    ) {
+      toast({
+        title: "Invalid Contact Number",
+        description: "The contact number must be exactly 11 digits.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     const shouldClear =
       formState.status === "vacant" || formState.status === "archived";
@@ -400,7 +434,8 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
         !normalizedSearch ||
         stall.vendor.toLowerCase().includes(normalizedSearch) ||
         stall.type.toLowerCase().includes(normalizedSearch) ||
-        String(stall.dbId).includes(normalizedSearch);
+        String(stall.dbId).includes(normalizedSearch) ||
+        stall.name.toLowerCase().includes(normalizedSearch);
 
       return (
         matchesStatus && matchesType && matchesSection && matchesSearch
@@ -469,10 +504,23 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
                 const result = await generateMonthlyInvoices();
                 setIsGenerating(false);
                 onStallsChange();
+
+               if (result.generatedCount === 0) {
+                    setOverlayMessage("There are no stalls due");
+                  } else {
+                    setOverlayMessage("Dues generated successfully");
+                  }
+
+                  setTimeout(() => {
+                    setOverlayMessage(null);
+                  }, 3000);
               }}
             >
               {isGenerating ? (
-                "Generating..."
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating...
+                </>
               ) : (
                 <>
                   <Calendar className="mr-2 h-4 w-4" /> Generate Dues
@@ -734,40 +782,48 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
                 </div>
 
                 {/* ACTION BUTTONS */}
-                <div className="flex gap-2 pt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setIsEditMode(true);
-                      setStallBeingEdited(selectedStall);
-                      setFormState({
-                        vendor: selectedStall.vendor,
-                        contact: selectedStall.contact,
-                        type: selectedStall.type,
-                        rentAmount: selectedStall.rentAmount.toString(),
-                        rentalType: selectedStall.rentalType,
-                        status: selectedStall.status,
-                        lastPayment: selectedStall.lastPayment,
-                        nextDue: selectedStall.nextDue,
-                      });
-                      setIsCreateOpen(true);
-                    }}
-                  >
-                    <Pencil className="mr-2 h-4 w-4" /> Edit
-                  </Button>
+              <div className="flex gap-2 pt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowTransactions(true)}
+                    >
+                      <Calendar className="mr-2 h-4 w-4" />
+                      Transactions
+                    </Button>
 
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    disabled={
-                      userRole !== "collector" && userRole !== "admin"
-                    }
-                    onClick={() => setStallToDelete(selectedStall)}
-                  >
-                    <Archive className="mr-2 h-4 w-4" /> Archive
-                  </Button>
-                </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setIsEditMode(true);
+                        setStallBeingEdited(selectedStall);
+                        setFormState({
+                          vendor: selectedStall.vendor,
+                          contact: selectedStall.contact,
+                          type: selectedStall.type,
+                          rentAmount: selectedStall.rentAmount.toString(),
+                          rentalType: selectedStall.rentalType,
+                          status: selectedStall.status,
+                          lastPayment: selectedStall.lastPayment,
+                          nextDue: selectedStall.nextDue,
+                        });
+                        setIsCreateOpen(true);
+                      }}
+                    >
+                      <Pencil className="mr-2 h-4 w-4" /> Edit
+                    </Button>
+
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={userRole !== "collector" && userRole !== "admin"}
+                      onClick={() => setStallToDelete(selectedStall)}
+                    >
+                      <Archive className="mr-2 h-4 w-4" /> Archive
+                    </Button>
+                  </div>
+
               </CardContent>
             </Card>
           )}
@@ -844,20 +900,21 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
                 <Label htmlFor="status">Status</Label>
                 <Select
                   value={formState.status}
-                  onValueChange={(v) =>
+                  onValueChange={(v) => {
+                    const isOccupied = v !== "vacant" && v !== "archived";
+                    const today = new Date().toISOString().split("T")[0];
+
                     setFormState((prev) => ({
                       ...prev,
                       status: v,
                       vendor:
-                        v === "vacant" || v === "archived"
-                          ? ""
-                          : prev.vendor,
+                        !isOccupied ? "" : prev.vendor,
                       contact:
-                        v === "vacant" || v === "archived"
-                          ? ""
-                          : prev.contact,
-                    }))
-                  }
+                        !isOccupied ? "" : prev.contact,
+                      // Auto-fill nextDue if becoming occupied and currently empty
+                      nextDue: isOccupied && !prev.nextDue ? today : prev.nextDue,
+                    }));
+                  }}
                 >
                   <SelectTrigger id="status">
                     <SelectValue />
@@ -932,20 +989,23 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
                 <Input
                   id="contact"
                   value={formState.contact}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 11);
                     setFormState({
                       ...formState,
-                      contact: e.target.value,
-                    })
-                  }
+                      contact: digitsOnly,
+                    });
+                  }}
                   placeholder="09xxxxxxxxx"
                   disabled={formState.status === "vacant"}
+                  maxLength={11}
+                  inputMode="numeric"
                 />
               </div>
 
               {/* LAST PAYMENT */}
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="lastPayment">Last Payment Date</Label>
+                <Label htmlFor="lastPayment">Last Payment Date <span className="text-muted-foreground font-normal text-xs">(Optional)</span></Label>
                 <Input
                   id="lastPayment"
                   type="date"
@@ -1047,6 +1107,152 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Custom Overlay Message for No Dues */}
+     {/* CENTER OVERLAY MESSAGE */}
+<div
+  className={`fixed inset-0 z-50 flex items-center justify-center pointer-events-none transition-all duration-500 ${
+    overlayMessage ? "opacity-100 scale-100" : "opacity-0 scale-95"
+  }`}
+>
+  <div className="bg-black/80 text-white px-8 py-6 rounded-2xl shadow-2xl flex flex-col items-center gap-3 backdrop-blur-sm">
+    <CheckCircle className="h-12 w-12 text-green-400" />
+    <span className="text-xl font-bold text-center">
+      {overlayMessage}
+        </span>
+       </div>
+      </div>
+
+      {/* ======================================================================
+          13. TRANSACTION HISTORY DIALOG
+      ====================================================================== */}
+      <Dialog open={showTransactions} onOpenChange={setShowTransactions}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Transaction History</DialogTitle>
+            <DialogDescription>
+              Payment records for {selectedStall?.name}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Calendar View */}
+          <div className="mb-4 border rounded-lg p-3 bg-card">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                  const d = new Date(calendarDate);
+                  d.setFullYear(d.getFullYear() - 1);
+                  setCalendarDate(d);
+                }}>
+                  <ChevronsLeft className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                  const d = new Date(calendarDate);
+                  d.setMonth(d.getMonth() - 1);
+                  setCalendarDate(d);
+                }}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="font-semibold text-sm">
+                {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+              </div>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                  const d = new Date(calendarDate);
+                  d.setMonth(d.getMonth() + 1);
+                  setCalendarDate(d);
+                }}>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                  const d = new Date(calendarDate);
+                  d.setFullYear(d.getFullYear() + 1);
+                  setCalendarDate(d);
+                }}>
+                  <ChevronsRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1 text-center mb-2">
+              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => (
+                <div key={d} className="text-[10px] font-medium text-muted-foreground py-1">{d}</div>
+              ))}
+              {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => (
+                <div key={`empty-${i}`} />
+              ))}
+              {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
+                const day = i + 1;
+                const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                
+                const dayInvoices = transactions.filter(t => {
+                  const isDue = t.due_date === dateStr;
+                  let isPaidOnDay = false;
+                  if (t.paid_at) {
+                    const p = new Date(t.paid_at);
+                    const pStr = `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, '0')}-${String(p.getDate()).padStart(2, '0')}`;
+                    isPaidOnDay = pStr === dateStr;
+                  }
+                  return isDue || isPaidOnDay;
+                });
+                
+                let statusClass = "hover:bg-muted";
+                if (dayInvoices.length > 0) {
+                  const hasUnpaidDue = dayInvoices.some(t => t.due_date === dateStr && (t.status === 'unpaid' || t.status === 'overdue'));
+                  const hasPaid = dayInvoices.some(t => t.status === 'paid');
+
+                  if (hasUnpaidDue) statusClass = "bg-rose-100 text-rose-700 font-bold";
+                  else if (hasPaid) statusClass = "bg-emerald-100 text-emerald-700 font-bold";
+                }
+
+                return (
+                  <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs cursor-default ${statusClass}`}>
+                    {day}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex gap-4 text-[10px] justify-center text-muted-foreground">
+              <div className="flex items-center gap-1"><div className="w-2 h-2 bg-emerald-100 rounded-full"></div> Paid / Payment Date</div>
+              <div className="flex items-center gap-1"><div className="w-2 h-2 bg-rose-100 rounded-full"></div> Unpaid / Due</div>
+            </div>
+          </div>
+          
+          <div className="max-h-[30vh] overflow-y-auto space-y-3 pr-1 border-t pt-4">
+            {isLoadingTransactions ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : transactions.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground text-sm">
+                No transactions found for this stall.
+              </div>
+            ) : (
+              transactions.map((tx) => (
+                <div key={tx.id} className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                  <div className="space-y-1">
+                    <div className="font-medium text-sm">
+                      {tx.payment_type || "Payment"}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {tx.paid_at ? new Date(tx.paid_at).toLocaleDateString() : "Pending"}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold text-sm text-emerald-600">
+                      ₱{tx.amount?.toLocaleString()}
+                    </div>
+                    <Badge variant={tx.status === 'paid' ? 'outline' : 'secondary'} className="text-[10px] h-5">
+                      {tx.status}
+                    </Badge>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

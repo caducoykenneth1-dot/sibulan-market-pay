@@ -9,6 +9,30 @@ export const columns = (
   onView: (invoice: UnpaidStall) => void
 ): ColumnDef<UnpaidStall>[] => [
   {
+    id: "select",
+    header: ({ table }) => (
+      <input
+        type="checkbox"
+        checked={table.getIsAllPageRowsSelected()}
+        onChange={(e) => table.toggleAllPageRowsSelected(!!e.target.checked)}
+        aria-label="Select all"
+        className="translate-y-[2px] h-4 w-4 accent-primary"
+      />
+    ),
+    cell: ({ row }) => (
+      <input
+        type="checkbox"
+        checked={row.getIsSelected()}
+        onChange={(e) => row.toggleSelected(!!e.target.checked)}
+        onClick={(e) => e.stopPropagation()} // Prevent row click when checking box
+        aria-label="Select row"
+        className="translate-y-[2px] h-4 w-4 accent-primary"
+      />
+    ),
+    enableSorting: false,
+    enableHiding: false,
+  },
+  {
     accessorKey: "vendor_name",
     header: ({ column }) => (
       <Button
@@ -44,7 +68,10 @@ export const columns = (
     id: "actions",
     cell: ({ row }) => {
       return (
-        <Button variant="ghost" size="icon" onClick={() => onView(row.original)}>
+        <Button variant="ghost" size="icon" onClick={(e) => {
+          e.stopPropagation();
+          onView(row.original);
+        }}>
           <Eye className="h-4 w-4" />
         </Button>
       );
