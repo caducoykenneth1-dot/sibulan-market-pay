@@ -56,7 +56,7 @@ export interface Invoice {
   stall_name: string;
   amount: number;
   due_date: string;
-  status: "unpaid" | "paid";
+  status: "unpaid" | "paid" | "overdue";
   paid_at?: string | null;
   stall_type?: string | null;
   payment_type?: string | null;

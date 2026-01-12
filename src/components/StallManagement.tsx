@@ -137,6 +137,7 @@ async function generateMonthlyInvoices() {
     nextDue.setUTCHours(0, 0, 0, 0);
 
     if (nextDue > today) continue;
+    if (nextDue >= today) continue;
 
     const stallDisplayName =
       stallDisplayNameMap.get(stall.id) || `Stall ${stall.id}`;
@@ -162,6 +163,16 @@ async function generateMonthlyInvoices() {
     invoiceLookup.add(lookupKey);
     result.generatedCount++;
 
+    // ✅ Update stall status to 'due' so it doesn't show as 'current' (Paid)
+    // ✅ Update stall status to 'overdue' since we only generate for overdue items now
+    // We do NOT advance next_due here; that happens only upon payment.
+    if (stall.status !== "overdue") {
+      await supabase
+        .from("vendors")
+        .update({ status: "due" })
+        .update({ status: "overdue" })
+        .eq("id", stall.id);
+    }
   }
 
   return result;
@@ -225,6 +236,8 @@ const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [isLoadingTransactions, setIsLoadingTransactions] = useState(false);
   const [calendarDate, setCalendarDate] = useState(new Date());
+  const [selectedDayInvoices, setSelectedDayInvoices] = useState<any[]>([]);
+  const [isDayDialogOpen, setIsDayDialogOpen] = useState(false);
 
   useEffect(() => {
     if (showTransactions && selectedStall) {
@@ -241,6 +254,50 @@ const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
       fetchTransactions();
     }
   }, [showTransactions, selectedStall]);
+
+  const handlePayInvoice = async (invoice: any) => {
+    if (!selectedStall) return;
+
+    // 1. Mark invoice as paid
+    const { error: invError } = await supabase
+      .from("invoices")
+      .update({
+        status: "paid",
+        paid_at: new Date().toISOString(),
+        collector_name: "Manual Update",
+      })
+      .eq("id", invoice.id);
+
+    if (invError) {
+      toast({ title: "Error", description: "Failed to update invoice", variant: "destructive" });
+      return;
+    }
+
+    // 2. Advance vendor next_due
+    const currentDue = new Date(invoice.due_date);
+    const newDue = new Date(currentDue);
+    if (selectedStall.rentalType === 'daily') {
+        newDue.setDate(newDue.getDate() + 1);
+    } else {
+        newDue.setMonth(newDue.getMonth() + 1);
+    }
+    const newDueStr = newDue.toISOString().split('T')[0];
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    await supabase
+        .from("vendors")
+        .update({
+            next_due: newDueStr,
+            last_payment: todayStr,
+            status: 'current' 
+        })
+        .eq("id", selectedStall.dbId);
+
+    toast({ title: "Payment Recorded", description: "Invoice marked as paid." });
+    onStallsChange();
+    setIsDayDialogOpen(false);
+    setShowTransactions(false); // Close to force refresh next time
+  };
 
 const hasDueStalls = useMemo(() => {
   return stalls.some(
@@ -284,19 +341,6 @@ const hasDueStalls = useMemo(() => {
     const rent = Number(formState.rentAmount);
 
     if (!trimmedType || Number.isNaN(rent)) return;
-
-    if (
-      formState.status !== "vacant" &&
-      formState.contact &&
-      !/^\d{11}$/.test(formState.contact)
-    ) {
-      toast({
-        title: "Invalid Contact Number",
-        description: "The contact number must be exactly 11 digits.",
-        variant: "destructive",
-      });
-      return;
-    }
 
     const shouldClear =
       formState.status === "vacant" || formState.status === "archived";
@@ -506,9 +550,9 @@ const hasDueStalls = useMemo(() => {
                 onStallsChange();
 
                if (result.generatedCount === 0) {
-                    setOverlayMessage("There are no stalls due");
+                    setOverlayMessage("There are no stalls overdue.");
                   } else {
-                    setOverlayMessage("Dues generated successfully");
+                    setOverlayMessage("Dues generated successfully.");
                   }
 
                   setTimeout(() => {
@@ -680,16 +724,17 @@ const hasDueStalls = useMemo(() => {
                           selectedStall?.id === stall.id ? null : stall
                         )
                       }
-                      className="h-12 w-12 p-0 transition-all hover:shadow-md"
+                      className="h-16 w-16 md:h-24 md:w-24 p-1 transition-all hover:shadow-md flex flex-col gap-1"
                     >
-                      <span className="font-bold text-xs text-center leading-tight">
+                      <Building2 className="h-4 w-4 md:h-6 md:w-6 opacity-40" />
+                      <span className="font-bold text-xs md:text-sm text-center leading-tight whitespace-normal">
                         {stall.name}
                       </span>
                     </Button>
 
                     {/* STATUS BADGE */}
                     <div
-                      className={`absolute -top-2 -right-3 transform scale-90 px-1.5 py-0.5 rounded-full text-[10px] font-semibold shadow-sm ${
+                      className={`absolute -top-2 -right-2 md:-top-3 md:-right-3 transform scale-90 md:scale-100 px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-semibold shadow-sm z-10 ${
                         stall.status === "current"
                           ? "bg-emerald-100 text-emerald-700"
                           : stall.status === "due"
@@ -900,21 +945,20 @@ const hasDueStalls = useMemo(() => {
                 <Label htmlFor="status">Status</Label>
                 <Select
                   value={formState.status}
-                  onValueChange={(v) => {
-                    const isOccupied = v !== "vacant" && v !== "archived";
-                    const today = new Date().toISOString().split("T")[0];
-
+                  onValueChange={(v) =>
                     setFormState((prev) => ({
                       ...prev,
                       status: v,
                       vendor:
-                        !isOccupied ? "" : prev.vendor,
+                        v === "vacant" || v === "archived"
+                          ? ""
+                          : prev.vendor,
                       contact:
-                        !isOccupied ? "" : prev.contact,
-                      // Auto-fill nextDue if becoming occupied and currently empty
-                      nextDue: isOccupied && !prev.nextDue ? today : prev.nextDue,
-                    }));
-                  }}
+                        v === "vacant" || v === "archived"
+                          ? ""
+                          : prev.contact,
+                    }))
+                  }
                 >
                   <SelectTrigger id="status">
                     <SelectValue />
@@ -989,23 +1033,20 @@ const hasDueStalls = useMemo(() => {
                 <Input
                   id="contact"
                   value={formState.contact}
-                  onChange={(e) => {
-                    const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 11);
+                  onChange={(e) =>
                     setFormState({
                       ...formState,
-                      contact: digitsOnly,
-                    });
-                  }}
+                      contact: e.target.value,
+                    })
+                  }
                   placeholder="09xxxxxxxxx"
                   disabled={formState.status === "vacant"}
-                  maxLength={11}
-                  inputMode="numeric"
                 />
               </div>
 
               {/* LAST PAYMENT */}
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="lastPayment">Last Payment Date <span className="text-muted-foreground font-normal text-xs">(Optional)</span></Label>
+                <Label htmlFor="lastPayment">Last Payment Date</Label>
                 <Input
                   id="lastPayment"
                   type="date"
@@ -1127,7 +1168,7 @@ const hasDueStalls = useMemo(() => {
           13. TRANSACTION HISTORY DIALOG
       ====================================================================== */}
       <Dialog open={showTransactions} onOpenChange={setShowTransactions}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg w-[95vw] rounded-xl">
           <DialogHeader>
             <DialogTitle>Transaction History</DialogTitle>
             <DialogDescription>
@@ -1139,14 +1180,14 @@ const hasDueStalls = useMemo(() => {
           <div className="mb-4 border rounded-lg p-3 bg-card">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
                   const d = new Date(calendarDate);
                   d.setFullYear(d.getFullYear() - 1);
                   setCalendarDate(d);
                 }}>
                   <ChevronsLeft className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
                   const d = new Date(calendarDate);
                   d.setMonth(d.getMonth() - 1);
                   setCalendarDate(d);
@@ -1158,14 +1199,14 @@ const hasDueStalls = useMemo(() => {
                 {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
                   const d = new Date(calendarDate);
                   d.setMonth(d.getMonth() + 1);
                   setCalendarDate(d);
                 }}>
                   <ChevronRight className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
                   const d = new Date(calendarDate);
                   d.setFullYear(d.getFullYear() + 1);
                   setCalendarDate(d);
@@ -1207,7 +1248,7 @@ const hasDueStalls = useMemo(() => {
                 }
 
                 return (
-                  <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs cursor-default ${statusClass}`}>
+                  <div key={day} onClick={() => { setSelectedDayInvoices(dayInvoices); setIsDayDialogOpen(true); }} className={`aspect-square flex items-center justify-center rounded-md text-xs cursor-pointer ${statusClass}`}>
                     {day}
                   </div>
                 );
@@ -1219,7 +1260,7 @@ const hasDueStalls = useMemo(() => {
             </div>
           </div>
           
-          <div className="max-h-[30vh] overflow-y-auto space-y-3 pr-1 border-t pt-4">
+          <div className="max-h-[40vh] md:max-h-[30vh] overflow-y-auto space-y-3 pr-1 border-t pt-4">
             {isLoadingTransactions ? (
               <div className="flex justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -1251,6 +1292,36 @@ const hasDueStalls = useMemo(() => {
               ))
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Day Details Dialog */}
+      <Dialog open={isDayDialogOpen} onOpenChange={setIsDayDialogOpen}>
+        <DialogContent className="sm:max-w-sm w-[90vw] rounded-xl">
+            <DialogHeader>
+                <DialogTitle>
+                  {calendarDate.toLocaleString('default', { month: 'long' })} Details
+                </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+                {selectedDayInvoices.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">No records for this date.</p>
+                ) : (
+                 selectedDayInvoices.map(inv => (
+                    <div key={inv.id} className="flex justify-between items-center border p-3 rounded-lg bg-card">
+                        <div>
+                            <p className="font-medium text-sm">{inv.payment_type || "Rent"}</p>
+                            <p className="text-xs text-muted-foreground">Amount: ₱{inv.amount?.toLocaleString()}</p>
+                        </div>
+                        {inv.status === 'paid' ? (
+                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Paid</Badge>
+                        ) : (
+                            <Button size="sm" onClick={() => handlePayInvoice(inv)}>Mark Paid</Button>
+                        )}
+                    </div>
+                 ))
+                )}
+            </div>
         </DialogContent>
       </Dialog>
     </div>

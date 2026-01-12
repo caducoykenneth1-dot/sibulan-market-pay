@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Search, Filter, Download, Eye, CalendarDays } from "lucide-react";
 import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import autoTable from "jspdf-autotable";
 import {
   format,
 } from "date-fns";
@@ -85,19 +85,23 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   // 🧾 Paid invoices only, sorted
   const payments = useMemo(
     () =>
-      invoices
-        .filter((inv) => {
+      {
+        const filtered = invoices.filter((inv) => {
           if (statusFilter === "paid") return inv.status === "paid" && inv.paid_at;
-          if (statusFilter === "unpaid") return inv.status === "unpaid";
+          if (statusFilter === "unpaid") return inv.status === "unpaid" || inv.status === "overdue";
           return true;
-        })
-        .sort(
-          (a, b) => {
-            const aTime = a.paid_at ? new Date(a.paid_at).getTime() : 0;
-            const bTime = b.paid_at ? new Date(b.paid_at).getTime() : 0;
-            return bTime - aTime;
-          }
-        ),
+        });
+
+        if (statusFilter === 'unpaid') {
+          // For unpaid, sort by due_date ascending (oldest first)
+          return filtered.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
+        }
+  
+        // Default sort for 'paid' and 'all' (most recent paid first)
+        return filtered.sort((a, b) => {
+          return (b.paid_at ? new Date(b.paid_at).getTime() : 0) - (a.paid_at ? new Date(a.paid_at).getTime() : 0);
+        });
+      },
     [invoices, statusFilter]
   );
 
@@ -187,6 +191,18 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
       (a, b) => b.monthStart - a.monthStart
     );
   }, [filteredBySearchAndType]);
+
+  const tableDescription = useMemo(() => {
+    if (selectedMonthKey) {
+      const monthLabel = monthlySummaries.find(s => s.key === selectedMonthKey)?.label;
+      return `Showing records for ${monthLabel || 'the selected month'}`;
+    }
+    switch (statusFilter) {
+      case 'paid': return 'All paid payment records';
+      case 'unpaid': return 'All unpaid records';
+      default: return 'All payment records';
+    }
+  }, [selectedMonthKey, statusFilter, monthlySummaries]);
 
   useEffect(() => {
     if (
@@ -290,71 +306,74 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     []
   );
 
+  const unpaidCount = useMemo(() => {
+    return invoices.filter(inv => inv.status === 'unpaid' || inv.status === 'overdue').length;
+  }, [invoices]);
+
   // 🧾 Export PDF
   const handleExport = async () => {
     if (filteredPayments.length === 0) return;
 
-    const reportElement = document.createElement("div");
-    reportElement.style.position = "absolute";
-    reportElement.style.left = "-9999px";
-    reportElement.style.width = "210mm";
-    reportElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; color: #000;">
-        <h1 style="font-size: 24px; text-align: center; margin-bottom: 20px;">Payment History Report</h1>
-        <p style="font-size: 12px; margin-bottom: 20px;">Generated on: ${new Date().toLocaleString()}</p>
-        <table style="width: 100%; border-collapse: collapse; font-size: 10px;">
-          <thead>
-            <tr style="background-color: #f2f2f2;">
-              <th style="border: 1px solid #ddd; padding: 8px;">Receipt ID</th>
-              <th style="border: 1px solid #ddd; padding: 8px;">Paid At</th>
-              <th style="border: 1px solid #ddd; padding: 8px;">Vendor</th>
-              <th style="border: 1px solid #ddd; padding: 8px;">Stall</th>
-              <th style="border: 1px solid #ddd; padding: 8px; text-align: right;">Amount</th>
-              <th style="border: 1px solid #ddd; padding: 8px;">Collector</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${filteredPayments
-              .map(
-                (p) => `
-                <tr>
-                  <td style="border: 1px solid #ddd; padding: 8px;">DPM-${String(
-                    p.id
-                  ).padStart(6, "0")}</td>
-                  <td style="border: 1px solid #ddd; padding: 8px;">${new Date(
-                    p.paid_at!
-                  ).toLocaleString()}</td>
-                  <td style="border: 1px solid #ddd; padding: 8px;">${
-                    p.vendor_name
-                  }</td>
-                  <td style="border: 1px solid #ddd; padding: 8px;">${
-                    p.stall_name
-                  }</td>
-                  <td style="border: 1px solid #ddd; padding: 8px; text-align: right;">${p.amount.toLocaleString()}</td>
-                  <td style="border: 1px solid #ddd; padding: 8px;">${
-                    p.collector_name || "N/A"
-                  }</td>
-                </tr>
-              `
-              )
-              .join("")}
-          </tbody>
-        </table>
-      </div>
-    `;
-    document.body.appendChild(reportElement);
+    const doc = new jsPDF();
+    const isUnpaid = statusFilter === "unpaid";
+    const title = isUnpaid ? "Unpaid Dues Report" : "Payment History Report";
+    const monthText = selectedMonthLabel ? `Period: ${selectedMonthLabel}` : "Period: All Time";
+    
+    // Header
+    doc.setFontSize(18);
+    doc.text(title, 14, 20);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(100);
+    doc.text(`Generated on: ${format(new Date(), "PPP p")}`, 14, 28);
+    doc.text(monthText, 14, 33);
+    if (filterType !== "all") {
+      doc.text(`Section: ${filterType}`, 14, 38);
+    }
 
-    const canvas = await html2canvas(reportElement, { scale: 2 });
-    document.body.removeChild(reportElement);
+    // Define Columns based on status
+    const tableHead = isUnpaid 
+      ? [["Invoice ID", "Vendor", "Stall", "Type", "Due Date", "Amount"]]
+      : [["Receipt ID", "Vendor", "Stall", "Type", "Paid Date", "Collector", "Amount"]];
 
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF("p", "mm", "a4");
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const ratio = canvas.width / canvas.height;
-    const imgWidth = pdfWidth - 20;
-    const imgHeight = imgWidth / ratio;
-    pdf.addImage(imgData, "PNG", 10, 10, imgWidth, imgHeight);
-    pdf.save(`payment-history-${new Date().toISOString().split("T")[0]}.pdf`);
+    // Map Data
+    const tableBody = filteredPayments.map((p) => {
+      const amount = `PHP ${p.amount.toLocaleString()}`;
+      const type = p.payment_type || p.stall_type || "N/A";
+      
+      if (isUnpaid) {
+        return [
+          String(p.id),
+          p.vendor_name,
+          p.stall_name,
+          type,
+          p.due_date,
+          amount
+        ];
+      } else {
+        return [
+          `DPM-${String(p.id).padStart(6, "0")}`,
+          p.vendor_name,
+          p.stall_name,
+          type,
+          p.paid_at ? format(new Date(p.paid_at), "MMM d, yyyy") : "-",
+          p.collector_name || "N/A",
+          amount
+        ];
+      }
+    });
+
+    // Generate Table
+    autoTable(doc, {
+      startY: 45,
+      head: tableHead,
+      body: tableBody,
+      theme: 'grid',
+      headStyles: { fillColor: isUnpaid ? [220, 38, 38] : [22, 163, 74] }, // Red for unpaid, Green for paid
+      styles: { fontSize: 8 },
+    });
+
+    doc.save(`${title.toLowerCase().replace(/\s+/g, "-")}-${format(new Date(), "yyyy-MM-dd")}.pdf`);
   };
 
   return (
@@ -392,7 +411,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                 onClick={() => setStatusFilter("unpaid")}
                 className="whitespace-nowrap bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
               >
-                ✗ Unpaid ({invoices.filter(inv => inv.status === "unpaid").length})
+                ✗ Unpaid ({unpaidCount})
               </Button>
             </div>
           </div>
@@ -539,9 +558,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         <CardHeader>
           <CardTitle>Payment Records</CardTitle>
           <CardDescription>
-            {selectedMonthLabel
-              ? `Showing payments for ${selectedMonthLabel}`
-              : "All payment records"}
+            {tableDescription}
           </CardDescription>
         </CardHeader>
         <CardContent>
