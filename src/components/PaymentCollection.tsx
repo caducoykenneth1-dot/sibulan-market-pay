@@ -10,6 +10,7 @@ import { computeStatusFromDueDate, type StallRecord, type StallTypeInfo } from "
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { supabase } from "@/lib/supabaseClient"; // Supabase client
+import { Badge } from "@/components/ui/badge";
 
 type PaymentData = {
   amount: string;
@@ -79,17 +80,41 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     amount: string;
     paymentType: string;
     paymentDate: string;
+    paymentMethod: string;
+    referenceNumber: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [assignedSection, setAssignedSection] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchAssignment = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && user.id === collectorId) {
+        const section = user.user_metadata?.market_section || user.user_metadata?.section;
+        if (section && section !== "unassigned") {
+          setAssignedSection(section);
+        }
+      }
+    };
+    fetchAssignment();
+  }, [collectorId]);
+
+  const availableStalls = useMemo(() => {
+    if (!assignedSection) return stalls;
+    return stalls.filter((s) => s.section === assignedSection);
+  }, [stalls, assignedSection]);
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
   const stallTypeOptions = useMemo(
-    () => Array.from(new Set(stalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
-    [stalls]
+    () => Array.from(new Set(availableStalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
+    [availableStalls]
   );
 
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'gcash' | 'maya'>('cash');
+  const [referenceNumber, setReferenceNumber] = useState('');
+
   const groupedStallTypes = useMemo(() => {
-    const stallTypesWithSection = stalls.map(stall => ({ name: stall.type, section: stall.section }));
+    const stallTypesWithSection = availableStalls.map(stall => ({ name: stall.type, section: stall.section }));
     const uniqueStallTypes = Array.from(new Map(stallTypesWithSection.map(item => [item.name, item])).values());
     
     return uniqueStallTypes.reduce((acc, type) => {
@@ -100,7 +125,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       acc[section].push(type as StallTypeInfo);
       return acc;
     }, {} as Record<string, StallTypeInfo[]>);
-  }, [stalls]);
+  }, [availableStalls]);
 
   const canCollectStall = useCallback((stall: StallRecord) => {
     if (!stall) return false;
@@ -122,7 +147,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     }
     const firstCollectableType =
       stallTypeOptions.find((type) =>
-        stalls.some((stall) => stall.type === type && canCollectStall(stall))
+        availableStalls.some((stall) => stall.type === type && canCollectStall(stall))
       ) ?? stallTypeOptions[0];
 
     if (!selectedType) {
@@ -132,12 +157,12 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     if (!stallTypeOptions.includes(selectedType)) {
       setSelectedType(firstCollectableType);
     }
-  }, [selectedType, stallTypeOptions, stalls, canCollectStall]);
+  }, [selectedType, stallTypeOptions, availableStalls, canCollectStall]);
 
   const filteredStalls = useMemo(() => {
-    if (!selectedType) return stalls;
-    return stalls.filter((stall) => stall.type === selectedType);
-  }, [stalls, selectedType]);
+    if (!selectedType) return availableStalls;
+    return availableStalls.filter((stall) => stall.type === selectedType);
+  }, [availableStalls, selectedType]);
 
   const collectableStalls = useMemo(() => filteredStalls.filter(canCollectStall), [filteredStalls, canCollectStall]);
 
@@ -168,6 +193,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   useEffect(() => {
     if (!selectedStall) {
       setPaymentData((prev) => ({ ...prev, amount: "" }));
+      setPaymentMethod("cash");
+      setReferenceNumber("");
       return;
     }
     setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.rentAmount) }));
@@ -324,6 +351,14 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
       const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
 
+      let finalNotes = paymentData.notes || "";
+      if (paymentMethod !== 'cash') {
+        const methodLabel = paymentMethod === 'gcash' ? 'GCash' : 'Maya';
+        const refInfo = referenceNumber ? ` (Ref: ${referenceNumber})` : '';
+        const prefix = finalNotes ? '\n' : '';
+        finalNotes = `${finalNotes}${prefix}Paid via ${methodLabel}${refInfo}`;
+      }
+
      const { error: invoiceError } = await supabase.from("invoices").insert([
   {
     vendor_id: stallDbId,
@@ -332,7 +367,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     stall_type: selectedStall.type,
     amount: Number(paymentData.amount),
     payment_type: paymentType,
-    notes: paymentData.notes || null,
+    notes: finalNotes || null,
     due_date: paymentDateString,
     status: "paid",
     paid_at: paymentTimestamp.toISOString(),
@@ -466,6 +501,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       amount: paymentData.amount,
       paymentType,
       paymentDate: paymentTimestamp.toLocaleString(),
+      paymentMethod: paymentMethod === 'cash' ? 'Cash' : (paymentMethod === 'gcash' ? 'GCash' : 'Maya'),
+      referenceNumber
     });
     setShowReceipt(true);
     toast({
@@ -475,6 +512,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       }`,
     });
     setSelectedStallId(""); // Reset selected stall
+    setPaymentMethod("cash");
+    setReferenceNumber("");
     await onPaymentSuccess();
 
   } finally {
@@ -539,6 +578,16 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                   <span className="font-medium">{receiptContext.paymentType}</span>
                 </div>
                 <div className="flex justify-between">
+                  <span>Method:</span>
+                  <span className="font-medium uppercase">{receiptContext.paymentMethod}</span>
+                </div>
+                {receiptContext.referenceNumber && (
+                  <div className="flex justify-between">
+                    <span>Ref No:</span>
+                    <span className="font-medium">{receiptContext.referenceNumber}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
                   <span>Date:</span>
                   <span>{receiptContext.paymentDate}</span>
                 </div>
@@ -570,6 +619,11 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Payment Collection</h1>
+          {assignedSection && (
+            <Badge variant="secondary" className="mt-1">
+              {assignedSection}
+            </Badge>
+          )}
           <p className="text-muted-foreground">
             Capture stall payments and generate receipts instantly.
           </p>
@@ -688,6 +742,75 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4">
+            
+            {/* Payment Method Buttons */}
+            <div className="space-y-2">
+              <Label>Payment Method</Label>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  type="button"
+                  variant={paymentMethod === "cash" ? "default" : "outline"}
+                  onClick={() => setPaymentMethod("cash")}
+                  className="w-full"
+                >
+                  Cash
+                </Button>
+                <Button
+                  type="button"
+                  variant={paymentMethod === "gcash" ? "default" : "outline"}
+                  onClick={() => setPaymentMethod("gcash")}
+                  className={`w-full ${
+                    paymentMethod === "gcash" 
+                      ? "bg-blue-600 hover:bg-blue-700 text-white border-transparent" 
+                      : "text-blue-600 border-blue-200 hover:bg-blue-50"
+                  }`}
+                >
+                  GCash
+                </Button>
+                <Button
+                  type="button"
+                  variant={paymentMethod === "maya" ? "default" : "outline"}
+                  onClick={() => setPaymentMethod("maya")}
+                  className={`w-full ${
+                    paymentMethod === "maya" 
+                      ? "bg-green-600 hover:bg-green-700 text-white border-transparent" 
+                      : "text-green-600 border-green-200 hover:bg-green-50"
+                  }`}
+                >
+                  Maya
+                </Button>
+              </div>
+            </div>
+
+            {paymentMethod !== "cash" && (
+              <div className="space-y-2 animate-in fade-in slide-in-from-top-1">
+                <Label htmlFor="ref-no">Reference Number</Label>
+                <Input
+                  id="ref-no"
+                  value={referenceNumber}
+                  onChange={(e) => setReferenceNumber(e.target.value)}
+                  placeholder={`Last digits of ${paymentMethod === 'gcash' ? 'GCash' : 'Maya'} Ref No.`}
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Quick Amounts</Label>
+              <div className="flex gap-2">
+                {[100, 500, 1000].map((amt) => (
+                  <Button
+                    key={amt}
+                    type="button"
+                    variant="outline"
+                    onClick={() => setPaymentData((prev) => ({ ...prev, amount: String(amt) }))}
+                    className="flex-1"
+                  >
+                    ₱{amt}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
             <div>
               <Label htmlFor="amount">Amount (PHP)</Label>
               <Input
