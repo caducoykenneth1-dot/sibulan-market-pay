@@ -429,6 +429,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   /* ----------------------------------------------------------
      ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ MAIN PAYMENT SUBMIT HANDLER
   ---------------------------------------------------------- */
+  const currentReceiptNo = generateReceiptNo();
   const handlePaymentSubmit = async () => {
     if (!selectedStall || !paymentData.amount) {
       toast({
@@ -444,6 +445,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       : selectedStallDisplayName || "Unnamed Stall";
     const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
     const paymentTimestamp = new Date();
+    const currentReceiptNo = generateReceiptNo();
 
     if (!isOnline) {
       const newPayment: QueuedPayment = {
@@ -543,7 +545,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
       const { data: latestStall, error: latestFetchError } = await supabase
         .from("vendors")
-        .select("id, last_payment, next_due, status, rental_type")
+        .select("id, last_payment, next_due, status, rental_type, contact")
         .eq("id", stallDbId)
         .maybeSingle();
 
@@ -620,11 +622,15 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     status: "paid",
     paid_at: paymentTimestamp.toISOString(),
 
-    // ✅ THIS IS THE MISSING PIECE
+    // ✅ NOW VALID
+    receipt_number: currentReceiptNo,
+
     collector_id: collectorId,
     collector_name: collectorName,
   },
 ]);
+
+
 
       // Log Activity
       await supabase.from("activity_logs").insert({
@@ -659,20 +665,48 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
           paymentDate: paymentDateString,
           paymentType: paymentType,
           collectorName: collectorName,
-          receiptNumber: `Receipt #${Math.floor(100000 + Math.random() * 900000)}`,
+          receiptNumber: currentReceiptNo,
         };
 
-        const { data: smsData, error: smsError } = await supabase.functions.invoke("send-sms-receipt", {
-          body: smsPayload,
-          headers: { "Content-Type": "application/json" },
-        });
+        // 📩 SEND SMS RECEIPT (NON-BLOCKING)
+      // 📩 SEND SMS RECEIPT (NON-BLOCKING)
+// -----------------------------
+// SEND SMS RECEIPT (NON-BLOCKING)
+// -----------------------------
+if (latestStall?.contact) {
+  try {
+    const { data, error } = await supabase.functions.invoke(
+      "send-sms-receipt",
+      {
+        body: {
+          receiptNumber: currentReceiptNo, // ✅ ALWAYS DEFINED
+        },
+      }
+    );
+
+    if (error) {
+      console.error("SMS Function Error:", error);
+      smsFailed = true;
+    } else if (!data?.success) {
+      console.warn("SMS failed response:", data);
+      smsFailed = true;
+    } else {
+      console.log("SMS sent successfully");
+    }
+  } catch (err) {
+    console.error("Unexpected SMS exception:", err);
+    smsFailed = true;
+  }
+}
+
+
 
         if (smsError) {
           console.error("SMS Function Error:", smsError);
-          console.error("SMS Error Details:", JSON.stringify(smsError, null, 2));
+          // console.error("SMS Error Details:", JSON.stringify(smsError, null, 2));
           smsFailed = true; // Set flag on failure
         } else if (smsData) {
-          console.log("SMS Response:", JSON.stringify(smsData, null, 2));
+          console.log("SMS Response:", smsData);
           if (smsData.success) {
             console.log("SMS receipt sent successfully via SMS Gateway");
           } else {
@@ -749,7 +783,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       });
     }
 
-    setReceiptNo(generateReceiptNo());
+    setReceiptNo(currentReceiptNo);
     setReceiptContext({
       stallLabel,
       vendor: selectedStall.vendor || "No vendor",

@@ -555,7 +555,7 @@ const Index = () => {
     setAuthMode("login");
   };
 
- const handleForgotPassword = async (
+const handleForgotPassword = async (
   event: React.FormEvent<HTMLFormElement>
 ) => {
   event.preventDefault();
@@ -575,12 +575,13 @@ const Index = () => {
       {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`, // ✅ REQUIRED
-        },
+  "Content-Type": "application/json",
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+},
+
         body: JSON.stringify({
-          phone: phone, // RAW: 09XXXXXXXXX
+          phone, // 09XXXXXXXXX
         }),
       }
     );
@@ -632,9 +633,11 @@ const Index = () => {
       {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          apikey: SUPABASE_ANON_KEY, // ✅ REQUIRED
-        },
+  "Content-Type": "application/json",
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+},
+
         body: JSON.stringify({
           phone: phone,
           code: code,
@@ -741,7 +744,7 @@ const Index = () => {
           />
         );
       case "history":
-        return <PaymentHistory stalls={rawStalls} invoices={allInvoices} />;
+        return <PaymentHistory stalls={rawStalls} invoices={allInvoices} userRole={user?.user_metadata?.role ?? ""} />;
       case "stalls":
         return (
           <StallManagement

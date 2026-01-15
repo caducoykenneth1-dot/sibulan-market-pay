@@ -50,6 +50,7 @@ const getMonthKey = (date: Date) =>
 interface PaymentHistoryProps {
   stalls: StallRecord[];
   invoices: Invoice[];
+  userRole: string;
 }
 
 // 🟦 Helpers
@@ -80,7 +81,7 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 };
 
 
-export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
+export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryProps) => {
   const [selectedPayment, setSelectedPayment] = useState<Invoice | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -563,9 +564,11 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                 </SheetContent>
               </Sheet>
 
-              <Button variant="outline" onClick={handleExport}>
-                <Download className="mr-2 h-4 w-4" /> Export
-              </Button>
+              {userRole === 'admin' && (
+                <Button variant="outline" onClick={handleExport}>
+                  <Download className="mr-2 h-4 w-4" /> Export
+                </Button>
+              )}
             </div>
           </div>
         </CardContent>
@@ -684,7 +687,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
       <Dialog
         open={isDialogOpen}
         onOpenChange={(open) =>
-          open ? setIsMenuOpen(true) : handleCloseDialog()
+          open ? setIsDialogOpen(true) : handleCloseDialog()
         }
       >
         <DialogContent>

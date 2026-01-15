@@ -1,138 +1,97 @@
 export const config = {
-  verify_jwt: true, // 🔐 REQUIRED for receipts
+  verify_jwt: false,
 };
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.58.0";
-
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SMS_GATEWAY_API_KEY = Deno.env.get("SMS_GATEWAY_API_KEY")!;
-const SMS_GATEWAY_URL = "https://api.smstext.app/push";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, apikey, content-type, x-client-info",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-/**
- * Normalize PH mobile numbers to +639XXXXXXXXX
- */
-function normalizePhone(phone: string): string {
-  const clean = phone.replace(/\s+/g, "");
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
 
-  if (clean.startsWith("+63")) return clean;
-  if (clean.startsWith("63")) return "+" + clean;
-  if (clean.startsWith("09")) return "+63" + clean.slice(1);
-
-  return clean;
-}
-
-/**
- * Send SMS via smstext.app
- */
-async function sendSMS(phone: string, message: string): Promise<boolean> {
-  const auth = btoa(`apikey:${SMS_GATEWAY_API_KEY}`);
-
-  const res = await fetch(SMS_GATEWAY_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${auth}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify([
-      {
-        mobile: phone,
-        text: message,
-      },
-    ]),
-  });
-
-  return res.ok;
-}
-
-export async function OPTIONS() {
-  return new Response(null, { status: 204, headers: corsHeaders });
-}
-
-export async function POST(req: Request) {
   try {
-    const { receiptNumber } = await req.json();
+    const body = await req.json();
+    const receiptNumber = body?.receiptNumber;
 
     if (!receiptNumber) {
       return new Response(
-        JSON.stringify({ success: false, message: "Receipt number required" }),
+        JSON.stringify({ success: false, message: "receiptNumber required" }),
         { status: 400, headers: corsHeaders }
       );
     }
 
     const supabase = createClient(
-      SUPABASE_URL,
-      SUPABASE_SERVICE_ROLE_KEY
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // 🔁 Prevent duplicate SMS
-    const { data: existing } = await supabase
-      .from("sms_logs")
-      .select("id")
-      .eq("reference", receiptNumber)
-      .single();
-
-    if (existing) {
-      return new Response(
-        JSON.stringify({ success: true, message: "Receipt already sent." }),
-        { status: 200, headers: corsHeaders }
-      );
-    }
-
-    // 🔐 Load receipt details from DB
-    const { data: txn, error: txnError } = await supabase
-      .from("transactions")
-      .select("amount, phone, receipt_number")
+    // 🔎 Get invoice details
+    const { data: invoice, error } = await supabase
+      .from("invoices")
+      .select("amount, vendor_name, receipt_number")
       .eq("receipt_number", receiptNumber)
       .single();
 
-    if (txnError || !txn) {
+    if (error || !invoice) {
       return new Response(
         JSON.stringify({ success: false, message: "Invalid receipt" }),
         { status: 400, headers: corsHeaders }
       );
     }
 
-    const phone = normalizePhone(txn.phone);
-    const message = `Sibulan Market Pay\nReceipt ${txn.receipt_number}\nAmount: PHP ${txn.amount.toFixed(
-      2
-    )}\nThank you.`;
+    // 📞 Get vendor phone
+    const { data: vendor } = await supabase
+      .from("vendors")
+      .select("contact")
+      .eq("vendor", invoice.vendor_name)
+      .single();
 
-    // 📡 Send SMS
-    const sent = await sendSMS(phone, message);
-
-    if (!sent) {
+    if (!vendor?.contact) {
       return new Response(
-        JSON.stringify({ success: false, message: "SMS gateway failed" }),
-        { status: 502, headers: corsHeaders }
+        JSON.stringify({ success: false, message: "No contact number" }),
+        { status: 200, headers: corsHeaders }
       );
     }
 
-    // 🧾 Log SMS
-    await supabase.from("sms_logs").insert({
-      phone,
-      message,
-      type: "receipt",
-      reference: receiptNumber,
-      sent_at: new Date().toISOString(),
-    });
+    const phone = vendor.contact.replace(/\D/g, "");
+
+    // 📩 Send SMS via IPROG
+    const smsRes = await fetch(
+      "https://www.iprogsms.com/api/v1/sms_messages",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: Deno.env.get("IPROG_API_KEY"),
+          phone_number: phone,
+          message: `
+Receipt: ${receiptNumber}
+Amount: PHP ${invoice.amount}
+Thank you.`,
+        }),
+      }
+    );
+
+    const smsResult = await smsRes.json();
+    console.log("IPROG RESPONSE:", smsResult);
 
     return new Response(
-      JSON.stringify({ success: true, message: "Receipt sent." }),
+      JSON.stringify({ success: true }),
       { status: 200, headers: corsHeaders }
     );
   } catch (err) {
-    console.error("SMS Receipt Error:", err);
-
+    console.error("SMS RECEIPT ERROR:", err);
     return new Response(
-      JSON.stringify({ success: false, message: "Server error" }),
+      JSON.stringify({ success: false }),
       { status: 500, headers: corsHeaders }
     );
   }
-}
+});

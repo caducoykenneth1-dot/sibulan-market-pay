@@ -804,6 +804,10 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
         onOpenChange={(open) => (!open ? setSelectedStall(null) : null)}
       >
         <DialogContent className="sm:max-w-lg md:max-w-xl border-none p-0 overflow-hidden px-4">
+          <DialogHeader className="hidden">
+            <DialogTitle>Stall Details</DialogTitle>
+            <DialogDescription>Details for {selectedStall?.name}</DialogDescription>
+          </DialogHeader>
           {selectedStall && (
             <Card key={selectedStall.id} className="border-none shadow-none">
 
@@ -1062,17 +1066,23 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
               <div className="space-y-2">
                 <Label htmlFor="contact">Contact Number</Label>
                 <Input
-                  id="contact"
-                  value={formState.contact}
-                  onChange={(e) =>
-                    setFormState({
-                      ...formState,
-                      contact: e.target.value,
-                    })
-                  }
-                  placeholder="09xxxxxxxxx"
-                  disabled={formState.status === "vacant"}
-                />
+  id="contact"
+  type="tel"
+  inputMode="numeric"
+  pattern="[0-9]*"
+  maxLength={11}
+  value={formState.contact}
+  onChange={(e) => {
+    const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 11);
+    setFormState({
+      ...formState,
+      contact: digitsOnly,
+    });
+  }}
+  placeholder="09XXXXXXXXX"
+  disabled={formState.status === "vacant"}
+/>
+
               </div>
 
               <div className="space-y-2 sm:col-span-2">
