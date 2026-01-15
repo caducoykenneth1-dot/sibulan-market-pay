@@ -2,6 +2,7 @@ import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   AccountProfileModal,
   AccountProfileData,
@@ -25,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, User, Users, Search, Trash2, Loader2, Eye } from "lucide-react";
+import { Plus, User, Users, Search, Trash2, Loader2, Eye, CheckCircle } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { User as SupabaseUser } from "@supabase/supabase-js";
 import { STALL_TYPES } from "@/data/stalls";
@@ -81,6 +82,7 @@ export const UserManagement = ({
   const [profileActivity, setProfileActivity] = React.useState<ActivitySummary | null>(null);
   const [profileActivityLoading, setProfileActivityLoading] = React.useState(false);
   const [profileActivityError, setProfileActivityError] = React.useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = React.useState(false);
 
   const filteredAccounts = React.useMemo(() => {
     const normalized = searchTerm.trim().toLowerCase();
@@ -481,8 +483,12 @@ export const UserManagement = ({
     setPendingChanges({});
     setLoading(false);
     onAccountsChange();
-    toast({ 
-      title: "Account assignments updated",
+
+    setShowSuccess(true);
+    setTimeout(() => setShowSuccess(false), 3000);
+
+    toast({
+      title: "Assigned successfully",
       description: "Collectors have been notified of their new assignments."
     });
   };
@@ -669,6 +675,20 @@ export const UserManagement = ({
           ) : (
             filteredAccounts.map((acc, index) => {
               const meta = acc.user_metadata || acc.raw_user_meta_data;
+              const avatarUrl = meta?.avatar_url;
+              const fullName = meta?.full_name || "Unnamed User";
+              const username = acc.email?.split("@")[0] || "unknown";
+
+              const getInitials = () => {
+                if (fullName && fullName.trim()) {
+                  const parts = fullName.trim().split(" ");
+                  const letters = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
+                  if (letters) return letters;
+                }
+                return (username?.slice(0, 2) || "UU").toUpperCase();
+              };
+              const initials = getInitials();
+
               const storedMarket =
                 typeof meta?.market === "string" ? meta.market.trim() : "";
               const storedRole = meta?.role ?? "collector";
@@ -734,12 +754,13 @@ export const UserManagement = ({
                       {isAdmin ? "Admin" : "Collector"}
                     </Badge>
                     <div className="flex items-center gap-4 pr-16">
-                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-secondary text-primary">
-                        <User className="h-6 w-6" />
-                      </div>
+                      <Avatar className="h-14 w-14">
+                        <AvatarImage src={avatarUrl} alt={fullName} />
+                        <AvatarFallback className="text-lg font-semibold">{initials}</AvatarFallback>
+                      </Avatar>
                       <div>
                         <p className="text-lg font-semibold">
-                          {meta?.full_name || "Unnamed User"}
+                          {fullName}
                         </p>
                         <p className="break-all text-sm text-muted-foreground">
                           @{acc.email?.split("@")[0]}
@@ -820,10 +841,39 @@ export const UserManagement = ({
 
       {/* Save Changes Button */}
       {hasPendingChanges && (
-        <div className="flex justify-end">
-          <Button onClick={handleSaveChanges} disabled={loading}>
-            {loading ? "Saving..." : "Save Changes"}
-          </Button>
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-10 fade-in duration-500">
+          <Card className="shadow-2xl border-primary/20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+            <CardContent className="flex items-center gap-3 p-4">
+              <span className="text-sm font-medium hidden sm:inline-block">
+                You have unsaved assignments
+              </span>
+              <Button variant="ghost" onClick={() => setPendingChanges({})} disabled={loading}>
+                Cancel
+              </Button>
+              <Button onClick={handleSaveChanges} disabled={loading} className="shadow-md">
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {showSuccess && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-10 fade-in duration-500">
+          <Card className="shadow-2xl border-emerald-200 bg-emerald-50 text-emerald-900">
+            <CardContent className="flex items-center gap-3 p-4">
+              <CheckCircle className="h-5 w-5 text-emerald-600" />
+              <span className="font-medium">Assigned successfully</span>
+            </CardContent>
+          </Card>
         </div>
       )}
 

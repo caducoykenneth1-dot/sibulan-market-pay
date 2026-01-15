@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -11,11 +11,13 @@ import {
   Plus,
   Home,
   History,
-  PieChart
+  PieChart,
+  ClipboardList
 } from "lucide-react";
 import { type StallRecord } from "@/data/stalls";
 import { type Invoice } from "./UnpaidDues";
 import { MonthlyCollections } from "./MonthlyCollections";
+import { supabase } from "@/lib/supabaseClient";
 
 interface DashboardProps {
   onPageChange: (page: string) => void;
@@ -43,6 +45,21 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 
 export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, userName, userUsername, avatarUrl }: DashboardProps) => {
   const [showMonthlyCollections, setShowMonthlyCollections] = useState(false);
+  const [recentLogs, setRecentLogs] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (userRole === 'admin') {
+      const fetchLogs = async () => {
+        const { data } = await supabase
+          .from("activity_logs")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(5);
+        if (data) setRecentLogs(data);
+      };
+      fetchLogs();
+    }
+  }, [userRole]);
 
   // ✅ Filter paid invoices: If collector, show only their own. If admin, show all.
   const relevantPaidInvoices = useMemo(() => {
@@ -222,25 +239,25 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     onClick={() => onPageChange("profile")}
     className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
     title="Change profile photo"
-                              >
-                                <Avatar className="h-12 w-12 md:h-16 md:w-16 border-2 border-transparent transition group-hover:border-primary">
-                                  {avatarUrl ? (
-                                    <AvatarImage src={avatarUrl} alt="Collector profile" />
-                                  ) : (
-                                    <AvatarFallback className="text-sm md:text-lg font-semibold">
-                                      {initials}
-                                    </AvatarFallback>
-                                  )}
-                                </Avatar>
-            <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-primary px-2 py-[2px] text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
-              Edit
-            </span>
-          </button>
+  >
+    <Avatar key={avatarUrl} className="h-16 w-16 md:h-20 md:w-20 border-2 border-transparent transition group-hover:border-primary">
+      {avatarUrl ? (
+        <AvatarImage src={avatarUrl} alt="Collector profile" />
+      ) : (
+        <AvatarFallback className="text-lg md:text-xl font-semibold">
+          {initials}
+        </AvatarFallback>
+      )}
+    </Avatar>
+    <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-primary px-2 py-[2px] text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
+      Edit
+    </span>
+  </button>
          <div>
-              <p className="text-sm md:text-base font-medium text-primary">
+              <p className="text-base md:text-lg font-medium text-primary">
                 Welcome back
               </p>
-              <h1 className="text-xl md:text-2xl font-semibold leading-tight">
+              <h1 className="text-2xl md:text-3xl font-semibold leading-tight">
                 {userName || "Sibulan Market Team"}
               </h1>
               <div className="text-xs md:text-sm text-muted-foreground">
@@ -302,6 +319,15 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
               >
                 <PieChart className="h-5 w-5" />
                 <span className="text-xs">Insights</span>
+              </button>
+            )}
+            {userRole?.toLowerCase() === "admin" && (
+              <button
+                onClick={() => onPageChange("activity")}
+                className="flex flex-col items-center gap-2 rounded-xl bg-secondary p-3 transition hover:bg-muted"
+              >
+                <ClipboardList className="h-5 w-5" />
+                <span className="text-xs">Activity</span>
               </button>
             )}
             {/* Add New Stall - collector only */}
@@ -425,6 +451,33 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
             </div>
           </CardContent>
         </Card>
+
+        {/* Admin Activity Log Widget */}
+        {userRole === 'admin' && (
+          <Card className="rounded-2xl lg:col-span-1">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                Recent Activity
+                <Button variant="ghost" size="sm" onClick={() => onPageChange("activity")}>
+                  View All
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {recentLogs.map((log) => (
+                  <div key={log.id} className="flex flex-col gap-1 border-b pb-2 last:border-0 last:pb-0">
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">{log.user_name}</span>
+                      <span className="text-xs text-muted-foreground">{new Date(log.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{log.details}</p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="rounded-2xl">
           <CardHeader>

@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Upload, History, Loader2, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, CheckCircle } from "lucide-react";
+import { ArrowLeft, Upload, History, Loader2, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, CheckCircle, Save } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
@@ -32,10 +32,11 @@ export const CollectorProfile = ({
   onAvatarChange,
 }: CollectorProfileProps) => {
   const { toast } = useToast();
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(avatarUrlProp);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [notes, setNotes] = useState("");
-  const [saveMessage, setSaveMessage] = useState<string>("");
+  const [isSaving, setIsSaving] = useState(false);
 
   // Collection History State
   const [showCollections, setShowCollections] = useState(false);
@@ -58,24 +59,104 @@ export const CollectorProfile = ({
     setAvatarUrl(avatarUrlProp);
   }, [avatarUrlProp]);
 
+  useEffect(() => {
+    // When the user identity changes (indicated by a change in userName),
+    // reset the component's internal state to prevent showing stale data
+    // from a previous user, like a temporary avatar preview.
+    setAvatarUrl(avatarUrlProp);
+    setAvatarFile(null);
+  }, [userName, avatarUrlProp]);
+
+  useEffect(() => {
+    // This effect handles the cleanup of temporary blob URLs.
+    const isBlob = avatarUrl?.startsWith('blob:');
+
+    // It's important to revoke the object URL when the component unmounts
+    // or when the avatarUrl is no longer a blob URL to prevent memory leaks.
+    return () => {
+      if (isBlob) {
+        URL.revokeObjectURL(avatarUrl);
+      }
+    };
+  }, [avatarUrl]);
+
   const handleAvatarClick = () => avatarInputRef.current?.click();
+
   const handleAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    // Set the file for upload
+    setAvatarFile(file);
+
+    // Create a temporary URL for preview
     const objectUrl = URL.createObjectURL(file);
     setAvatarUrl(objectUrl);
-    onAvatarChange?.(objectUrl);
   };
 
-  const handleSave = () => {
-    setSaveMessage("Changes saved locally (connect backend to persist).");
-  };
+  const handleSave = async () => {
+    if (!avatarFile) {
+      toast({
+        title: "No Changes",
+        description: "No new profile picture was selected.",
+      });
+      return;
+    }
 
-  useEffect(() => {
-    if (!saveMessage) return;
-    const timer = setTimeout(() => setSaveMessage(""), 3000);
-    return () => clearTimeout(timer);
-  }, [saveMessage]);
+    setIsSaving(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        throw new Error("You must be logged in to update your profile picture.");
+      }
+
+      const fileExt = avatarFile.name.split('.').pop();
+      // ✅ Store avatar in a folder named after the user's ID for true uniqueness.
+      const fileName = `avatar.${fileExt}`;
+      const filePath = `${user.id}/${fileName}`;
+      // Upload the file to Supabase Storage, overwriting if it exists
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, avatarFile, {
+          cacheControl: '3600',
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      // Get the public URL of the uploaded file, adding a timestamp to bypass cache
+      const { data: urlData } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath);
+
+      const publicUrl = `${urlData.publicUrl}?t=${new Date().getTime()}`;
+
+      // Update the user's metadata
+      const { error: userError } = await supabase.auth.updateUser({
+        data: { avatar_url: publicUrl },
+      });
+
+      if (userError) throw userError;
+
+      setAvatarFile(null);
+      onAvatarChange?.(publicUrl);
+
+      toast({
+        title: "Profile Updated",
+        description: "Your profile picture has been saved.",
+      });
+
+    } catch (error: any) {
+      toast({
+        title: "Upload Failed",
+        description: error.message || "Could not save the profile picture.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (showCollections && userName) {
@@ -153,7 +234,10 @@ export const CollectorProfile = ({
               className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
               title="Change profile photo"
             >
-              <Avatar className="h-16 w-16 border-2 border-transparent transition group-hover:border-primary">
+              {/* The AvatarImage component uses `object-fit: cover` by default,
+                  which ensures the image fills the space without distortion,
+                  addressing the "accurate size" requirement. */}
+              <Avatar key={avatarUrl} className="h-16 w-16 border-2 border-transparent transition group-hover:border-primary">
                 {avatarUrl ? <AvatarImage src={avatarUrl} alt="Collector profile" /> : <AvatarFallback>{initials}</AvatarFallback>}
               </Avatar>
               <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-primary px-2 py-[2px] text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
@@ -183,7 +267,7 @@ export const CollectorProfile = ({
           <input
             ref={avatarInputRef}
             type="file"
-            accept="image/*"
+            accept="image/png, image/jpeg, image/gif"
             className="hidden"
             onChange={handleAvatarChange}
           />
@@ -212,16 +296,15 @@ export const CollectorProfile = ({
               onChange={(e) => setNotes(e.target.value)}
             />
           </div>
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-muted-foreground">
-              Photo selection and notes are kept locally for now. Connect backend to persist.
-            </p>
-            <div className="flex items-center gap-2">
-              {saveMessage && <span className="text-xs text-muted-foreground">{saveMessage}</span>}
-              <Button onClick={handleSave} size="sm">
-                Save
-              </Button>
-            </div>
+          <div className="flex items-center justify-end">
+            <Button onClick={handleSave} size="sm" disabled={isSaving || !avatarFile}>
+              {isSaving ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              {isSaving ? "Saving..." : "Save Picture"}
+            </Button>
           </div>
         </CardContent>
       </Card>

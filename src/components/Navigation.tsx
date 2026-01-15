@@ -14,7 +14,10 @@ import {
   Users,
   Calendar,
   Bell,
+  WifiOff,
+  ClipboardList,
 } from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
 
 interface NavigationProps {
   currentPage?: string;
@@ -44,6 +47,7 @@ const adminNav = [
   { id: "stalls", label: "Stalls", icon: Building2 },
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "users", label: "User Management", icon: Users },
+  { id: "activity", label: "Activity Log", icon: ClipboardList },
  // { id: "unpaid", label: "Unpaid", icon: AlertCircle },
   { id: "archived", label: "Archived", icon: Archive },
 ];
@@ -60,6 +64,7 @@ export const Navigation = ({
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNavVisible, setIsNavVisible] = useState(true);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const lastScrollY = useRef(0);
 
   useEffect(() => {
@@ -84,6 +89,28 @@ export const Navigation = ({
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  useEffect(() => {
+    const checkConnection = async () => {
+      try {
+        await fetch("https://www.google.com/favicon.ico", { mode: "no-cors", cache: "no-store" });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const handleStatusChange = async () => setIsOnline(navigator.onLine && (await checkConnection()));
+    
+    const interval = setInterval(handleStatusChange, 5000);
+    window.addEventListener("online", handleStatusChange);
+    window.addEventListener("offline", handleStatusChange);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("online", handleStatusChange);
+      window.removeEventListener("offline", handleStatusChange);
+    };
+  }, []);
+
   const navItems = userRole === "collector" ? collectorNav : adminNav;
 
   const handleMobileNav = (page: string) => {
@@ -91,26 +118,71 @@ export const Navigation = ({
     setIsMenuOpen(false);
   };
 
-  const handleLogout = () => {
-    onLogout?.();
-    setIsMenuOpen(false);
+  const handleLogout = async () => {
+    if (onLogout) {
+      onLogout();
+      return;
+    }
+
+    // Sign out from Supabase to invalidate the session on the server.
+    await supabase.auth.signOut();
+
+    // Force a hard reload of the page. This is the most reliable way to clear
+    // all client-side React state and ensure a completely fresh start for the next login.
+    window.location.reload();
   };
 
   return (
     <>
+      {/* Offline Banner for Collectors */}
+      {!isOnline && userRole === "collector" && (
+        <div className="fixed top-0 left-0 right-0 z-[100] bg-amber-600 text-white px-4 py-1.5 text-center text-xs font-medium flex items-center justify-center gap-2 shadow-md animate-in slide-in-from-top-1">
+          <WifiOff className="h-3.5 w-3.5" />
+          <span>You are offline. Payments will be saved locally.</span>
+        </div>
+      )}
+
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
-      <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg transition-transform duration-300 ${isNavVisible ? "translate-y-0" : "translate-y-full"}`}>
+      <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg transition-transform duration-500 ease-in-out ${isNavVisible ? "translate-y-0" : "translate-y-[160%]"}`}>
         <div className="grid grid-cols-5 items-center gap-2 px-2 py-2">
-          {[
-            { id: "dashboard", label: "Dashboard", icon: Home },
-            { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
-            { id: "stalls", label: "Stalls", icon: Building2 },
-            { id: "collect", label: "Collect", icon: Receipt },
-            { id: "archived", label: "Archived", icon: Archive },
-          ].map((item) => {
+          {(userRole === "admin"
+            ? [
+                { id: "reports", label: "Reports", icon: BarChart3 },
+                { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
+                { id: "dashboard", label: "Home", icon: Home },
+                { id: "stalls", label: "Stalls", icon: Building2 },
+                { id: "archived", label: "Archived", icon: Archive },
+              ]
+            : [
+                { id: "dashboard", label: "Dashboard", icon: Home },
+                { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
+                { id: "collect", label: "Collect", icon: Receipt },
+                { id: "stalls", label: "Stalls", icon: Building2 },
+                { id: "archived", label: "Archived", icon: Archive },
+              ]
+          ).map((item) => {
             const Icon = item.icon;
             const active = currentPage === item.id;
             const badgeCount = item.badge || 0;
+            const isCenterButton = item.id === "collect" || (userRole === "admin" && item.id === "dashboard");
+
+            if (isCenterButton) {
+              return (
+                <div key={item.id} className="relative flex justify-center">
+                  <button
+                    onClick={() => handleMobileNav(item.id)}
+                    className={`flex h-16 w-16 items-center justify-center rounded-full border-2 border-background shadow-lg transition-all ${
+                      active
+                        ? "bg-primary text-primary-foreground scale-110"
+                        : "bg-primary text-primary-foreground hover:bg-primary/90"
+                    }`}
+                  >
+                    <Icon className="h-7 w-7" />
+                  </button>
+                </div>
+              );
+            }
+
             return (
               <button
                 key={item.id}

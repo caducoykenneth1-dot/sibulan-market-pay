@@ -11,6 +11,7 @@ import { UnpaidDues } from "@/components/UnpaidDues";
 import { NotificationsPanel } from "@/components/NotificationsPanel";
 import { type Invoice } from "@/components/UnpaidDues";
 import { CollectorProfile } from "@/components/CollectorProfile";
+import { ActivityLog } from "@/components/ActivityLog";
 import {
   computeStatusFromDueDate,
   getNextTypeSequence,
@@ -463,7 +464,7 @@ const Index = () => {
       return;
     }
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: `${username}${DUMMY_EMAIL_DOMAIN}`,
       password,
     });
@@ -471,6 +472,16 @@ const Index = () => {
     if (error) {
       setAuthError(error.message);
       return;
+    }
+
+    // Log the login activity
+    if (data.user) {
+      await supabase.from("activity_logs").insert({
+        user_id: data.user.id,
+        user_name: data.user.user_metadata.full_name || username,
+        action: "LOGIN",
+        details: "User logged in successfully"
+      });
     }
 
     setLoginForm({ username: "", password: "" });
@@ -559,20 +570,17 @@ const Index = () => {
   try {
     const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-    const formattedPhone = phone.startsWith("09")
-      ? "+63" + phone.slice(1)
-      : phone;
-
     const res = await fetch(
       "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/send-reset-otp",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, // ✅ REQUIRED
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`, // ✅ REQUIRED
         },
         body: JSON.stringify({
-          phone: formattedPhone,
+          phone: phone, // RAW: 09XXXXXXXXX
         }),
       }
     );
@@ -594,7 +602,10 @@ const Index = () => {
 };
 
 
-  const handleVerifyReset = async (event: React.FormEvent<HTMLFormElement>) => {
+
+ const handleVerifyReset = async (
+  event: React.FormEvent<HTMLFormElement>
+) => {
   event.preventDefault();
   resetFeedback();
 
@@ -603,9 +614,15 @@ const Index = () => {
   const password = resetPasswordForm.password.trim();
   const confirmPassword = resetPasswordForm.confirmPassword.trim();
 
-  // ... existing validation ...
+  if (!phone || !code || !password || !confirmPassword) {
+    setAuthError("Complete all fields.");
+    return;
+  }
 
-  console.log("🔍 handleVerifyReset: Starting fetch with:", { phone, code, newPassword: "***" });  // Log inputs (hide password)
+  if (password !== confirmPassword) {
+    setAuthError("Passwords do not match.");
+    return;
+  }
 
   try {
     const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -616,34 +633,33 @@ const Index = () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+          apikey: SUPABASE_ANON_KEY, // ✅ REQUIRED
         },
         body: JSON.stringify({
-          phone,
-          code,
+          phone: phone,
+          code: code,
           newPassword: password,
         }),
       }
     );
 
-    console.log("✅ Fetch response status:", res.status, res.statusText);  // Log status
-
     const result = await res.json();
-    console.log("📄 Response JSON:", result);  // Log full response
 
     if (!res.ok) {
-      setAuthError(result?.error || "Verification failed.");  // Use 'error' key from server
+      setAuthError(result?.error || "Verification failed.");
       return;
     }
-      setAuthMessage("Password updated. You can now sign in.");
-      setAuthMode("login");
-      setForgotStage("request");
-      setForgotPasswordForm({ phone: "", code: "" });
-      setResetPasswordForm({ password: "", confirmPassword: "" });
-    } catch (e: any) {
-      setAuthError(e?.message ?? "Network error verifying code.");
-    }
-  };
+
+    setAuthMessage("Password updated. You can now sign in.");
+    setAuthMode("login");
+    setForgotStage("request");
+    setForgotPasswordForm({ phone: "", code: "" });
+    setResetPasswordForm({ password: "", confirmPassword: "" });
+  } catch (e: any) {
+    setAuthError(e?.message ?? "Network error verifying code.");
+  }
+};
+
 
   const handleResetPassword = async (
     event: React.FormEvent<HTMLFormElement>
@@ -685,9 +701,19 @@ const Index = () => {
   };
 
   const handleLogout = async () => {
+    if (user) {
+      await supabase.from("activity_logs").insert({
+        user_id: user.id,
+        user_name: user.user_metadata?.full_name || user.email?.split("@")[0] || "Unknown",
+        action: "LOGOUT",
+        details: "User logged out",
+      });
+    }
+
     await supabase.auth.signOut();
     setUser(null);
     setCurrentPage("dashboard");
+    window.location.reload();
   };
 
   // ✅ All pages including Unpaid Dues
@@ -715,13 +741,15 @@ const Index = () => {
           />
         );
       case "history":
-        return <PaymentHistory stalls={stalls} invoices={allInvoices} />;
+        return <PaymentHistory stalls={rawStalls} invoices={allInvoices} />;
       case "stalls":
         return (
           <StallManagement
             stalls={stalls}
             onStallsChange={refreshData}
             userRole={user?.user_metadata?.role ?? ""}
+            userName={user?.user_metadata?.full_name ?? ""}
+            userId={user?.id}
           />
         );
       case "reports":
@@ -738,6 +766,8 @@ const Index = () => {
         return <UnpaidDues invoices={allInvoices} />;
       case "notifications":
         return <NotificationsPanel userId={user?.id} />;
+      case "activity":
+        return <ActivityLog />;
       case "profile":
         return (
           <CollectorProfile

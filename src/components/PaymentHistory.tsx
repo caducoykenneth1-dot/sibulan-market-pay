@@ -18,13 +18,21 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Filter, Download, Eye, CalendarDays } from "lucide-react";
+import { Search, Filter, Download, Eye, CalendarDays, Calendar } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import {
@@ -77,8 +85,10 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
+  const [stallTypeFilter, setStallTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "paid" | "unpaid">("paid");
-  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState<string>(String(new Date().getMonth()));
+  const [selectedYear, setSelectedYear] = useState<string>(String(new Date().getFullYear()));
 
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
@@ -105,6 +115,23 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     [invoices, statusFilter]
   );
 
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    const currentYear = new Date().getFullYear();
+    years.add(currentYear);
+    invoices.forEach((inv) => {
+      if (inv.paid_at) {
+        years.add(new Date(inv.paid_at).getFullYear());
+      }
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [invoices]);
+
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
   const sectionOptions = useMemo(() => {
     const sections = new Set<string>();    
     STALL_TYPES.forEach((t) => {
@@ -118,6 +145,18 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
       setFilterType("all");
     }
   }, [filterType, sectionOptions]);
+
+  useEffect(() => {
+    setStallTypeFilter("all");
+  }, [filterType]);
+
+  const availableStallTypes = useMemo(() => {
+    let types = STALL_TYPES;
+    if (filterType !== "all") {
+      types = types.filter((t) => t.section === filterType);
+    }
+    return Array.from(new Set(types.map((t) => t.name))).sort();
+  }, [filterType]);
 
   const filteredBySearchAndType = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -133,18 +172,23 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
       const matchesType =
         filterType === "all" || paymentSection === filterType;
 
-      return matchesSearch && matchesType;
+      const matchesStallType =
+        stallTypeFilter === "all" || payment.stall_type === stallTypeFilter;
+
+      return matchesSearch && matchesType && matchesStallType;
     });
-  }, [payments, searchTerm, filterType]);
+  }, [payments, searchTerm, filterType, stallTypeFilter]);
 
   const filteredPayments = useMemo(() => {
-    if (!selectedMonthKey) return filteredBySearchAndType;
-
-    return filteredBySearchAndType.filter(
-      (payment) =>
-        getMonthKey(new Date(payment.paid_at!)) === selectedMonthKey
-    );
-  }, [filteredBySearchAndType, selectedMonthKey]);
+    return filteredBySearchAndType.filter((payment) => {
+      if (!payment.paid_at) return false;
+      const paymentDate = new Date(payment.paid_at);
+      return (
+        paymentDate.getMonth().toString() === selectedMonth &&
+        paymentDate.getFullYear().toString() === selectedYear
+      );
+    });
+  }, [filteredBySearchAndType, selectedMonth, selectedYear]);
 
   const totalAmount = useMemo(
     () => filteredPayments.reduce((sum, p) => sum + p.amount, 0),
@@ -193,33 +237,13 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
   }, [filteredBySearchAndType]);
 
   const tableDescription = useMemo(() => {
-    if (selectedMonthKey) {
-      const monthLabel = monthlySummaries.find(s => s.key === selectedMonthKey)?.label;
-      return `Showing records for ${monthLabel || 'the selected month'}`;
-    }
-    switch (statusFilter) {
-      case 'paid': return 'All paid payment records';
-      case 'unpaid': return 'All unpaid records';
-      default: return 'All payment records';
-    }
-  }, [selectedMonthKey, statusFilter, monthlySummaries]);
-
-  useEffect(() => {
-    if (
-      selectedMonthKey &&
-      !monthlySummaries.some((summary) => summary.key === selectedMonthKey)
-    ) {
-      setSelectedMonthKey(null);
-    }
-  }, [selectedMonthKey, monthlySummaries]);
+    const monthName = months[parseInt(selectedMonth)];
+    return `Showing records for ${monthName} ${selectedYear}`;
+  }, [selectedMonth, selectedYear]);
 
   const selectedMonthLabel = useMemo(() => {
-    if (!selectedMonthKey) return null;
-    const match = monthlySummaries.find(
-      (summary) => summary.key === selectedMonthKey
-    );
-    return match?.label ?? null;
-  }, [selectedMonthKey, monthlySummaries]);
+    return `${months[parseInt(selectedMonth)]} ${selectedYear}`;
+  }, [selectedMonth, selectedYear]);
 
   const handleViewDetails = (payment: Invoice) => {
     setSelectedPayment(payment);
@@ -284,11 +308,21 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
       {
         accessorKey: "payment_type",
         header: "Type",
-        cell: ({ row }) => (
-          <Badge variant="outline" className="capitalize text-[10px] px-1 py-0 h-5">
-            {row.original.payment_type?.replace(/-/g, " ") || "Monthly"}
-          </Badge>
-        ),
+        cell: ({ row }) => {
+          const invoice = row.original;
+          let displayType = invoice.payment_type;
+          if (!displayType) {
+            const stall = stalls.find((s) => s.dbId === Number(invoice.vendor_id));
+            if (stall) {
+              displayType = stall.rentalType?.toLowerCase() === "daily" ? "Daily Fee" : "Monthly Rent";
+            }
+          }
+          return (
+            <Badge variant="outline" className="capitalize text-[10px] px-1 py-0 h-5">
+              {displayType?.replace(/-/g, " ") || "Monthly"}
+            </Badge>
+          );
+        },
       },
       {
         id: "actions",
@@ -303,7 +337,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
         ),
       },
     ],
-    []
+    [stalls]
   );
 
   const unpaidCount = useMemo(() => {
@@ -327,8 +361,15 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     doc.setTextColor(100);
     doc.text(`Generated on: ${format(new Date(), "PPP p")}`, 14, 28);
     doc.text(monthText, 14, 33);
+
+    let yPos = 38;
     if (filterType !== "all") {
-      doc.text(`Section: ${filterType}`, 14, 38);
+      doc.text(`Section: ${filterType}`, 14, yPos);
+      yPos += 5;
+    }
+    if (stallTypeFilter !== "all") {
+      doc.text(`Stall Type: ${stallTypeFilter}`, 14, yPos);
+      yPos += 5;
     }
 
     // Define Columns based on status
@@ -339,7 +380,15 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
     // Map Data
     const tableBody = filteredPayments.map((p) => {
       const amount = `PHP ${p.amount.toLocaleString()}`;
-      const type = p.payment_type || p.stall_type || "N/A";
+      
+      let type = p.payment_type;
+      if (!type) {
+        const stall = stalls.find((s) => s.dbId === Number(p.vendor_id));
+        if (stall) {
+          type = stall.rentalType?.toLowerCase() === "daily" ? "Daily Fee" : "Monthly Rent";
+        }
+      }
+      type = type || "Monthly";
       
       if (isUnpaid) {
         return [
@@ -365,7 +414,7 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
 
     // Generate Table
     autoTable(doc, {
-      startY: 45,
+      startY: yPos + 7,
       head: tableHead,
       body: tableBody,
       theme: 'grid',
@@ -427,6 +476,33 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                 className="pl-10"
               />
             </div>
+            
+            <div className="flex gap-2">
+              <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                <SelectTrigger className="w-[130px]">
+                  <Calendar className="mr-2 h-4 w-4" />
+                  <SelectValue placeholder="Month" />
+                </SelectTrigger>
+                <SelectContent>
+                  {months.map((month, index) => (
+                    <SelectItem key={month} value={String(index)}>
+                      {month}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={selectedYear} onValueChange={setSelectedYear}>
+                <SelectTrigger className="w-[90px]">
+                  <SelectValue placeholder="Year" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableYears.map((year) => (
+                    <SelectItem key={year} value={String(year)}>{year}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex gap-2">
               <Select value={filterType} onValueChange={setFilterType}>
                 <SelectTrigger className="w-full sm:w-48">
@@ -445,6 +521,48 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                   )}
                 </SelectContent>
               </Select>
+
+              <Sheet>
+                <SheetTrigger asChild>
+                  <Button variant="outline" className="gap-2">
+                    <Filter className="h-4 w-4" />
+                    <span className="hidden sm:inline">Filter Types</span>
+                    {stallTypeFilter !== "all" && (
+                      <Badge variant="secondary" className="ml-1 h-5 px-1.5">
+                        {stallTypeFilter}
+                      </Badge>
+                    )}
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="right" className="w-[300px] sm:w-[400px] overflow-y-auto">
+                  <SheetHeader>
+                    <SheetTitle>Filter by Stall Type</SheetTitle>
+                    <SheetDescription>
+                      Select a stall type to filter the history.
+                    </SheetDescription>
+                  </SheetHeader>
+                  <div className="grid gap-2 py-4">
+                    <Button
+                      variant={stallTypeFilter === "all" ? "default" : "outline"}
+                      className="justify-start"
+                      onClick={() => setStallTypeFilter("all")}
+                    >
+                      All Types
+                    </Button>
+                    {availableStallTypes.map((type) => (
+                      <Button
+                        key={type}
+                        variant={stallTypeFilter === type ? "default" : "outline"}
+                        className="justify-start"
+                        onClick={() => setStallTypeFilter(type)}
+                      >
+                        {type}
+                      </Button>
+                    ))}
+                  </div>
+                </SheetContent>
+              </Sheet>
+
               <Button variant="outline" onClick={handleExport}>
                 <Download className="mr-2 h-4 w-4" /> Export
               </Button>
@@ -493,27 +611,23 @@ export const PaymentHistory = ({ stalls, invoices }: PaymentHistoryProps) => {
                 filters.
               </CardDescription>
             </div>
-            {selectedMonthKey && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSelectedMonthKey(null)}
-              >
-                Clear month filter
-              </Button>
-            )}
           </CardHeader>
           <CardContent className="space-y-3">
             {monthlySummaries.map((summary) => {
-              const isActive = summary.key === selectedMonthKey;
+              const summaryDate = new Date(summary.monthStart);
+              const isActive = 
+                summaryDate.getMonth().toString() === selectedMonth &&
+                summaryDate.getFullYear().toString() === selectedYear;
 
               return (
                 <button
                   key={summary.key}
                   type="button"
-                  onClick={() =>
-                    setSelectedMonthKey(isActive ? null : summary.key)
-                  }
+                  onClick={() => {
+                    const d = new Date(summary.monthStart);
+                    setSelectedMonth(String(d.getMonth()));
+                    setSelectedYear(String(d.getFullYear()));
+                  }}
                   className={`flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
                     isActive
                       ? "border-primary bg-primary/10"

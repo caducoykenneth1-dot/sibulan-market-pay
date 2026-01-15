@@ -107,7 +107,7 @@ async function generateMonthlyInvoices() {
     .from("invoices")
     .select("vendor_id, due_date, status");
 
-  const invoiceLookup = new Set();
+  const invoiceLookup = new Set<string>();
   existingInvoices?.forEach((inv) => {
     if (inv.vendor_id && inv.due_date) {
       invoiceLookup.add(`${inv.vendor_id}-${inv.due_date}`);
@@ -123,53 +123,66 @@ async function generateMonthlyInvoices() {
   });
 
   for (const stall of stalls) {
-    if (!stall.next_due || !stall.vendor) continue;
-
-    const dueDateString = stall.next_due;
-    const lookupKey = `${stall.id}-${dueDateString}`;
-
-    if (invoiceLookup.has(lookupKey)) {
-      result.skippedCount++;
-      continue;
+    // Skip stalls that are vacant, archived, or have no due date/vendor
+    if (!stall.next_due || !stall.vendor || stall.status === 'vacant' || stall.status === 'archived') {
+        continue;
     }
 
-    const nextDue = new Date(`${stall.next_due}T00:00:00Z`);
-    nextDue.setUTCHours(0, 0, 0, 0);
+    let currentDueDate = new Date(`${stall.next_due}T00:00:00Z`);
+    currentDueDate.setUTCHours(0, 0, 0, 0);
 
-    if (nextDue > today) continue;
-    if (nextDue >= today) continue;
+    let invoicesGeneratedForStall = 0;
 
-    const stallDisplayName =
-      stallDisplayNameMap.get(stall.id) || `Stall ${stall.id}`;
+    // Loop while the due date is in the past or is today.
+    // This will generate all missing invoices up to the current date.
+    while (currentDueDate <= today) {
+        const dueDateString = currentDueDate.toISOString().split('T')[0];
+        const lookupKey = `${stall.id}-${dueDateString}`;
 
-    const { error: insertError } = await supabase.from("invoices").insert({
-      vendor_id: stall.id,
-      stall_name: `${stall.type} - ${stallDisplayName}`,
-      vendor_name: stall.vendor,
-      amount: stall.monthly_rent,
-      due_date: dueDateString,
-      stall_type: stall.type,
-      status: "unpaid",
-    });
+        if (invoiceLookup.has(lookupKey)) {
+            result.skippedCount++;
+        } else {
+            const stallDisplayName = stallDisplayNameMap.get(stall.id) || `Stall ${stall.id}`;
+            
+            const { error: insertError } = await supabase.from("invoices").insert({
+                vendor_id: stall.id,
+                stall_name: `${stall.type} - ${stallDisplayName}`,
+                vendor_name: stall.vendor,
+                amount: stall.monthly_rent,
+                due_date: dueDateString,
+                stall_type: stall.type,
+                status: "unpaid",
+                payment_type: stall.rental_type === 'daily' ? 'Daily Fee' : 'Monthly Rent',
+            });
 
-    if (insertError) {
-      result.failedCount++;
-      result.errors.push(
-        `Could not create invoice for ${stall.vendor || `stall ${stall.id}`}.`
-      );
-      continue;
+            if (insertError) {
+                result.failedCount++;
+                result.errors.push(
+                    `Could not create invoice for ${stall.vendor || `stall ${stall.id}`}.`
+                );
+                // Stop processing this stall if one invoice fails to avoid inconsistent states
+                break; 
+            }
+
+            invoiceLookup.add(lookupKey);
+            result.generatedCount++;
+            invoicesGeneratedForStall++;
+        }
+
+        // Increment the due date for the next iteration
+        if (stall.rental_type === 'daily') {
+            currentDueDate.setUTCDate(currentDueDate.getUTCDate() + 1);
+        } else {
+            // This logic correctly handles monthly increments, even across year boundaries
+            // and for months with different numbers of days (e.g., Jan 31 -> Feb 28/29).
+            currentDueDate.setUTCMonth(currentDueDate.getUTCMonth() + 1);
+        }
     }
 
-    invoiceLookup.add(lookupKey);
-    result.generatedCount++;
-
-    // ✅ Update stall status to 'due' so it doesn't show as 'current' (Paid)
-    // ✅ Update stall status to 'overdue' since we only generate for overdue items now
-    // We do NOT advance next_due here; that happens only upon payment.
-    if (stall.status !== "overdue") {
+    // If we generated invoices, ensure the vendor status is 'overdue'
+    if (invoicesGeneratedForStall > 0 && stall.status !== "overdue") {
       await supabase
         .from("vendors")
-        .update({ status: "due" })
         .update({ status: "overdue" })
         .eq("id", stall.id);
     }
@@ -177,6 +190,7 @@ async function generateMonthlyInvoices() {
 
   return result;
 }
+
 
 /* ======================================================================
    2. TYPES
@@ -194,7 +208,7 @@ type SectionFilter = "all" | "Dry Section" | "Wet Section";
 /* ======================================================================
    3. FRONTEND COMPONENT
 ====================================================================== */
-export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
+export const StallManagement = ({ stalls, onStallsChange, userRole, userName, userId }) => {
   const { toast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -229,7 +243,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole }) => {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
+  const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
   
   // Transaction History State
   const [showTransactions, setShowTransactions] = useState(false);
@@ -258,13 +272,15 @@ const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
   const handlePayInvoice = async (invoice: any) => {
     if (!selectedStall) return;
 
-    // 1. Mark invoice as paid
+    const paymentType = selectedStall.rentalType === 'daily' ? 'Daily Fee' : 'Monthly Rent';
+
     const { error: invError } = await supabase
       .from("invoices")
       .update({
         status: "paid",
         paid_at: new Date().toISOString(),
-        collector_name: "Manual Update",
+        collector_name: userName,
+        payment_type: paymentType,
       })
       .eq("id", invoice.id);
 
@@ -273,7 +289,6 @@ const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
       return;
     }
 
-    // 2. Advance vendor next_due
     const currentDue = new Date(invoice.due_date);
     const newDue = new Date(currentDue);
     if (selectedStall.rentalType === 'daily') {
@@ -293,18 +308,25 @@ const [overlayMessage, setOverlayMessage] = useState<string | null>(null);
         })
         .eq("id", selectedStall.dbId);
 
+    // Log Activity
+    await supabase.from("activity_logs").insert({
+      user_id: userId,
+      user_name: userName,
+      action: "MANUAL_PAYMENT",
+      details: `Marked invoice #${invoice.id} as paid for ${selectedStall.name}`
+    });
+
     toast({ title: "Payment Recorded", description: "Invoice marked as paid." });
     onStallsChange();
     setIsDayDialogOpen(false);
-    setShowTransactions(false); // Close to force refresh next time
+    setShowTransactions(false);
   };
 
-const hasDueStalls = useMemo(() => {
-  return stalls.some(
-    (s) => s.status === "due" || s.status === "overdue"
-  );
-}, [stalls]);
-
+  const hasDueStalls = useMemo(() => {
+    return stalls.some(
+      (s) => s.status === "due" || s.status === "overdue"
+    );
+  }, [stalls]);
 
   const handleSectionSelect = (value) => {
     setSectionFilter(value);
@@ -367,6 +389,14 @@ const hasDueStalls = useMemo(() => {
           nextDue: formState.nextDue || null,
         });
 
+        // Log Activity
+        await supabase.from("activity_logs").insert({
+          user_id: userId,
+          user_name: userName,
+          action: "UPDATE_STALL",
+          details: `Updated details for ${stallBeingEdited.name}`
+        });
+
         toast({
           title: "Stall updated",
           description: "Changes saved successfully.",
@@ -381,6 +411,14 @@ const hasDueStalls = useMemo(() => {
           status: finalStatus,
           lastPayment: formState.lastPayment || null,
           nextDue: formState.nextDue || null,
+        });
+
+        // Log Activity
+        await supabase.from("activity_logs").insert({
+          user_id: userId,
+          user_name: userName,
+          action: "CREATE_STALL",
+          details: `Created new stall: ${trimmedType} - PHP ${rent}`
         });
 
         toast({
@@ -410,6 +448,14 @@ const hasDueStalls = useMemo(() => {
         occupied: false,
       });
 
+      // Log Activity
+      await supabase.from("activity_logs").insert({
+        user_id: userId,
+        user_name: userName,
+        action: "ARCHIVE_STALL",
+        details: `Archived ${stallToDelete.name}. Reason: ${archiveReason}`
+      });
+
       toast({
         title: "Stall archived",
         description: "Stall successfully archived.",
@@ -427,7 +473,6 @@ const hasDueStalls = useMemo(() => {
     }
   };
 
-  // When the section filter changes, also reset the type filter.
   useEffect(() => {
     setTypeFilter("all");
   }, [sectionFilter]);
@@ -445,20 +490,18 @@ const hasDueStalls = useMemo(() => {
     });
   }, [stalls]);
 
-  // Get a unique, sorted list of stall types available for the selected section.
   const availableStallTypes = useMemo(() => {
     let types: string[];
     if (sectionFilter === "all") {
-      // If "All" is selected, get all unique types from the master STALL_TYPES list.
       types = STALL_TYPES.map((t) => t.name);
     } else {
-      // Otherwise, get types only from the selected section from the master list.
       types = STALL_TYPES.filter((t) => t.section === sectionFilter).map(
         (t) => t.name
       );
     }
     return [...new Set(types)].sort();
   }, [sectionFilter]);
+
   /* ======================================================================
      5. FILTER RESULTS
   ====================================================================== */
@@ -732,7 +775,6 @@ const hasDueStalls = useMemo(() => {
                       </span>
                     </Button>
 
-                    {/* STATUS BADGE */}
                     <div
                       className={`absolute -top-2 -right-2 md:-top-3 md:-right-3 transform scale-90 md:scale-100 px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-semibold shadow-sm z-10 ${
                         stall.status === "current"
@@ -826,8 +868,7 @@ const hasDueStalls = useMemo(() => {
                   </div>
                 </div>
 
-                {/* ACTION BUTTONS */}
-              <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-2">
                     <Button
                       variant="outline"
                       size="sm"
@@ -875,9 +916,6 @@ const hasDueStalls = useMemo(() => {
         </DialogContent>
       </Dialog>
 
-      {/* END OF PART 2 */}
-
-
       {/* ======================================================================
           11. CREATE / EDIT STALL FORM
       ====================================================================== */}
@@ -899,14 +937,12 @@ const hasDueStalls = useMemo(() => {
             </DialogDescription>
           </DialogHeader>
 
-          {/* FORM */}
           <form
             onSubmit={handleSubmit}
             className="flex-1 overflow-y-auto pr-6 pl-1 -mr-6 -ml-1 space-y-5"
           >
             <div className="grid gap-4 sm:grid-cols-2">
 
-              {/* TYPE */}
               <div className="space-y-2">
                 <Label htmlFor="type">Stall Type</Label>
                 <Select
@@ -940,7 +976,6 @@ const hasDueStalls = useMemo(() => {
                 </Select>
               </div>
 
-              {/* STATUS */}
               <div className="space-y-2">
                 <Label htmlFor="status">Status</Label>
                 <Select
@@ -973,7 +1008,6 @@ const hasDueStalls = useMemo(() => {
                 </Select>
               </div>
 
-              {/* RENTAL TYPE */}
               <div className="space-y-2">
                 <Label htmlFor="rentalType">Rental Type</Label>
                 <Select
@@ -992,7 +1026,6 @@ const hasDueStalls = useMemo(() => {
                 </Select>
               </div>
 
-              {/* RENT */}
               <div className="space-y-2">
                 <Label htmlFor="rent">Rent Amount (PHP)</Label>
                 <Input
@@ -1010,7 +1043,6 @@ const hasDueStalls = useMemo(() => {
                 />
               </div>
 
-              {/* VENDOR NAME */}
               <div className="space-y-2">
                 <Label htmlFor="vendor">Vendor Name</Label>
                 <Input
@@ -1027,7 +1059,6 @@ const hasDueStalls = useMemo(() => {
                 />
               </div>
 
-              {/* CONTACT */}
               <div className="space-y-2">
                 <Label htmlFor="contact">Contact Number</Label>
                 <Input
@@ -1044,7 +1075,6 @@ const hasDueStalls = useMemo(() => {
                 />
               </div>
 
-              {/* LAST PAYMENT */}
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="lastPayment">Last Payment Date</Label>
                 <Input
@@ -1061,7 +1091,6 @@ const hasDueStalls = useMemo(() => {
                 />
               </div>
 
-              {/* NEXT DUE */}
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="nextDue">Next Due Date</Label>
                 <Input
@@ -1149,19 +1178,17 @@ const hasDueStalls = useMemo(() => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Custom Overlay Message for No Dues */}
-     {/* CENTER OVERLAY MESSAGE */}
-<div
-  className={`fixed inset-0 z-50 flex items-center justify-center pointer-events-none transition-all duration-500 ${
-    overlayMessage ? "opacity-100 scale-100" : "opacity-0 scale-95"
-  }`}
->
-  <div className="bg-black/80 text-white px-8 py-6 rounded-2xl shadow-2xl flex flex-col items-center gap-3 backdrop-blur-sm">
-    <CheckCircle className="h-12 w-12 text-green-400" />
-    <span className="text-xl font-bold text-center">
-      {overlayMessage}
-        </span>
-       </div>
+      <div
+        className={`fixed inset-0 z-50 flex items-center justify-center pointer-events-none transition-all duration-500 ${
+          overlayMessage ? "opacity-100 scale-100" : "opacity-0 scale-95"
+        }`}
+      >
+        <div className="bg-black/80 text-white px-8 py-6 rounded-2xl shadow-2xl flex flex-col items-center gap-3 backdrop-blur-sm">
+          <CheckCircle className="h-12 w-12 text-green-400" />
+          <span className="text-xl font-bold text-center">
+            {overlayMessage}
+          </span>
+        </div>
       </div>
 
       {/* ======================================================================
@@ -1176,7 +1203,6 @@ const hasDueStalls = useMemo(() => {
             </DialogDescription>
           </DialogHeader>
 
-          {/* Calendar View */}
           <div className="mb-4 border rounded-lg p-3 bg-card">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-1">
@@ -1228,27 +1254,58 @@ const hasDueStalls = useMemo(() => {
                 const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                 
                 const dayInvoices = transactions.filter(t => {
-                  const isDue = t.due_date === dateStr;
+                  const isDueOnDay = t.due_date === dateStr;
+                  
                   let isPaidOnDay = false;
-                  if (t.paid_at) {
-                    const p = new Date(t.paid_at);
-                    const pStr = `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, '0')}-${String(p.getDate()).padStart(2, '0')}`;
-                    isPaidOnDay = pStr === dateStr;
+                  if (t.paid_at && t.status === 'paid') {
+                    const paidDate = new Date(t.paid_at);
+                    const paidDateStr = `${paidDate.getFullYear()}-${String(paidDate.getMonth() + 1).padStart(2, '0')}-${String(paidDate.getDate()).padStart(2, '0')}`;
+                    isPaidOnDay = paidDateStr === dateStr;
                   }
-                  return isDue || isPaidOnDay;
+                  
+                  return isDueOnDay || isPaidOnDay;
                 });
                 
                 let statusClass = "hover:bg-muted";
                 if (dayInvoices.length > 0) {
-                  const hasUnpaidDue = dayInvoices.some(t => t.due_date === dateStr && (t.status === 'unpaid' || t.status === 'overdue'));
-                  const hasPaid = dayInvoices.some(t => t.status === 'paid');
+                  const hasUnpaidDue = dayInvoices.some(t => 
+                    t.due_date === dateStr && (t.status === 'unpaid' || t.status === 'overdue')
+                  );
+                  
+                  const hasPaid = dayInvoices.some(t => {
+                    if (t.status !== 'paid') return false;
+                    
+                    if (t.paid_at) {
+                      const paidDate = new Date(t.paid_at);
+                      const paidDateStr = `${paidDate.getFullYear()}-${String(paidDate.getMonth() + 1).padStart(2, '0')}-${String(paidDate.getDate()).padStart(2, '0')}`;
+                      if (paidDateStr === dateStr) return true;
+                    }
+                    
+                    if (t.due_date === dateStr) return true;
+                    
+                    return false;
+                  });
 
-                  if (hasUnpaidDue) statusClass = "bg-rose-100 text-rose-700 font-bold";
-                  else if (hasPaid) statusClass = "bg-emerald-100 text-emerald-700 font-bold";
+                  if (hasUnpaidDue) {
+                    statusClass = "bg-rose-100 text-rose-700 font-bold";
+                  } else if (hasPaid) {
+                    statusClass = "bg-emerald-100 text-emerald-700 font-bold";
+                  }
                 }
 
                 return (
-                  <div key={day} onClick={() => { setSelectedDayInvoices(dayInvoices); setIsDayDialogOpen(true); }} className={`aspect-square flex items-center justify-center rounded-md text-xs cursor-pointer ${statusClass}`}>
+                  <div 
+                    key={day} 
+                    onClick={() => { 
+                      if (dayInvoices.length > 0) {
+                        setSelectedDayInvoices(dayInvoices); 
+                        setIsDayDialogOpen(true); 
+                      }
+                    }} 
+                    className={`aspect-square flex items-center justify-center rounded-md text-xs ${
+                      dayInvoices.length > 0 ? 'cursor-pointer' : 'cursor-default'
+                    } ${statusClass}`}
+                  >
                     {day}
                   </div>
                 );
@@ -1295,7 +1352,6 @@ const hasDueStalls = useMemo(() => {
         </DialogContent>
       </Dialog>
 
-      {/* Day Details Dialog */}
       <Dialog open={isDayDialogOpen} onOpenChange={setIsDayDialogOpen}>
         <DialogContent className="sm:max-w-sm w-[90vw] rounded-xl">
             <DialogHeader>
@@ -1316,7 +1372,10 @@ const hasDueStalls = useMemo(() => {
                         {inv.status === 'paid' ? (
                             <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Paid</Badge>
                         ) : (
-                            <Button size="sm" onClick={() => handlePayInvoice(inv)}>Mark Paid</Button>
+                           // Conditionally render the "Mark as Paid" button for collectors only
+                           userRole === "collector" && (
+                              <Button size="sm" onClick={() => handlePayInvoice(inv)}>Mark Paid</Button>
+                           )
                         )}
                     </div>
                  ))
@@ -1327,3 +1386,5 @@ const hasDueStalls = useMemo(() => {
     </div>
   );
 };
+
+export default StallManagement;

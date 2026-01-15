@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, Fragment } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { computeStatusFromDueDate, type StallRecord, type StallTypeInfo } from "
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { supabase } from "@/lib/supabaseClient"; // Supabase client
+import { Loader2, Wifi, WifiOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 type PaymentData = {
@@ -22,6 +23,27 @@ interface PaymentCollectionProps {
   collectorName: string;
   collectorId: string;
   onPaymentSuccess: () => void;
+}
+
+const OFFLINE_PAYMENT_QUEUE_KEY = "offlinePaymentQueue";
+const STALLS_CACHE_KEY = "stallsCache";
+
+export interface QueuedPayment {
+  id: string; // A unique ID for the queued item, e.g., a UUID
+  stallDbId: number;
+  stallLabel: string;
+  vendorName: string;
+  stallType: string;
+  amount: number;
+  paymentType: string;
+  notes: string | null;
+  paymentTimestamp: string; // ISO string
+  collectorId: string;
+  collectorName: string;
+  rentalType: 'daily' | 'monthly';
+  nextDue: string | null;
+  paymentMethod: 'cash' | 'gcash' | 'maya';
+  referenceNumber: string;
 }
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
@@ -82,29 +104,205 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     paymentDate: string;
     paymentMethod: string;
     referenceNumber: string;
+    isOffline?: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [assignedSection, setAssignedSection] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [offlineQueueCount, setOfflineQueueCount] = useState(0);
+  const [localStalls, setLocalStalls] = useState<StallRecord[]>(stalls);
+
+  const checkInternetConnection = async () => {
+    try {
+      await fetch("https://www.google.com/favicon.ico", { mode: "no-cors", cache: "no-store" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    if (isOnline) {
+      if (stalls && stalls.length > 0) {
+        // Online and have fresh data, so cache it and use it.
+        localStorage.setItem(STALLS_CACHE_KEY, JSON.stringify(stalls));
+        setLocalStalls(stalls);
+      }
+    } else {
+      // Offline. If the stalls prop is empty, try to load from cache.
+      if (!stalls || stalls.length === 0) {
+        const cachedStallsJson = localStorage.getItem(STALLS_CACHE_KEY);
+        if (cachedStallsJson) {
+          const cachedStalls = JSON.parse(cachedStallsJson) as StallRecord[];
+          setLocalStalls(cachedStalls);
+          toast({
+            title: "Using Offline Data",
+            description: "Stall information loaded from local cache.",
+          });
+        }
+      }
+    }
+  }, [stalls, isOnline, toast]);
+
+  const getQueue = useCallback((): QueuedPayment[] => {
+    const queueJson = localStorage.getItem(OFFLINE_PAYMENT_QUEUE_KEY);
+    return queueJson ? JSON.parse(queueJson) : [];
+  }, []);
+
+  const saveQueue = (queue: QueuedPayment[]) => {
+    localStorage.setItem(OFFLINE_PAYMENT_QUEUE_KEY, JSON.stringify(queue));
+    setOfflineQueueCount(queue.length);
+  };
 
   useEffect(() => {
     const fetchAssignment = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user && user.id === collectorId) {
-        const section = user.user_metadata?.market_section || user.user_metadata?.section;
-        if (section && section !== "unassigned") {
-          setAssignedSection(section);
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (user) {
+        setUserRole(user.user_metadata?.role);
+        if (user.id === collectorId) {
+          const section = user.user_metadata?.market_section || user.user_metadata?.section;
+          if (section && section !== "unassigned") {
+            setAssignedSection(section);
+          }
         }
       }
     };
     fetchAssignment();
   }, [collectorId]);
 
-  const availableStalls = useMemo(() => {
-    if (!assignedSection) return stalls;
-    return stalls.filter((s) => s.section === assignedSection);
-  }, [stalls, assignedSection]);
+  const syncOfflinePayments = useCallback(async () => {
+    if (isSyncing) return;
 
-  const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
+    const queue = getQueue();
+    if (queue.length === 0) {
+      setOfflineQueueCount(0);
+      return;
+    }
+
+    setIsSyncing(true);
+    toast({ title: "Syncing...", description: `Syncing ${queue.length} offline payment(s)...` });
+
+    let successfulSyncs = 0;
+    const syncErrors: any[] = [];
+    const remainingInQueue: QueuedPayment[] = [];
+
+    for (const payment of queue) {
+      try {
+        const { error: invoiceError } = await supabase.from("invoices").insert([
+          {
+            vendor_id: payment.stallDbId,
+            vendor_name: payment.vendorName,
+            stall_name: payment.stallLabel,
+            stall_type: payment.stallType,
+            amount: payment.amount,
+            payment_type: payment.paymentType,
+            notes: payment.notes,
+            due_date: new Date(payment.paymentTimestamp).toISOString().split("T")[0],
+            status: "paid",
+            paid_at: payment.paymentTimestamp,
+            collector_id: payment.collectorId,
+            collector_name: payment.collectorName,
+          },
+        ]);
+
+        if (invoiceError) throw new Error(`Invoice insert failed: ${invoiceError.message}`);
+
+        const today = new Date(payment.paymentTimestamp);
+        let nextDueDate = new Date(today);
+        if (payment.rentalType === "daily") {
+          nextDueDate.setDate(today.getDate() + 1);
+        } else {
+          nextDueDate.setMonth(today.getMonth() + 1);
+          if (payment.nextDue) {
+            const oldDue = new Date(payment.nextDue);
+            if (!isNaN(oldDue.getTime())) nextDueDate.setDate(oldDue.getDate());
+          }
+        }
+
+        const nextDueDateString = `${nextDueDate.getFullYear()}-${String(nextDueDate.getMonth() + 1).padStart(2, "0")}-${String(nextDueDate.getDate()).padStart(2, "0")}`;
+
+        const { error: vendorUpdateError } = await supabase
+          .from("vendors")
+          .update({
+            last_payment: new Date(payment.paymentTimestamp).toISOString().split("T")[0],
+            next_due: nextDueDateString,
+            status: 'current',
+          })
+          .eq("id", payment.stallDbId);
+
+        if (vendorUpdateError) {
+          console.error(`Vendor update failed for ${payment.vendorName}: ${vendorUpdateError.message}`);
+          syncErrors.push({ payment, error: `Vendor update failed: ${vendorUpdateError.message}` });
+        }
+
+        successfulSyncs++;
+      } catch (error) {
+        console.error("Sync failed for one payment:", error);
+        syncErrors.push({ payment, error: (error as Error).message });
+        remainingInQueue.push(payment);
+      }
+    }
+
+    saveQueue(remainingInQueue);
+
+    if (syncErrors.length > 0) {
+      toast({ title: "Sync Partially Failed", description: `${syncErrors.length} payment(s) could not be synced.`, variant: "destructive" });
+    }
+    if (successfulSyncs > 0) {
+      toast({ title: "Sync Complete", description: `${successfulSyncs} offline payment(s) have been synced.` });
+      onPaymentSuccess();
+    }
+
+    setIsSyncing(false);
+  }, [isSyncing, toast, onPaymentSuccess, getQueue]);
+
+  useEffect(() => {
+    const handleStatusChange = async () => {
+      const online = navigator.onLine ? await checkInternetConnection() : false;
+      
+      setIsOnline((prev) => {
+        if (prev !== online) {
+          if (online) {
+            toast({ title: "Back Online!", description: "Attempting to sync offline data." });
+            syncOfflinePayments();
+          } else {
+            toast({
+              title: "You are offline",
+              description: "Payments will be saved locally.",
+              variant: "destructive",
+            });
+          }
+        }
+        return online;
+      });
+    };
+
+    // Initial check
+    handleStatusChange();
+
+    // Poll every 5 seconds
+    const interval = setInterval(handleStatusChange, 5000);
+
+    window.addEventListener('online', handleStatusChange);
+    window.addEventListener('offline', handleStatusChange);
+    setOfflineQueueCount(getQueue().length);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('online', handleStatusChange);
+      window.removeEventListener('offline', handleStatusChange);
+    };
+  }, [getQueue, syncOfflinePayments, toast]);
+
+  const availableStalls = useMemo(() => {
+    if (!assignedSection) return localStalls;
+    return localStalls.filter((s) => s.section === assignedSection);
+  }, [localStalls, assignedSection]);
+
+  const displayNameById = useMemo(() => buildDisplayNameMap(localStalls), [localStalls]);
   const stallTypeOptions = useMemo(
     () => Array.from(new Set(availableStalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
     [availableStalls]
@@ -182,8 +380,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   }, [collectableStalls, selectedStallId]);
 
   const selectedStall = useMemo(
-    () => stalls.find((stall) => stall.id === selectedStallId) ?? null,
-    [stalls, selectedStallId]
+    () => localStalls.find((stall) => stall.id === selectedStallId) ?? null,
+    [localStalls, selectedStallId]
   );
 
   const selectedStallDisplayName = selectedStall
@@ -232,6 +430,63 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
      ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ MAIN PAYMENT SUBMIT HANDLER
   ---------------------------------------------------------- */
   const handlePaymentSubmit = async () => {
+    if (!selectedStall || !paymentData.amount) {
+      toast({
+        title: "Missing information",
+        description: "Please select a stall and complete all required fields.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const stallLabel = selectedStall.type && selectedStallDisplayName
+      ? `${selectedStall.type} - ${selectedStallDisplayName}`
+      : selectedStallDisplayName || "Unnamed Stall";
+    const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
+    const paymentTimestamp = new Date();
+
+    if (!isOnline) {
+      const newPayment: QueuedPayment = {
+        id: crypto.randomUUID(),
+        stallDbId: selectedStall.dbId,
+        stallLabel,
+        vendorName: selectedStall.vendor || "No vendor",
+        stallType: selectedStall.type,
+        amount: Number(paymentData.amount),
+        paymentType,
+        notes: paymentData.notes || null,
+        paymentTimestamp: paymentTimestamp.toISOString(),
+        collectorId,
+        collectorName,
+        rentalType: selectedStall.rentalType,
+        nextDue: selectedStall.nextDue,
+        paymentMethod,
+        referenceNumber,
+      };
+
+      const queue = getQueue();
+      queue.push(newPayment);
+      saveQueue(queue);
+
+      setReceiptContext({
+        stallLabel,
+        vendor: selectedStall.vendor || "No vendor",
+        amount: paymentData.amount,
+        paymentType,
+        paymentDate: paymentTimestamp.toLocaleString(),
+        paymentMethod: paymentMethod === 'cash' ? 'Cash' : (paymentMethod === 'gcash' ? 'GCash' : 'Maya'),
+        referenceNumber,
+        isOffline: true,
+      });
+      setShowReceipt(true);
+      toast({ title: "Payment Saved Offline", description: "It will be synced when you're back online." });
+      setSelectedStallId("");
+      setPaymentMethod("cash");
+      setReferenceNumber("");
+      return;
+    }
+
+    // --- ONLINE LOGIC ---
     if (!selectedStall || !paymentData.amount) {
       toast({
         title: "Missing information",
@@ -344,13 +599,6 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       const paymentTimestamp = new Date();
       const paymentDateString = paymentTimestamp.toISOString().split("T")[0];
 
-      const stallLabel =
-        selectedStall.type && selectedStallDisplayName
-          ? `${selectedStall.type} - ${selectedStallDisplayName}`
-          : selectedStallDisplayName || "Unnamed Stall";
-
-      const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
-
       let finalNotes = paymentData.notes || "";
       if (paymentMethod !== 'cash') {
         const methodLabel = paymentMethod === 'gcash' ? 'GCash' : 'Maya';
@@ -378,6 +626,13 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   },
 ]);
 
+      // Log Activity
+      await supabase.from("activity_logs").insert({
+        user_id: collectorId,
+        user_name: collectorName,
+        action: "COLLECT_PAYMENT",
+        details: `Collected PHP ${paymentData.amount} from ${stallLabel}`
+      });
 
       if (invoiceError) {
         console.error("Error saving payment:", invoiceError);
@@ -503,6 +758,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       paymentDate: paymentTimestamp.toLocaleString(),
       paymentMethod: paymentMethod === 'cash' ? 'Cash' : (paymentMethod === 'gcash' ? 'GCash' : 'Maya'),
       referenceNumber
+
     });
     setShowReceipt(true);
     toast({
@@ -554,6 +810,11 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
             <CardHeader className="text-center space-y-2">
               <img src="/logo.png" alt="Sibulan Market Pay Logo" className="mx-auto h-16 w-16" />
               <CardTitle className="text-base font-semibold">PAYMENT RECEIPT</CardTitle>
+              {receiptContext.isOffline && (
+                <Badge variant="destructive" className="w-fit mx-auto">
+                  OFFLINE - NOT SYNCED
+                </Badge>
+              )}
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="text-center">
@@ -619,16 +880,41 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Payment Collection</h1>
-          {assignedSection && (
-            <Badge variant="secondary" className="mt-1">
-              {assignedSection}
+          <div className="flex items-center gap-2 mt-1">
+            <Badge variant={isOnline ? "default" : "destructive"} className="gap-1.5 pl-2 pr-2.5">
+              {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+              {isOnline ? "Online" : "Offline"}
             </Badge>
-          )}
-          <p className="text-muted-foreground">
-            Capture stall payments and generate receipts instantly.
-          </p>
+            {assignedSection && (
+              <Badge variant="secondary">
+                {assignedSection}
+              </Badge>
+            )}
+          </div>
         </div>
       </div>
+
+      {!isOnline && (
+        <Card className="bg-amber-50 border-amber-200 text-amber-900">
+          <CardContent className="pt-6 text-sm font-medium">
+            You are currently offline. Payments will be saved locally and synced automatically when you're back online.
+          </CardContent>
+        </Card>
+      )}
+
+      {offlineQueueCount > 0 && (
+        <Card>
+          <CardContent className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-sm font-medium text-center sm:text-left">
+              <span className="font-bold text-primary">{offlineQueueCount}</span> payment(s) waiting to be synced.
+            </p>
+            <Button onClick={syncOfflinePayments} disabled={!isOnline || isSyncing} size="sm">
+              {isSyncing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSyncing ? "Syncing..." : "Sync Now"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -794,23 +1080,6 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
               </div>
             )}
 
-            <div className="space-y-2">
-              <Label>Quick Amounts</Label>
-              <div className="flex gap-2">
-                {[100, 500, 1000].map((amt) => (
-                  <Button
-                    key={amt}
-                    type="button"
-                    variant="outline"
-                    onClick={() => setPaymentData((prev) => ({ ...prev, amount: String(amt) }))}
-                    className="flex-1"
-                  >
-                    ₱{amt}
-                  </Button>
-                ))}
-              </div>
-            </div>
-
             <div>
               <Label htmlFor="amount">Amount (PHP)</Label>
               <Input
@@ -837,9 +1106,9 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
           <Button
             className="w-full"
             onClick={handlePaymentSubmit}
-            disabled={!selectedStall || !paymentData.amount || loading}
+            disabled={!selectedStall || !paymentData.amount || loading || userRole === 'admin'}
           >
-            {loading ? "Saving..." : "Record Payment"}
+            {userRole === 'admin' ? "Admins Cannot Collect Payments" : (loading ? "Saving..." : "Record Payment")}
           </Button>
         </CardContent>
       </Card>

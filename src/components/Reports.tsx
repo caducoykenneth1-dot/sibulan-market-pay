@@ -86,7 +86,8 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
     // --- Payment Types Breakdown ---
     const paymentTypeBreakdown: Record<string, number> = {};
     currentMonthPaidInvoices.forEach(inv => {
-      const type = inv.payment_type || 'monthly-rent';
+      let rawType = inv.payment_type || 'monthly-rent';
+      const type = rawType.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       if (!paymentTypeBreakdown[type]) {
         paymentTypeBreakdown[type] = 0;
       }
@@ -96,7 +97,7 @@ export const Reports = ({ stalls, invoices }: ReportsProps) => {
     const totalBreakdownAmount = Object.values(paymentTypeBreakdown).reduce((sum, amount) => sum + amount, 0);
 
     const paymentTypes = Object.entries(paymentTypeBreakdown).map(([type, amount]) => ({
-      type: type.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+      type,
       amount,
       percentage: totalBreakdownAmount > 0 ? (amount / totalBreakdownAmount) * 100 : 0,
     })).sort((a, b) => b.amount - a.amount);

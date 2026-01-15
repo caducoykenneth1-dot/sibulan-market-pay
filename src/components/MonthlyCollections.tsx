@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Filter, Download } from "lucide-react";
+  import { Search, Filter, Download, Calendar } from "lucide-react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { format } from "date-fns";
@@ -41,6 +41,20 @@ const getMonthKey = (date: Date) =>
 export const MonthlyCollections = ({ stalls, invoices }: MonthlyCollectionsProps) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
+  const [selectedMonth, setSelectedMonth] = useState<string>(String(new Date().getMonth()));
+  const [selectedYear, setSelectedYear] = useState<string>(String(new Date().getFullYear()));
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    const currentYear = new Date().getFullYear();
+    years.add(currentYear);
+    invoices.forEach((inv) => {
+      if (inv.paid_at) {
+        years.add(new Date(inv.paid_at).getFullYear());
+      }
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [invoices]);
 
   // Get paid invoices only
   const payments = useMemo(
@@ -64,6 +78,9 @@ export const MonthlyCollections = ({ stalls, invoices }: MonthlyCollectionsProps
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
     return payments.filter((payment) => {
+      if (!payment.paid_at) return false;
+      const paymentDate = new Date(payment.paid_at);
+
       const matchesSearch =
         normalizedSearch.length === 0 ||
         payment.stall_name.toLowerCase().includes(normalizedSearch) ||
@@ -73,9 +90,12 @@ export const MonthlyCollections = ({ stalls, invoices }: MonthlyCollectionsProps
       const matchesType =
         filterType === "all" || payment.stall_type === filterType;
 
-      return matchesSearch && matchesType;
+      const matchesMonth = paymentDate.getMonth().toString() === selectedMonth;
+      const matchesYear = paymentDate.getFullYear().toString() === selectedYear;
+
+      return matchesSearch && matchesType && matchesMonth && matchesYear;
     });
-  }, [payments, searchTerm, filterType]);
+  }, [payments, searchTerm, filterType, selectedMonth, selectedYear]);
 
   // Group by month
   const monthlySummaries = useMemo(() => {
@@ -184,6 +204,11 @@ export const MonthlyCollections = ({ stalls, invoices }: MonthlyCollectionsProps
     pdf.save(`monthly-collections-${new Date().toISOString().split("T")[0]}.pdf`);
   };
 
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -197,7 +222,34 @@ export const MonthlyCollections = ({ stalls, invoices }: MonthlyCollectionsProps
       {/* Search + Filters */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex flex-col lg:flex-row gap-4">
+            <div className="flex gap-2">
+              <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                <SelectTrigger className="w-[140px]">
+                  <Calendar className="mr-2 h-4 w-4" />
+                  <SelectValue placeholder="Month" />
+                </SelectTrigger>
+                <SelectContent>
+                  {months.map((month, index) => (
+                    <SelectItem key={month} value={String(index)}>
+                      {month}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={selectedYear} onValueChange={setSelectedYear}>
+                <SelectTrigger className="w-[100px]">
+                  <SelectValue placeholder="Year" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableYears.map((year) => (
+                    <SelectItem key={year} value={String(year)}>
+                      {year}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
@@ -273,21 +325,23 @@ export const MonthlyCollections = ({ stalls, invoices }: MonthlyCollectionsProps
                       </TableCell>
                     </TableRow>
                   ))}
-                  <TableRow className="bg-primary/5 font-bold">
-                    <TableCell>TOTAL</TableCell>
-                    <TableCell className="text-right">
-                      {monthlySummaries.reduce((sum, m) => sum + m.count, 0)}
-                    </TableCell>
-                    <TableCell className="text-right text-green-700">
-                      ₱{totalAllMonths.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
-                      ₱{(
-                        totalAllMonths /
-                        monthlySummaries.reduce((sum, m) => sum + m.count, 0)
-                      ).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    </TableCell>
-                  </TableRow>
+                  {monthlySummaries.length > 1 && (
+                    <TableRow className="bg-primary/5 font-bold">
+                      <TableCell>TOTAL</TableCell>
+                      <TableCell className="text-right">
+                        {monthlySummaries.reduce((sum, m) => sum + m.count, 0)}
+                      </TableCell>
+                      <TableCell className="text-right text-green-700">
+                        ₱{totalAllMonths.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right text-muted-foreground">
+                        ₱{(
+                          totalAllMonths /
+                          monthlySummaries.reduce((sum, m) => sum + m.count, 0)
+                        ).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>
@@ -301,5 +355,3 @@ export const MonthlyCollections = ({ stalls, invoices }: MonthlyCollectionsProps
     </div>
   );
 };
-
-

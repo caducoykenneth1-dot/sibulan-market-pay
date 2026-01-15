@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type TouchEvent } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,7 +43,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-const STALLS_PER_PAGE = 10;
+const STALLS_PER_PAGE = 6;
 const sectionMap = new Map(STALL_TYPES.map(t => [t.name, t.section]));
 
 
@@ -70,6 +70,9 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
   const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
+
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
 
   const stallTypeOptions = useMemo(() => {
     return [
@@ -142,6 +145,29 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       setSelectedStall(null);
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleTouchStart = (e: TouchEvent) => {
+    setTouchEnd(null);
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchMove = (e: TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > 50;
+    const isRightSwipe = distance < -50;
+
+    if (isLeftSwipe && currentPage < totalPages) {
+      setCurrentPage((p) => p + 1);
+    }
+    if (isRightSwipe && currentPage > 1) {
+      setCurrentPage((p) => p - 1);
     }
   };
 
@@ -246,7 +272,12 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div 
+              className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+            >
               {paginatedStalls.map((stall, i) => (
                 <Card 
                   key={stall.id}
