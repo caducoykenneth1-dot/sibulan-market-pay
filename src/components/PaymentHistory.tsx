@@ -182,6 +182,10 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
 
   const filteredPayments = useMemo(() => {
     return filteredBySearchAndType.filter((payment) => {
+      if (statusFilter === "unpaid") {
+        return true;
+      }
+
       if (!payment.paid_at) return false;
       const paymentDate = new Date(payment.paid_at);
       return (
@@ -189,7 +193,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
         paymentDate.getFullYear().toString() === selectedYear
       );
     });
-  }, [filteredBySearchAndType, selectedMonth, selectedYear]);
+  }, [filteredBySearchAndType, selectedMonth, selectedYear, statusFilter]);
 
   const totalAmount = useMemo(
     () => filteredPayments.reduce((sum, p) => sum + p.amount, 0),
@@ -238,9 +242,12 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
   }, [filteredBySearchAndType]);
 
   const tableDescription = useMemo(() => {
+    if (statusFilter === "unpaid") {
+      return "Showing all outstanding unpaid records";
+    }
     const monthName = months[parseInt(selectedMonth)];
     return `Showing records for ${monthName} ${selectedYear}`;
-  }, [selectedMonth, selectedYear]);
+  }, [selectedMonth, selectedYear, statusFilter]);
 
   const selectedMonthLabel = useMemo(() => {
     return `${months[parseInt(selectedMonth)]} ${selectedYear}`;
@@ -261,17 +268,28 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
     () => [
       {
         accessorKey: "id",
-        header: "Receipt",
+        header: statusFilter === "unpaid" ? "Invoice ID" : "Receipt",
         cell: ({ row }) => (
           <span className="font-mono text-xs">
-            DPM-{String(row.original.id).padStart(6, "0")}
+            {statusFilter === "unpaid" ? "INV-" : "DPM-"}
+            {String(row.original.id).padStart(6, "0")}
           </span>
         ),
       },
       {
-        accessorKey: "paid_at",
-        header: "Date",
+        accessorKey: statusFilter === "unpaid" ? "due_date" : "paid_at",
+        header: statusFilter === "unpaid" ? "Due Date" : "Paid Date",
         cell: ({ row }) => {
+          if (statusFilter === "unpaid") {
+            const date = new Date(row.original.due_date);
+            return (
+              <div className="flex flex-col">
+                <span className="font-medium text-destructive">
+                  {format(date, "MMM d, yyyy")}
+                </span>
+              </div>
+            );
+          }
           if (!row.original.paid_at) return "-";
           return (
             <div className="flex flex-col">
@@ -301,7 +319,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
         accessorKey: "amount",
         header: "Amount",
         cell: ({ row }) => (
-          <div className="font-medium text-success">
+          <div className={`font-medium ${statusFilter === "unpaid" ? "text-destructive" : "text-success"}`}>
             PHP {row.original.amount.toLocaleString()}
           </div>
         ),
@@ -338,7 +356,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
         ),
       },
     ],
-    [stalls]
+    [stalls, statusFilter]
   );
 
   const unpaidCount = useMemo(() => {
@@ -673,7 +691,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
       {/* Payment Records Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Payment Records</CardTitle>
+          <CardTitle>{statusFilter === "unpaid" ? "Unpaid Records" : "Payment Records"}</CardTitle>
           <CardDescription>
             {tableDescription}
           </CardDescription>
@@ -692,10 +710,14 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Payment Receipt</DialogTitle>
+            <DialogTitle>
+              {selectedPayment?.status === "paid" ? "Payment Receipt" : "Invoice Details"}
+            </DialogTitle>
             {selectedPayment ? (
               <DialogDescription>
-                Receipt #DPM-{String(selectedPayment.id).padStart(6, "0")}
+                {selectedPayment.status === "paid"
+                  ? `Receipt #DPM-${String(selectedPayment.id).padStart(6, "0")}`
+                  : `Invoice #INV-${String(selectedPayment.id).padStart(6, "0")}`}
               </DialogDescription>
             ) : (
               <DialogDescription>Review payment details</DialogDescription>
@@ -734,10 +756,20 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
                 </div>
                 <div>
                   <p className="text-muted-foreground">Payment type</p>
-                  <Badge variant="outline" className="w-fit capitalize">
-                    {selectedPayment.payment_type?.replace(/-/g, " ") ||
-                      "Monthly Rent"}
-                  </Badge>
+                  {(() => {
+                    let displayType = selectedPayment.payment_type;
+                    if (!displayType) {
+                      const stall = stalls.find((s) => s.dbId === Number(selectedPayment.vendor_id));
+                      if (stall) {
+                        displayType = stall.rentalType?.toLowerCase() === "daily" ? "Daily Fee" : "Monthly Rent";
+                      }
+                    }
+                    return (
+                      <Badge variant="outline" className="w-fit capitalize">
+                        {displayType?.replace(/-/g, " ") || "Monthly Rent"}
+                      </Badge>
+                    );
+                  })()}
                 </div>
                 <div>
                   <p className="text-muted-foreground">Notes</p>
