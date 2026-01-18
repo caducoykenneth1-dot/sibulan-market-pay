@@ -97,7 +97,37 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
   const payments = useMemo(
     () =>
       {
-        const filtered = invoices.filter((inv) => {
+        // Group paid invoices by receipt number base (stripping suffix like -1, -2)
+        const groupedInvoices = new Map<string, Invoice>();
+        
+        invoices.forEach(inv => {
+          if (inv.status === 'paid' && inv.paid_at) {
+            // Extract base receipt (e.g., DPM-123456 from DPM-123456-1)
+            const baseReceipt = inv.receipt_number 
+              ? inv.receipt_number.replace(/-\d+$/, '') 
+              : `TX-${inv.id}`;
+            
+            // Use a composite key to ensure we don't merge unrelated payments by accident
+            // (though receipt number should be unique per transaction batch)
+            const key = `${baseReceipt}_${inv.vendor_id}_${inv.paid_at}`;
+            
+            if (!groupedInvoices.has(key)) {
+              groupedInvoices.set(key, { ...inv, receipt_number: baseReceipt });
+            } else {
+              const existing = groupedInvoices.get(key)!;
+              existing.amount += inv.amount;
+              // We keep the rest of the details from the first invoice found
+            }
+          }
+        });
+
+        const consolidatedPaid = Array.from(groupedInvoices.values());
+        const unpaidInvoices = invoices.filter(inv => inv.status !== 'paid');
+
+        // Combine consolidated paid invoices with unpaid ones
+        const allItems = [...consolidatedPaid, ...unpaidInvoices];
+
+        const filtered = allItems.filter((inv) => {
           if (statusFilter === "paid") return inv.status === "paid" && inv.paid_at;
           if (statusFilter === "unpaid") return inv.status === "unpaid" || inv.status === "overdue";
           return true;
@@ -272,7 +302,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
         cell: ({ row }) => (
           <span className="font-mono text-xs">
             {statusFilter === "unpaid" ? "INV-" : "DPM-"}
-            {String(row.original.id).padStart(6, "0")}
+            {row.original.receipt_number ? row.original.receipt_number.replace('DPM-', '') : String(row.original.id).padStart(6, "0")}
           </span>
         ),
       },
@@ -420,7 +450,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
         ];
       } else {
         return [
-          `DPM-${String(p.id).padStart(6, "0")}`,
+          p.receipt_number || `DPM-${String(p.id).padStart(6, "0")}`,
           p.vendor_name,
           p.stall_name,
           type,
@@ -716,7 +746,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
             {selectedPayment ? (
               <DialogDescription>
                 {selectedPayment.status === "paid"
-                  ? `Receipt #DPM-${String(selectedPayment.id).padStart(6, "0")}`
+                  ? `Receipt #${selectedPayment.receipt_number || `DPM-${String(selectedPayment.id).padStart(6, "0")}`}`
                   : `Invoice #INV-${String(selectedPayment.id).padStart(6, "0")}`}
               </DialogDescription>
             ) : (

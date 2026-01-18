@@ -34,11 +34,29 @@ serve(async (req) => {
     );
 
     // 🔎 Get invoice details
-    const { data: invoice, error } = await supabase
+    // First try exact match (single payment)
+    let { data: invoice, error } = await supabase
       .from("invoices")
-      .select("amount, vendor_name, receipt_number")
+      .select("amount, vendor_name, receipt_number, stall_name, payment_type, paid_at")
       .eq("receipt_number", receiptNumber)
-      .single();
+      .maybeSingle();
+
+    // If not found, try to find as a bulk payment (suffix pattern)
+    if (!invoice && !error) {
+       const { data: bulkInvoices, error: bulkError } = await supabase
+         .from("invoices")
+         .select("amount, vendor_name, receipt_number, stall_name, payment_type, paid_at")
+         .like("receipt_number", `${receiptNumber}-%`);
+       
+       if (bulkInvoices && bulkInvoices.length > 0) {
+          // Aggregate amount
+          const totalAmount = bulkInvoices.reduce((sum: number, inv: any) => sum + inv.amount, 0);
+          // Use the first invoice for metadata
+          invoice = { ...bulkInvoices[0], amount: totalAmount };
+       } else if (bulkError) {
+          error = bulkError;
+       }
+    }
 
     if (error || !invoice) {
       return new Response(
@@ -63,6 +81,9 @@ serve(async (req) => {
 
     const phone = vendor.contact.replace(/\D/g, "");
 
+    // Format date (YYYY-MM-DD)
+    const dateStr = invoice.paid_at ? invoice.paid_at.split("T")[0] : new Date().toISOString().split("T")[0];
+
     // 📩 Send SMS via IPROG
     const smsRes = await fetch(
       "https://www.iprogsms.com/api/v1/sms_messages",
@@ -74,7 +95,15 @@ serve(async (req) => {
           phone_number: phone,
           message: `
 Receipt: ${receiptNumber}
+SIBULAN MARKET PAY
+Payment Received
+
+Stall: ${invoice.stall_name}
+Type: ${invoice.payment_type}
 Amount: PHP ${invoice.amount}
+Ref: ${receiptNumber}
+Date: ${dateStr}
+
 Thank you.`,
         }),
       }

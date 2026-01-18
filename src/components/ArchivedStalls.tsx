@@ -21,6 +21,7 @@ import {
   Filter,
   Search,
   Archive,
+  Trash2,
 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
@@ -33,7 +34,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { type StallRecord, updateStall, STALL_TYPES } from "@/data/stalls";
+import { type StallRecord, updateStall, deleteStall, STALL_TYPES } from "@/data/stalls";
 import {
   Sheet,
   SheetContent,
@@ -70,6 +71,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
 
   const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
   const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
+  const [stallToDelete, setStallToDelete] = useState<StallRecord | null>(null);
 
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
@@ -142,6 +144,20 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       toast({ title: "Stall Restored", description: "Stall moved to active list." });
       onDataChange();
       setStallToRestore(null);
+      setSelectedStall(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!stallToDelete) return;
+
+    try {
+      await deleteStall(stallToDelete.dbId);
+      toast({ title: "Stall Deleted", description: "Stall permanently removed." });
+      onDataChange();
+      setStallToDelete(null);
       setSelectedStall(null);
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -367,7 +383,10 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
               </div>
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button variant="outline" onClick={() => setSelectedStall(null)}>Close</Button>
+                <Button variant="destructive" onClick={() => setStallToDelete(selectedStall)}>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete Permanently
+                </Button>
                 <Button onClick={() => setStallToRestore(selectedStall)}>
                   <ArchiveRestore className="mr-2 h-4 w-4" />
                   Restore Stall
@@ -389,6 +408,21 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleRestore}>Confirm Restore</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!stallToDelete} onOpenChange={(open) => !open && setStallToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Stall Permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently remove <strong>{stallToDelete?.name}</strong> from the database.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

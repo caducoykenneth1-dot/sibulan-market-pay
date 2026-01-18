@@ -56,6 +56,7 @@ export interface Invoice {
   payment_type?: string | null;
   collector_name?: string | null;
   notes?: string | null;
+  receipt_number?: string | null;
 }
 
 export interface UnpaidStall extends Invoice {

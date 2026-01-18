@@ -44,6 +44,7 @@ export interface QueuedPayment {
   nextDue: string | null;
   paymentMethod: 'cash' | 'gcash' | 'maya';
   referenceNumber: string;
+  duration?: number;
 }
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
@@ -113,6 +114,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   const [isSyncing, setIsSyncing] = useState(false);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
   const [localStalls, setLocalStalls] = useState<StallRecord[]>(stalls);
+  const [duration, setDuration] = useState<number | string>(1);
 
   const checkInternetConnection = async () => {
     try {
@@ -191,31 +193,55 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
     for (const payment of queue) {
       try {
-        const { error: invoiceError } = await supabase.from("invoices").insert([
-          {
+        const loopCount = payment.duration || 1;
+        const totalAmount = payment.amount;
+        const perInvoiceAmount = Math.floor((totalAmount / loopCount) * 100) / 100;
+        const remainder = totalAmount - (perInvoiceAmount * loopCount);
+        const systemReceiptNo = generateReceiptNo();
+
+        let currentDueDate = parseISODate(payment.nextDue);
+        if (!currentDueDate) {
+             currentDueDate = new Date(payment.paymentTimestamp);
+        }
+
+        const invoicesToInsert = [];
+        for (let i = 0; i < loopCount; i++) {
+          const invoiceDate = new Date(currentDueDate!);
+          if (payment.rentalType === 'daily') {
+              invoiceDate.setDate(invoiceDate.getDate() + i);
+          } else {
+              invoiceDate.setMonth(invoiceDate.getMonth() + i);
+          }
+          const amount = i === 0 ? perInvoiceAmount + remainder : perInvoiceAmount;
+          const uniqueReceiptNo = loopCount > 1 ? `${systemReceiptNo}-${i + 1}` : systemReceiptNo;
+
+          invoicesToInsert.push({
             vendor_id: payment.stallDbId,
             vendor_name: payment.vendorName,
             stall_name: payment.stallLabel,
             stall_type: payment.stallType,
-            amount: payment.amount,
+            amount: amount,
             payment_type: payment.paymentType,
             notes: payment.notes,
-            due_date: new Date(payment.paymentTimestamp).toISOString().split("T")[0],
+            due_date: invoiceDate.toISOString().split("T")[0],
             status: "paid",
             paid_at: payment.paymentTimestamp,
             collector_id: payment.collectorId,
             collector_name: payment.collectorName,
-          },
-        ]);
+            receipt_number: uniqueReceiptNo,
+          });
+        }
+
+        const { error: invoiceError } = await supabase.from("invoices").insert(invoicesToInsert);
 
         if (invoiceError) throw new Error(`Invoice insert failed: ${invoiceError.message}`);
 
-        const today = new Date(payment.paymentTimestamp);
-        let nextDueDate = new Date(today);
+        // Calculate next due date after the paid period
+        let nextDueDate = new Date(currentDueDate!);
         if (payment.rentalType === "daily") {
-          nextDueDate.setDate(today.getDate() + 1);
+          nextDueDate.setDate(nextDueDate.getDate() + loopCount);
         } else {
-          nextDueDate.setMonth(today.getMonth() + 1);
+          nextDueDate.setMonth(nextDueDate.getMonth() + loopCount);
           if (payment.nextDue) {
             const oldDue = new Date(payment.nextDue);
             if (!isNaN(oldDue.getTime())) nextDueDate.setDate(oldDue.getDate());
@@ -377,6 +403,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     if (!selectedStallId || !collectableStalls.some((stall) => stall.id === selectedStallId)) {
       setSelectedStallId(collectableStalls[0].id);
     }
+    // Reset duration when stall selection logic runs (e.g. type change)
+    setDuration(1);
   }, [collectableStalls, selectedStallId]);
 
   const selectedStall = useMemo(
@@ -390,13 +418,26 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
 
   useEffect(() => {
     if (!selectedStall) {
+      setDuration(1);
       setPaymentData((prev) => ({ ...prev, amount: "" }));
       setPaymentMethod("cash");
       setReferenceNumber("");
       return;
     }
-    setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.rentAmount) }));
-  }, [selectedStall]);
+    // If it's daily, calculate based on duration, otherwise just rentAmount
+    const dur = typeof duration === 'number' ? duration : (parseInt(duration as string) || 0);
+    if (selectedStall.rentalType === 'daily') {
+        const total = selectedStall.rentAmount * dur;
+        setPaymentData((prev) => ({ ...prev, amount: dur > 0 ? String(total) : "" }));
+    } else {
+        setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.rentAmount) }));
+    }
+  }, [selectedStall, duration]);
+
+  // Reset duration when stall changes explicitly
+  useEffect(() => {
+    setDuration(1);
+  }, [selectedStallId]);
 
   const handlePrintReceipt = async () => {
     const receiptElement = document.getElementById("receipt-content");
@@ -446,6 +487,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     const paymentType = selectedStall.rentalType === "daily" ? "Daily Fee" : "Monthly Rent";
     const paymentTimestamp = new Date();
     const currentReceiptNo = generateReceiptNo();
+    const dur = typeof duration === 'number' ? duration : (parseInt(duration as string) || 1);
+    const loopCount = selectedStall.rentalType === 'daily' ? dur : 1;
 
     if (!isOnline) {
       const newPayment: QueuedPayment = {
@@ -464,6 +507,7 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         nextDue: selectedStall.nextDue,
         paymentMethod,
         referenceNumber,
+        duration: loopCount,
       };
 
       const queue = getQueue();
@@ -609,26 +653,39 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         finalNotes = `${finalNotes}${prefix}Paid via ${methodLabel}${refInfo}`;
       }
 
-     const { error: invoiceError } = await supabase.from("invoices").insert([
-  {
-    vendor_id: stallDbId,
-    vendor_name: selectedStall.vendor || "No vendor",
-    stall_name: stallLabel,
-    stall_type: selectedStall.type,
-    amount: Number(paymentData.amount),
-    payment_type: paymentType,
-    notes: finalNotes || null,
-    due_date: paymentDateString,
-    status: "paid",
-    paid_at: paymentTimestamp.toISOString(),
+      const totalAmount = Number(paymentData.amount);
+      const perInvoiceAmount = Math.floor((totalAmount / loopCount) * 100) / 100;
+      const remainder = totalAmount - (perInvoiceAmount * loopCount);
 
-    // ✅ NOW VALID
-    receipt_number: currentReceiptNo,
+      const invoicesToInsert = [];
+      for (let i = 0; i < loopCount; i++) {
+        const invoiceDate = new Date(nextEligibleDate!);
+        if (rentalTypeFromDb === 'daily') {
+            invoiceDate.setDate(invoiceDate.getDate() + i);
+        } else {
+            invoiceDate.setMonth(invoiceDate.getMonth() + i);
+        }
+        const amount = i === 0 ? perInvoiceAmount + remainder : perInvoiceAmount;
+        const uniqueReceiptNo = loopCount > 1 ? `${currentReceiptNo}-${i + 1}` : currentReceiptNo;
 
-    collector_id: collectorId,
-    collector_name: collectorName,
-  },
-]);
+        invoicesToInsert.push({
+          vendor_id: stallDbId,
+          vendor_name: selectedStall.vendor || "No vendor",
+          stall_name: stallLabel,
+          stall_type: selectedStall.type,
+          amount: amount,
+          payment_type: paymentType,
+          notes: finalNotes || null,
+          due_date: invoiceDate.toISOString().split("T")[0],
+          status: "paid",
+          paid_at: paymentTimestamp.toISOString(),
+          receipt_number: uniqueReceiptNo,
+          collector_id: collectorId,
+          collector_name: collectorName,
+        });
+      }
+
+      const { error: invoiceError } = await supabase.from("invoices").insert(invoicesToInsert);
 
 
 
@@ -652,88 +709,43 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         return;
       }
 
-        // -----------------------------
+    // -----------------------------
     // SEND SMS RECEIPT VIA SMS GATEWAY
     // -----------------------------
     if (latestStall?.contact) {
       try {
-        const smsPayload = {
-          phone: latestStall.contact,
-          amount: Number(paymentData.amount),
-          stallName: stallLabel,
-          vendorName: selectedStall.vendor,
-          paymentDate: paymentDateString,
-          paymentType: paymentType,
-          collectorName: collectorName,
-          receiptNumber: currentReceiptNo,
-        };
-
-        // 📩 SEND SMS RECEIPT (NON-BLOCKING)
-      // 📩 SEND SMS RECEIPT (NON-BLOCKING)
-// -----------------------------
-// SEND SMS RECEIPT (NON-BLOCKING)
-// -----------------------------
-if (latestStall?.contact) {
-  try {
-    const { data, error } = await supabase.functions.invoke(
-      "send-sms-receipt",
-      {
-        body: {
-          receiptNumber: currentReceiptNo, // ✅ ALWAYS DEFINED
-        },
-      }
-    );
-
-    if (error) {
-      console.error("SMS Function Error:", error);
-      smsFailed = true;
-    } else if (!data?.success) {
-      console.warn("SMS failed response:", data);
-      smsFailed = true;
-    } else {
-      console.log("SMS sent successfully");
-    }
-  } catch (err) {
-    console.error("Unexpected SMS exception:", err);
-    smsFailed = true;
-  }
-}
-
-
-
-        if (smsError) {
-          console.error("SMS Function Error:", smsError);
-          // console.error("SMS Error Details:", JSON.stringify(smsError, null, 2));
-          smsFailed = true; // Set flag on failure
-        } else if (smsData) {
-          console.log("SMS Response:", smsData);
-          if (smsData.success) {
-            console.log("SMS receipt sent successfully via SMS Gateway");
-          } else {
-            console.warn("SMS API returned non-success status:", smsData);
-            smsFailed = true;
+        const { data, error } = await supabase.functions.invoke(
+          "send-sms-receipt",
+          {
+            body: {
+              receiptNumber: currentReceiptNo,
+            },
           }
-        } else {
-          console.warn("No SMS response data returned");
+        );
+
+        if (error) {
+          console.error("SMS Function Error:", error);
           smsFailed = true;
+        } else if (!data?.success) {
+          console.warn("SMS failed response:", data);
+          smsFailed = true;
+        } else {
+          console.log("SMS sent successfully");
         }
-      } catch (err: unknown) {
-        console.error("Unexpected SMS error:", err);
-        console.error("SMS Error Details:", err instanceof Error ? err.message : JSON.stringify(err));
+      } catch (err) {
+        console.error("Unexpected SMS exception:", err);
         smsFailed = true; // Set flag on failure
       }
     }
 
     // Continue with updating next due, receipt, and toast
-    const today = new Date();
-    // ✅ FIX: Start from 'today' to ensure the new date is in the future.
-    // Using selectedStall.nextDue (which might be years old) caused the year to stay in the past.
-    let nextDueDate = new Date(today);
+    // Start from the date we just paid off (nextEligibleDate)
+    let nextDueDate = new Date(nextEligibleDate!);
 
     if (selectedStall.rentalType === "daily") {
-      nextDueDate.setDate(today.getDate() + 1);
+      nextDueDate.setDate(nextDueDate.getDate() + loopCount);
     } else {
-      nextDueDate.setMonth(today.getMonth() + 1);
+      nextDueDate.setMonth(nextDueDate.getMonth() + loopCount);
       // Preserve the original due day (e.g., 15th) if available
       if (selectedStall.nextDue) {
         const oldDue = new Date(selectedStall.nextDue);
@@ -1111,6 +1123,28 @@ if (latestStall?.contact) {
                   onChange={(e) => setReferenceNumber(e.target.value)}
                   placeholder={`Last digits of ${paymentMethod === 'gcash' ? 'GCash' : 'Maya'} Ref No.`}
                 />
+              </div>
+            )}
+
+            {selectedStall && selectedStall.rentalType === 'daily' && (
+              <div className="animate-in fade-in slide-in-from-top-1">
+                <Label htmlFor="duration">Number of Days</Label>
+                <Input
+                  id="duration"
+                  type="number"
+                  min={0}
+                  max={365}
+                  value={duration}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "") setDuration("");
+                    else setDuration(parseInt(val));
+                  }}
+                />
+                <div className="flex gap-2 mt-2">
+                  <Button type="button" size="sm" variant="outline" onClick={() => setDuration(7)} className="flex-1">1 Week</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setDuration(30)} className="flex-1">1 Month</Button>
+                </div>
               </div>
             )}
 

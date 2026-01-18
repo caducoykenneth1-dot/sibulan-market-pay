@@ -175,11 +175,29 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
 
   const recentPayments = useMemo(() => {
     // ✅ Use the filtered list of invoices to find the most recent PAID transactions.
-    return relevantPaidInvoices
+    // Group by receipt number to show bulk payments as one
+    const grouped = new Map<string, any>();
+    
+    relevantPaidInvoices.forEach(inv => {
+      const baseReceipt = inv.receipt_number 
+        ? inv.receipt_number.replace(/-\d+$/, '') 
+        : `TX-${inv.id}`;
+      
+      const key = `${baseReceipt}_${inv.paid_at}`;
+      
+      if (!grouped.has(key)) {
+        grouped.set(key, { ...inv, amount: inv.amount });
+      } else {
+        const existing = grouped.get(key);
+        existing.amount += inv.amount;
+      }
+    });
+
+    return Array.from(grouped.values())
       .sort((a, b) => new Date(b.paid_at!).getTime() - new Date(a.paid_at!).getTime())
       .slice(0, 4)
       .map((inv) => ({
-        id: `TX-${inv.id}`,
+        id: inv.receipt_number || `TX-${inv.id}`,
         vendor: inv.vendor_name,
         stallName: inv.stall_name,
         amount: `PHP ${inv.amount.toLocaleString()}`,

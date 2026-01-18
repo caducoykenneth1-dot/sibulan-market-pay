@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, type TouchEvent } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,6 +77,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  MoveHorizontal,
 } from "lucide-react";
 
 /* ======================================================================
@@ -253,6 +254,11 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
   const [selectedDayInvoices, setSelectedDayInvoices] = useState<any[]>([]);
   const [isDayDialogOpen, setIsDayDialogOpen] = useState(false);
 
+  // Touch state for swiping
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const [activeTypeIndex, setActiveTypeIndex] = useState(0);
+
   useEffect(() => {
     if (showTransactions && selectedStall) {
       const fetchTransactions = async () => {
@@ -336,6 +342,32 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
     setSortConfig({ key: "stallNumber", direction: "asc" });
   };
 
+  const handleTouchStart = (e: TouchEvent) => {
+    setTouchEnd(null);
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchMove = (e: TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > 50;
+    const isRightSwipe = distance < -50;
+
+    if (isLeftSwipe) {
+      if (activeTypeIndex < sortedTypes.length - 1) {
+        setActiveTypeIndex((prev) => prev + 1);
+      }
+    } else if (isRightSwipe) {
+      if (activeTypeIndex > 0) {
+        setActiveTypeIndex((prev) => prev - 1);
+      }
+    }
+  };
+
   /* ======================================================================
      INTERNAL FUNCTIONS
   ====================================================================== */
@@ -396,6 +428,35 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
           action: "UPDATE_STALL",
           details: `Updated details for ${stallBeingEdited.name}`
         });
+
+        // If lastPayment date was manually changed, create a corresponding invoice record
+        // so it appears in the Transaction History calendar.
+        if (
+          formState.lastPayment && 
+          formState.lastPayment !== stallBeingEdited.lastPayment &&
+          !shouldClear
+        ) {
+           const paymentDate = new Date(formState.lastPayment);
+           if (!isNaN(paymentDate.getTime())) {
+             const { error: invError } = await supabase.from("invoices").insert({
+               vendor_id: stallBeingEdited.dbId,
+               vendor_name: formState.vendor || stallBeingEdited.vendor,
+               stall_name: stallBeingEdited.name,
+               stall_type: trimmedType,
+               amount: rent,
+               payment_type: "Manual Adjustment",
+               notes: "Generated from manual Last Payment update",
+               due_date: formState.lastPayment,
+               status: "paid",
+               paid_at: paymentDate.toISOString(),
+               collector_name: userName,
+             });
+
+             if (invError) {
+               console.error("Failed to create manual invoice:", invError);
+             }
+           }
+        }
 
         toast({
           title: "Stall updated",
@@ -550,6 +611,34 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
     sortConfig,
   ]);
 
+  const groupedStalls = useMemo(() => {
+    const groups = filteredStalls.reduce((acc, stall) => {
+      const type = stall.type || "Uncategorized";
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(stall);
+      return acc;
+    }, {} as Record<string, typeof filteredStalls>);
+
+    // Sort each group by the numeric part of the stall name to ensure accurate ordering
+    Object.keys(groups).forEach((key) => {
+      groups[key].sort((a, b) => {
+        const numA = parseInt(a.name.replace(/\D/g, "") || "0", 10);
+        const numB = parseInt(b.name.replace(/\D/g, "") || "0", 10);
+        return numA - numB;
+      });
+    });
+
+    return groups;
+  }, [filteredStalls]);
+
+  const sortedTypes = useMemo(() => {
+    return Object.keys(groupedStalls).sort((a, b) => a.localeCompare(b));
+  }, [groupedStalls]);
+
+  useEffect(() => {
+    setActiveTypeIndex(0);
+  }, [sortedTypes.length, sectionFilter, searchTerm]);
+
   /* ======================================================================
      6. PAGE HEADER
   ====================================================================== */
@@ -687,6 +776,9 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
           <p className="text-xs text-muted-foreground text-center">
             Pick a section to reveal search and filters.
           </p>
+          <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground/70 mt-1 md:hidden">
+            <MoveHorizontal className="h-3 w-3" /> Swipe to change stall type
+          </div>
         </CardContent>
       </Card>
 
@@ -748,48 +840,90 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
           </div>
         </div>
 
-        <Card>
+        <Card
+          className="touch-pan-y"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
           <CardContent className="pt-6">
             {filteredStalls.length === 0 ? (
               <div className="py-10 text-center text-muted-foreground">
                 No stalls match your filters.
               </div>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {filteredStalls.map((stall) => (
-                  <div key={stall.id} className="relative">
+              <div className="space-y-4">
+                {sortedTypes.length > 0 && (
+                  <div className="flex items-center justify-between border-b pb-2">
                     <Button
-                      variant={
-                        selectedStall?.id === stall.id ? "default" : "outline"
-                      }
-                      onClick={() =>
-                        setSelectedStall(
-                          selectedStall?.id === stall.id ? null : stall
-                        )
-                      }
-                      className="h-16 w-16 md:h-24 md:w-24 p-1 transition-all hover:shadow-md flex flex-col gap-1"
+                      variant="ghost"
+                      size="icon"
+                      disabled={activeTypeIndex === 0}
+                      onClick={() => setActiveTypeIndex((prev) => Math.max(0, prev - 1))}
                     >
-                      <Building2 className="h-4 w-4 md:h-6 md:w-6 opacity-40" />
-                      <span className="font-bold text-xs md:text-sm text-center leading-tight whitespace-normal">
-                        {stall.name}
-                      </span>
+                      <ChevronLeft className="h-5 w-5" />
                     </Button>
 
-                    <div
-                      className={`absolute -top-2 -right-2 md:-top-3 md:-right-3 transform scale-90 md:scale-100 px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-semibold shadow-sm z-10 ${
-                        stall.status === "current"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : stall.status === "due"
-                          ? "bg-amber-100 text-amber-700"
-                          : stall.status === "overdue"
-                          ? "bg-rose-100 text-rose-700"
-                          : "bg-gray-200 text-gray-700"
-                      }`}
-                    >
-                      {stall.status}
+                    <div className="text-center">
+                      <h3 className="font-semibold text-lg text-primary/80 flex items-center justify-center gap-2">
+                        {sortedTypes[activeTypeIndex]}
+                        <Badge variant="secondary" className="text-xs font-normal">
+                          {groupedStalls[sortedTypes[activeTypeIndex]]?.length || 0}
+                        </Badge>
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        {activeTypeIndex + 1} of {sortedTypes.length} types
+                      </p>
                     </div>
+
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={activeTypeIndex === sortedTypes.length - 1}
+                      onClick={() => setActiveTypeIndex((prev) => Math.min(sortedTypes.length - 1, prev + 1))}
+                    >
+                      <ChevronRight className="h-5 w-5" />
+                    </Button>
                   </div>
-                ))}
+                )}
+
+                {sortedTypes.length > 0 && (
+                  <div
+                    key={sortedTypes[activeTypeIndex]}
+                    className="flex flex-wrap gap-2 justify-center sm:justify-start animate-in fade-in slide-in-from-right-4 duration-300"
+                  >
+                    {groupedStalls[sortedTypes[activeTypeIndex]]?.map((stall) => (
+                      <div key={stall.id} className="relative">
+                        <Button
+                          variant={selectedStall?.id === stall.id ? "default" : "outline"}
+                          onClick={() =>
+                            setSelectedStall(selectedStall?.id === stall.id ? null : stall)
+                          }
+                          className="h-16 w-16 md:h-24 md:w-24 p-1 transition-all hover:shadow-md flex flex-col gap-1"
+                        >
+                          <Building2 className="h-4 w-4 md:h-6 md:w-6 opacity-40" />
+                          <span className="font-bold text-xs md:text-sm text-center leading-tight whitespace-normal">
+                            {stall.name}
+                          </span>
+                        </Button>
+
+                        <div
+                          className={`absolute -top-2 -right-2 md:-top-3 md:-right-3 transform scale-90 md:scale-100 px-1.5 py-0.5 rounded-full text-[10px] md:text-xs font-semibold shadow-sm z-10 ${
+                            stall.status === "current"
+                              ? "bg-emerald-100 text-emerald-700"
+                              : stall.status === "due"
+                              ? "bg-amber-100 text-amber-700"
+                              : stall.status === "overdue"
+                              ? "bg-rose-100 text-rose-700"
+                              : "bg-gray-200 text-gray-700"
+                          }`}
+                        >
+                          {stall.status}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

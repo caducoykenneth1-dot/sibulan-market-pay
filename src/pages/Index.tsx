@@ -340,7 +340,7 @@ const Index = () => {
       const { data, error } = await supabase
         .from("invoices")
         .select(
-          "id, vendor_id, vendor_name, stall_name, amount, due_date, status, paid_at, payment_type, collector_name, notes, stall_type"
+          "id, vendor_id, vendor_name, stall_name, amount, due_date, status, paid_at, payment_type, collector_name, notes, stall_type, receipt_number"
         );
 
       if (!error) {
