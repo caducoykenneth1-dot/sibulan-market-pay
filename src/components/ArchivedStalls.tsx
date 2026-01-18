@@ -44,7 +44,6 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-const STALLS_PER_PAGE = 6;
 const sectionMap = new Map(STALL_TYPES.map(t => [t.name, t.section]));
 
 
@@ -60,8 +59,6 @@ interface ArchivedStallsProps {
 export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps) => {
   const { toast } = useToast();
 
-  const [currentPage, setCurrentPage] = useState(1);
-
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [showStalls, setShowStalls] = useState(true);
@@ -72,6 +69,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
   const [selectedStall, setSelectedStall] = useState<ArchivedStallRecord | null>(null);
   const [stallToRestore, setStallToRestore] = useState<StallRecord | null>(null);
   const [stallToDelete, setStallToDelete] = useState<StallRecord | null>(null);
+  const [activeTypeIndex, setActiveTypeIndex] = useState(0);
 
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
@@ -110,18 +108,26 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
     });
   }, [allStalls, sectionFilter, typeFilter, debouncedSearch]);
 
-  const totalStalls = filteredStalls.length;
-  const totalPages = Math.ceil(totalStalls / STALLS_PER_PAGE);
+  const groupedStalls = useMemo(() => {
+    const groups = filteredStalls.reduce((acc, stall) => {
+      const type = stall.type || "Uncategorized";
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(stall);
+      return acc;
+    }, {} as Record<string, typeof filteredStalls>);
 
-  const paginatedStalls = useMemo(() => {
-    const from = (currentPage - 1) * STALLS_PER_PAGE;
-    return filteredStalls.slice(from, from + STALLS_PER_PAGE);
-  }, [filteredStalls, currentPage]);
+    Object.keys(groups).forEach((key) => {
+      groups[key].sort((a, b) => {
+        const numA = parseInt(a.name.replace(/\D/g, "") || "0", 10);
+        const numB = parseInt(b.name.replace(/\D/g, "") || "0", 10);
+        return numA - numB;
+      });
+    });
 
-  useEffect(() => {
-    // Reset to page 1 when filters change
-    setCurrentPage(1);
-  }, [sectionFilter, typeFilter, debouncedSearch]);
+    return groups;
+  }, [filteredStalls]);
+
+  const sortedTypes = useMemo(() => Object.keys(groupedStalls).sort((a, b) => a.localeCompare(b)), [groupedStalls]);
 
   useEffect(() => {
     setTypeFilter("all");
@@ -179,11 +185,15 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
     const isLeftSwipe = distance > 50;
     const isRightSwipe = distance < -50;
 
-    if (isLeftSwipe && currentPage < totalPages) {
-      setCurrentPage((p) => p + 1);
+    if (isLeftSwipe) {
+      if (activeTypeIndex < sortedTypes.length - 1) {
+        setActiveTypeIndex((prev) => prev + 1);
+      }
     }
-    if (isRightSwipe && currentPage > 1) {
-      setCurrentPage((p) => p - 1);
+    else if (isRightSwipe) {
+      if (activeTypeIndex > 0) {
+        setActiveTypeIndex((prev) => prev - 1);
+      }
     }
   };
 
@@ -263,7 +273,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);
-                setCurrentPage(1);
+                setActiveTypeIndex(0);
               }}
               placeholder="Search vendor or ID..."
               className="pl-9"
@@ -275,7 +285,7 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
       {/* STALL GRID */}
       {showStalls && (
         <>
-          {paginatedStalls.length === 0 ? (
+          {filteredStalls.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center space-y-4 border-2 border-dashed rounded-xl bg-muted/30 animate-in fade-in zoom-in-95 duration-500">
               <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center">
                 <Archive className="h-8 w-8 text-muted-foreground/50" />
@@ -288,66 +298,81 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
               </div>
             </div>
           ) : (
-            <div 
-              className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
-              onTouchStart={handleTouchStart}
-              onTouchMove={handleTouchMove}
-              onTouchEnd={handleTouchEnd}
-            >
-              {paginatedStalls.map((stall, i) => (
-                <Card 
-                  key={stall.id}
-                  className={`cursor-pointer transition-all duration-300 hover:shadow-lg hover:-translate-y-1 group relative overflow-hidden ${selectedStall?.id === stall.id ? "ring-2 ring-primary border-primary bg-primary/5" : "hover:border-primary/50"}`}
-                  onClick={() => setSelectedStall(stall as ArchivedStallRecord)}
-                  style={{ animationDelay: `${i * 50}ms`, animationFillMode: 'backwards' }}
-                >
-                  <CardContent className="p-4 flex flex-col items-center text-center gap-3">
-                    <div className={`h-12 w-12 rounded-full flex items-center justify-center transition-colors duration-300 ${selectedStall?.id === stall.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"}`}>
-                      <Building2 className="h-6 w-6" />
-                    </div>
-                    
-                    <div className="space-y-1 w-full">
-                      <h3 className="font-bold text-sm truncate">{stall.name}</h3>
-                      <Badge variant="secondary" className="text-[10px] px-1.5 h-5 font-normal">
-                        {stall.type}
-                      </Badge>
-                    </div>
+            <div className="space-y-4">
+              {sortedTypes.length > 0 && (
+                <div className="flex items-center justify-between border-b pb-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={activeTypeIndex === 0}
+                    onClick={() => setActiveTypeIndex((prev) => Math.max(0, prev - 1))}
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </Button>
 
-                    <div className="w-full pt-3 border-t mt-1">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1 font-semibold">Last Vendor</p>
-                      <div className="flex items-center justify-center gap-1.5 text-xs font-medium truncate text-foreground/80">
-                        <User className="h-3 w-3" />
-                        <span className="truncate">{stall.vendor || "Unknown"}</span>
+                  <div className="text-center">
+                    <h3 className="font-semibold text-lg text-primary/80 flex items-center justify-center gap-2">
+                      {sortedTypes[activeTypeIndex]}
+                      <Badge variant="secondary" className="text-xs font-normal">
+                        {groupedStalls[sortedTypes[activeTypeIndex]]?.length || 0}
+                      </Badge>
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      {activeTypeIndex + 1} of {sortedTypes.length} types
+                    </p>
+                  </div>
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={activeTypeIndex === sortedTypes.length - 1}
+                    onClick={() => setActiveTypeIndex((prev) => Math.min(sortedTypes.length - 1, prev + 1))}
+                  >
+                    <ChevronRight className="h-5 w-5" />
+                  </Button>
+                </div>
+              )}
+
+              <div 
+                className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4 animate-in fade-in slide-in-from-right-4 duration-300"
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                key={sortedTypes[activeTypeIndex]}
+              >
+                {groupedStalls[sortedTypes[activeTypeIndex]]?.map((stall, i) => (
+                  <Card 
+                    key={stall.id}
+                    className={`cursor-pointer transition-all duration-300 hover:shadow-lg hover:-translate-y-1 group relative overflow-hidden ${selectedStall?.id === stall.id ? "ring-2 ring-primary border-primary bg-primary/5" : "hover:border-primary/50"}`}
+                    onClick={() => setSelectedStall(stall as ArchivedStallRecord)}
+                    style={{ animationDelay: `${i * 50}ms`, animationFillMode: 'backwards' }}
+                  >
+                    <CardContent className="p-4 flex flex-col items-center text-center gap-3">
+                      <div className={`h-12 w-12 rounded-full flex items-center justify-center transition-colors duration-300 ${selectedStall?.id === stall.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"}`}>
+                        <Building2 className="h-6 w-6" />
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                      
+                      <div className="space-y-1 w-full">
+                        <h3 className="font-bold text-sm truncate">{stall.name}</h3>
+                        <Badge variant="secondary" className="text-[10px] px-1.5 h-5 font-normal">
+                          {stall.type}
+                        </Badge>
+                      </div>
+
+                      <div className="w-full pt-3 border-t mt-1">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1 font-semibold">Last Vendor</p>
+                        <div className="flex items-center justify-center gap-1.5 text-xs font-medium truncate text-foreground/80">
+                          <User className="h-3 w-3" />
+                          <span className="truncate">{stall.vendor || "Unknown"}</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             </div>
           )}
         </>
-      )}
-
-      {/* PAGINATION */}
-      {totalPages > 1 && (
-       <div className="flex justify-end gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage(p => p - 1)}
-          >
-            <ChevronLeft />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage(p => p + 1)}
-          >
-            <ChevronRight />
-          </Button>
-        </div>
       )}
 
       <Dialog open={!!selectedStall} onOpenChange={(open) => !open && setSelectedStall(null)}>
