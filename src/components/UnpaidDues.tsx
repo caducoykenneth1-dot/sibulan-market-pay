@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type TouchEvent } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { DataTable } from "./data-table";
 import { RowSelectionState } from "@tanstack/react-table";
@@ -27,10 +27,20 @@ import {
   Eye,
   X,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  MoveHorizontal,
 } from "lucide-react";
 import { STALL_TYPES } from "@/data/stalls";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import {
   Sheet,
@@ -62,6 +72,16 @@ export interface Invoice {
 export interface UnpaidStall extends Invoice {
   sectionTag: string;
   typeTag: string;
+}
+
+interface GroupedStallData {
+  stallId: string | number;
+  stallName: string;
+  vendorName: string;
+  totalAmount: number;
+  invoices: Invoice[];
+  stallType: string;
+  section: string;
 }
 
 const sectionMap = new Map(STALL_TYPES.map((type) => [type.name, type.section]));
@@ -184,11 +204,16 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [collectorName, setCollectorName] = useState("Unknown Collector");
-  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [isMobile, setIsMobile] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+
+  const [activeTypeIndex, setActiveTypeIndex] = useState(0);
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const [selectedStallForCalendar, setSelectedStallForCalendar] = useState<GroupedStallData | null>(null);
+  const [calendarDate, setCalendarDate] = useState(new Date());
 
   // Detect mobile viewport
   useEffect(() => {
@@ -252,13 +277,24 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   }, []);
 
   const markAsPaid = async (id: number) => {
-    if (!selectedInvoice) return;
-    setMarking(selectedInvoice.id);
+    let invoiceToPay = selectedInvoice;
+
+    if (!invoiceToPay || invoiceToPay.id !== id) {
+       const sourceList = externalInvoices || localInvoices;
+       invoiceToPay = sourceList.find(inv => inv.id === id) as UnpaidStall;
+    }
+
+    if (!invoiceToPay && selectedStallForCalendar) {
+        invoiceToPay = selectedStallForCalendar.invoices.find(i => i.id === id) as UnpaidStall;
+    }
+
+    if (!invoiceToPay) return;
+    setMarking(id);
 
     const { data: vendorData } = await supabase
       .from("vendors")
       .select("contact, rental_type")
-      .eq("id", selectedInvoice.vendor_id)
+      .eq("id", invoiceToPay.vendor_id)
       .single();
 
     const { error } = await supabase
@@ -277,8 +313,8 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         variant: "destructive",
       });
     } else {
-      if (vendorData && selectedInvoice.due_date) {
-        const dueDate = new Date(selectedInvoice.due_date);
+      if (vendorData && invoiceToPay.due_date) {
+        const dueDate = new Date(invoiceToPay.due_date);
         const nextDue = new Date(dueDate);
         
         if (vendorData.rental_type === 'daily') {
@@ -291,7 +327,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
           last_payment: new Date().toISOString().split('T')[0],
           next_due: nextDue.toISOString().split('T')[0],
           status: 'current'
-        }).eq('id', selectedInvoice.vendor_id);
+        }).eq('id', invoiceToPay.vendor_id);
       }
 
       toast({
@@ -302,8 +338,22 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
       if (!externalInvoices) {
         setLocalInvoices((prevInvoices) => prevInvoices.filter((invoice) => invoice.id !== id));
       }
-      setSelectedInvoice(null);
-      setViewMode("table");
+      
+      if (selectedInvoice?.id === id) {
+        setSelectedInvoice(null);
+        setViewMode("table");
+      }
+
+      if (selectedStallForCalendar) {
+          setSelectedStallForCalendar(prev => {
+              if (!prev) return null;
+              return {
+                  ...prev,
+                  invoices: prev.invoices.filter(inv => inv.id !== id),
+                  totalAmount: prev.totalAmount - invoiceToPay!.amount
+              };
+          });
+      }
     }
     setMarking(null);
   };  
@@ -346,7 +396,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
 
   useEffect(() => {
     setRowSelection({});
-  }, [searchTerm, sectionFilter, typeFilter, selectedMonthKey]);
+  }, [searchTerm, sectionFilter, typeFilter]);
 
   const summary = useMemo(() => {
     const totalAmount = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
@@ -450,81 +500,6 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     });
   }, [invoicesWithMeta, searchTerm, sectionFilter, typeFilter]);
 
-  const monthSummaries = useMemo(() => {
-    const monthMap = new Map<
-      string,
-      {
-        key: string;
-        label: string;
-        count: number;
-        total: number;
-        monthStart: number;
-      }
-    >();
-
-    baseFilteredInvoices.forEach((inv) => {
-      const dueDate = new Date(inv.due_date);
-      if (Number.isNaN(dueDate.getTime())) return;
-
-      const monthStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), 1);
-      const key = getMonthKey(monthStart);
-
-      if (!monthMap.has(key)) {
-        monthMap.set(key, {
-          key,
-          label: format(monthStart, "MMMM yyyy"),
-          count: 0,
-          total: 0,
-          monthStart: monthStart.getTime(),
-        });
-      }
-
-      const entry = monthMap.get(key)!;
-      entry.count += 1;
-      entry.total += inv.amount;
-    });
-
-    return Array.from(monthMap.values()).sort(
-      (a, b) => b.monthStart - a.monthStart
-    );
-  }, [baseFilteredInvoices]);
-
-  useEffect(() => {
-    if (
-      selectedMonthKey &&
-      !monthSummaries.some((summary) => summary.key === selectedMonthKey)
-    ) {
-      setSelectedMonthKey(null);
-    }
-  }, [selectedMonthKey, monthSummaries]);
-
-  const visibleInvoices = useMemo(() => {
-    if (!selectedMonthKey) return baseFilteredInvoices;
-
-    return baseFilteredInvoices.filter((inv) => {
-      const dueDate = new Date(inv.due_date);
-      if (Number.isNaN(dueDate.getTime())) return false;
-      return getMonthKey(dueDate) === selectedMonthKey;
-    });
-  }, [baseFilteredInvoices, selectedMonthKey]);
-
-  useEffect(() => {
-    if (
-      selectedInvoice &&
-      !visibleInvoices.some((inv) => inv.id === selectedInvoice.id)
-    ) {
-      setSelectedInvoice(null);
-    }
-  }, [selectedInvoice, visibleInvoices]);
-
-  const selectedMonthLabel = useMemo(() => {
-    if (!selectedMonthKey) return null;
-    const match = monthSummaries.find(
-      (summary) => summary.key === selectedMonthKey
-    );
-    return match?.label ?? null;
-  }, [selectedMonthKey, monthSummaries]);
-
   const handleSectionSelect = (value: "all" | "Dry Section" | "Wet Section") => {
     setSectionFilter(value);
     setSearchTerm("");
@@ -532,18 +507,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   };
 
   const handleMonthClick = (key: string) => {
-    setSelectedMonthKey(key);
     setViewMode("table");
-  };
-
-  const handleTypeClick = (type: string) => {
-    setTypeFilter((prev) => {
-      const newType = prev === type ? "all" : type;
-      if (!selectedMonthKey) {
-        setViewMode(newType === "all" ? "dashboard" : "table");
-      }
-      return newType;
-    });
   };
 
   const handleViewInvoice = (invoice: UnpaidStall) => {
@@ -554,7 +518,6 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   const handleNavigate = (view: ViewMode) => {
     if (view === "dashboard") {
       setSearchTerm("");
-      setSelectedMonthKey(null);
       setSelectedInvoice(null);
     }
     setViewMode(view);
@@ -564,11 +527,76 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     setSearchTerm("");
     setTypeFilter("all");
     setSectionFilter("all");
-    setSelectedMonthKey(null);
   };
 
-  const desktopColumns = createDesktopColumns(handleViewInvoice);
-  const mobileColumns = createMobileColumns(handleViewInvoice, isOverdue);
+  // Grouping Logic for Stalls
+  const groupedStalls = useMemo(() => {
+    const groups: Record<string, GroupedStallData> = {};
+    
+    baseFilteredInvoices.forEach(inv => {
+      const key = `${inv.vendor_id}`;
+      if (!groups[key]) {
+        groups[key] = {
+          stallId: inv.vendor_id,
+          stallName: inv.stall_name,
+          vendorName: inv.vendor_name,
+          totalAmount: 0,
+          invoices: [],
+          stallType: inv.typeTag || "Uncategorized",
+          section: inv.sectionTag || "Unknown"
+        };
+      }
+      groups[key].totalAmount += inv.amount;
+      groups[key].invoices.push(inv);
+    });
+
+    // Group by Stall Type
+    const byType: Record<string, GroupedStallData[]> = {};
+    Object.values(groups).forEach(stall => {
+      const type = stall.stallType;
+      if (!byType[type]) byType[type] = [];
+      byType[type].push(stall);
+    });
+
+    // Sort stalls within each type by name
+    Object.keys(byType).forEach(type => {
+      byType[type].sort((a, b) => a.stallName.localeCompare(b.stallName, undefined, { numeric: true }));
+    });
+
+    return byType;
+  }, [baseFilteredInvoices]);
+
+  const sortedTypes = useMemo(() => Object.keys(groupedStalls).sort(), [groupedStalls]);
+
+  useEffect(() => {
+    setActiveTypeIndex(0);
+  }, [sortedTypes.length, sectionFilter]);
+
+  const handleTouchStart = (e: TouchEvent) => {
+    setTouchEnd(null);
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchMove = (e: TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > 50;
+    const isRightSwipe = distance < -50;
+
+    if (isLeftSwipe) {
+      if (activeTypeIndex < sortedTypes.length - 1) {
+        setActiveTypeIndex((prev) => prev + 1);
+      }
+    } else if (isRightSwipe) {
+      if (activeTypeIndex > 0) {
+        setActiveTypeIndex((prev) => prev - 1);
+      }
+    }
+  };
 
   if (loading && !externalInvoices) {
     return (
@@ -586,7 +614,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         <Breadcrumbs 
           viewMode={viewMode}
           typeFilter={typeFilter}
-          selectedMonthLabel={selectedMonthLabel}
+          selectedMonthLabel={null}
           onNavigate={handleNavigate}
         />
         <div className="flex items-start gap-2 md:gap-4">
@@ -644,239 +672,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     );
   }
 
-  // Table View
-  if (viewMode === "table") {
-    return (
-      <div className="space-y-4 md:space-y-6">
-        <Breadcrumbs 
-          viewMode={viewMode}
-          typeFilter={typeFilter}
-          selectedMonthLabel={selectedMonthLabel}
-          onNavigate={handleNavigate}
-        />
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              className="min-h-[44px] min-w-[44px]"
-              onClick={() => {
-                setViewMode("dashboard");
-                setSearchTerm("");
-                setSelectedMonthKey(null);
-              }}
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <div className="flex-1 min-w-0">
-              <h1 className="text-2xl md:text-3xl font-bold truncate">
-                {typeFilter !== "all" ? typeFilter : selectedMonthLabel || "All"} Dues
-              </h1>
-              <p className="text-xs md:text-sm text-muted-foreground truncate">
-                {selectedMonthLabel
-                  ? `Showing dues for ${selectedMonthLabel}`
-                  : typeFilter !== "all" 
-                  ? "Showing all unpaid dues for this stall type."
-                  : "Showing all unpaid dues."}
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <div className="relative w-full">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search by vendor or stall..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9 text-sm min-h-[44px]"
-              />
-            </div>
-            <Sheet>
-              <SheetTrigger asChild>
-                <Button variant="outline" className="gap-2 min-h-[44px] px-3">
-                  <Filter className="h-4 w-4" />
-                  <span className="hidden sm:inline">Filter</span>
-                  {typeFilter !== "all" && (
-                    <Badge variant="secondary" className="ml-1 px-1 h-5">
-                      {typeFilter}
-                    </Badge>
-                  )}
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="right" className="w-[300px] sm:w-[400px] overflow-y-auto">
-                <SheetHeader>
-                  <SheetTitle>Filter by Stall Type</SheetTitle>
-                  <SheetDescription>
-                    Select a stall type to filter unpaid dues.
-                  </SheetDescription>
-                </SheetHeader>
-                <div className="mt-6 space-y-2">
-                  <button
-                    onClick={() => {
-                      setTypeFilter("all");
-                      if (!selectedMonthKey) setViewMode("dashboard");
-                    }}
-                    className={`w-full text-left px-4 py-3 rounded-lg text-sm transition-all min-h-[50px] flex items-center justify-between ${
-                      typeFilter === "all" 
-                        ? "bg-primary text-primary-foreground shadow-sm" 
-                        : "hover:bg-muted border border-border"
-                    }`}
-                  >
-                    <span className="font-medium">All Types</span>
-                    <Badge variant={typeFilter === "all" ? "secondary" : "outline"} className="ml-2">
-                      {baseFilteredInvoices.length}
-                    </Badge>
-                  </button>
-                  
-                  <div className="pt-2 border-t">
-                    <p className="text-xs font-semibold text-muted-foreground mb-3 px-1">
-                      STALL TYPES
-                    </p>
-                    {availableStallTypes.map((type) => {
-                      const count = baseFilteredInvoices.filter(inv => inv.typeTag === type).length;
-                      const isActive = typeFilter === type;
-                      
-                      return (
-                        <button
-                          key={type}
-                          onClick={() => handleTypeClick(type)}
-                          disabled={count === 0}
-                          className={`w-full text-left px-4 py-3 rounded-lg text-sm transition-all min-h-[50px] flex items-center justify-between mb-1 ${
-                            isActive
-                              ? "bg-primary text-primary-foreground shadow-sm" 
-                              : count === 0
-                              ? "opacity-50 cursor-not-allowed"
-                              : "hover:bg-muted border border-border"
-                          }`}
-                        >
-                          <span className={isActive ? "font-medium" : ""}>{type}</span>
-                          <Badge 
-                            variant={isActive ? "secondary" : "outline"} 
-                            className={`ml-2 ${count === 0 ? 'opacity-50' : ''}`}
-                          >
-                            {count}
-                          </Badge>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </SheetContent>
-            </Sheet>
-          </div>
-        </div>
-
-        {Object.keys(rowSelection).length > 0 && (
-          <div className="bg-primary/10 border border-primary/20 p-3 md:p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
-            <span className="text-sm font-medium text-primary">
-              {Object.keys(rowSelection).length} invoice{Object.keys(rowSelection).length > 1 ? 's' : ''} selected
-            </span>
-            <div className="flex gap-2 w-full sm:w-auto">
-              <Button 
-                size="sm" 
-                variant="outline" 
-                onClick={() => setRowSelection({})}
-                className="flex-1 sm:flex-none min-h-[44px]"
-              >
-                Unselect All
-              </Button>
-              <Button 
-                size="sm" 
-                onClick={handleBulkPay} 
-                disabled={marking === -1}
-                className="flex-1 sm:flex-none min-h-[44px]"
-              >
-                {marking === -1 ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <CheckCircle className="h-4 w-4 mr-2" />
-                )}
-                Pay Selected
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {isMobile ? (
-          <div className="space-y-3">
-            {visibleInvoices.length === 0 ? (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center py-12">
-                  <CheckCircle className="h-12 w-12 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">No Unpaid Dues Found</h3>
-                  <p className="text-sm text-muted-foreground text-center max-w-md">
-                    {searchTerm || typeFilter !== "all" || selectedMonthKey
-                      ? "Try adjusting your filters to see more results."
-                      : "Great! All dues have been paid."}
-                  </p>
-                  {(searchTerm || typeFilter !== "all" || selectedMonthKey) && (
-                    <Button 
-                      variant="outline" 
-                      className="mt-4 min-h-[44px]"
-                      onClick={clearAllFilters}
-                    >
-                      Clear All Filters
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-            ) : (
-              visibleInvoices.map((invoice, index) => (
-                <MobileInvoiceCard
-                  key={invoice.id}
-                  invoice={invoice}
-                  isSelected={rowSelection[index] || false}
-                  onSelect={() => {
-                    setRowSelection(prev => ({
-                      ...prev,
-                      [index]: !prev[index]
-                    }));
-                  }}
-                  onView={() => handleViewInvoice(invoice)}
-                  isOverdue={isOverdue}
-                />
-              ))
-            )}
-          </div>
-        ) : (
-          <>
-            {visibleInvoices.length === 0 ? (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center py-12">
-                  <CheckCircle className="h-12 w-12 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">No Unpaid Dues Found</h3>
-                  <p className="text-sm text-muted-foreground text-center max-w-md">
-                    {searchTerm || typeFilter !== "all" || selectedMonthKey
-                      ? "Try adjusting your filters to see more results."
-                      : "Great! All dues have been paid."}
-                  </p>
-                  {(searchTerm || typeFilter !== "all" || selectedMonthKey) && (
-                    <Button 
-                      variant="outline" 
-                      className="mt-4"
-                      onClick={clearAllFilters}
-                    >
-                      Clear All Filters
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-            ) : (
-              <DataTable 
-                columns={desktopColumns} 
-                data={visibleInvoices} 
-                rowSelection={rowSelection}
-                onRowSelectionChange={setRowSelection}
-                onRowClick={(row) => handleViewInvoice(row)}
-              />
-            )}
-          </>
-        )}
-      </div>
-    );
-  }
-
-  // Dashboard View
+  // Main View
   return (
     <div className="space-y-4 md:space-y-6">
       <div className="space-y-3 md:space-y-4">
@@ -921,75 +717,6 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
           </Card>
         </div>
 
-        {monthSummaries.length > 0 && (
-          <Card>
-            <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pb-3">
-              <div className="min-w-0">
-                <CardTitle className="text-base md:text-lg">Overdue Months</CardTitle>
-                <CardDescription className="text-xs md:text-sm mt-1">
-                  Select a month to focus on stalls with unpaid dues during that period.
-                </CardDescription>
-              </div>
-              {selectedMonthKey && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs md:text-sm w-full sm:w-auto min-h-[44px]"
-                  onClick={() => setSelectedMonthKey(null)}
-                >
-                  <X className="h-4 w-4 mr-2" />
-                  Clear month filter
-                </Button>
-              )}
-            </CardHeader>
-            <CardContent className="grid gap-2 xs:gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-              {monthSummaries.map((summary) => {
-                const isActive = summary.key === selectedMonthKey;
-
-                return (
-                  <button
-                    key={summary.key}
-                    type="button"
-                    onClick={() => handleMonthClick(summary.key)}
-                    className={`flex items-center justify-between rounded-lg border p-3 md:p-4 text-left transition-all min-h-[70px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary text-sm active:scale-98 ${
-                      isActive
-                        ? "border-primary bg-primary/10 shadow-sm"
-                        : "hover:bg-muted/40"
-                    }`}
-                    aria-pressed={isActive}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className={`flex h-10 w-10 items-center justify-center rounded-full flex-shrink-0 ${
-                          isActive ? "bg-primary" : "bg-primary/10"
-                        }`}
-                      >
-                        <CalendarDays
-                          className={`h-5 w-5 ${
-                            isActive
-                              ? "text-primary-foreground"
-                              : "text-primary"
-                          }`}
-                        />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-medium text-xs md:text-sm truncate">{summary.label}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {summary.count}{" "}
-                          {summary.count === 1 ? "stall" : "stalls"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right text-xs md:text-sm font-semibold text-destructive flex-shrink-0 ml-2">
-                      ₱{summary.total.toLocaleString()}
-                    </div>
-                  </button>
-                );
-              })}
-            </CardContent>
-          </Card>
-        )}
-
         <Card>
           <CardHeader>
             <CardTitle className="text-sm md:text-base font-semibold">Choose Section</CardTitle>
@@ -1015,18 +742,152 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
           </CardContent>
         </Card>
 
-        {invoices.length === 0 && (
+        {/* STALL GROUPS VIEW */}
+        {sortedTypes.length > 0 ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between border-b pb-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={activeTypeIndex === 0}
+                onClick={() => setActiveTypeIndex((prev) => Math.max(0, prev - 1))}
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </Button>
+
+              <div className="text-center">
+                <h3 className="font-semibold text-lg text-primary/80 flex items-center justify-center gap-2">
+                  {sortedTypes[activeTypeIndex]}
+                  <Badge variant="secondary" className="text-xs font-normal">
+                    {groupedStalls[sortedTypes[activeTypeIndex]]?.length || 0}
+                  </Badge>
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  {activeTypeIndex + 1} of {sortedTypes.length} types
+                </p>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={activeTypeIndex === sortedTypes.length - 1}
+                onClick={() => setActiveTypeIndex((prev) => Math.min(sortedTypes.length - 1, prev + 1))}
+              >
+                <ChevronRight className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div 
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-in fade-in slide-in-from-right-4 duration-300 touch-pan-y"
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              key={sortedTypes[activeTypeIndex]}
+            >
+              {groupedStalls[sortedTypes[activeTypeIndex]]?.map((stall) => (
+                <Card 
+                  key={stall.stallId}
+                  className="cursor-pointer hover:shadow-md transition-all active:scale-98 border-l-4 border-l-destructive"
+                  onClick={() => setSelectedStallForCalendar(stall)}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <h3 className="font-bold text-base">{stall.stallName}</h3>
+                        <p className="text-sm text-muted-foreground">{stall.vendorName}</p>
+                      </div>
+                      <Badge variant="destructive" className="text-xs">
+                        {stall.invoices.length} Unpaid
+                      </Badge>
+                    </div>
+                    <div className="flex justify-between items-end mt-4">
+                      <div className="text-xs text-muted-foreground">
+                        Total Due
+                      </div>
+                      <div className="text-xl font-bold text-destructive">
+                        ₱{stall.totalAmount.toLocaleString()}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            
+            <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground/70 mt-4 md:hidden">
+              <MoveHorizontal className="h-3 w-3" /> Swipe to change stall type
+            </div>
+          </div>
+        ) : (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <CheckCircle className="h-16 w-16 text-green-500 mb-4" />
               <h3 className="text-xl font-semibold mb-2">All Caught Up!</h3>
               <p className="text-sm text-muted-foreground text-center max-w-md">
-                There are no unpaid dues at the moment. Great work!
+                {searchTerm || sectionFilter !== "all" 
+                  ? "No unpaid dues match your filters." 
+                  : "There are no unpaid dues at the moment. Great work!"}
               </p>
             </CardContent>
           </Card>
         )}
       </div>
+
+      {/* CALENDAR DIALOG */}
+      <Dialog open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallForCalendar(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{selectedStallForCalendar?.stallName} - Unpaid Dates</DialogTitle>
+            <DialogDescription>
+              Vendor: {selectedStallForCalendar?.vendorName}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="border rounded-lg p-3 bg-card">
+            <div className="flex items-center justify-between mb-4">
+              <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <div className="font-semibold">
+                {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1 text-center mb-2 text-xs font-medium text-muted-foreground">
+              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => <div key={d}>{d}</div>)}
+            </div>
+            
+            <div className="grid grid-cols-7 gap-1">
+              {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => <div key={`empty-${i}`} />)}
+              {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
+                const day = i + 1;
+                const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const hasUnpaid = selectedStallForCalendar?.invoices.some(inv => inv.due_date === dateStr);
+                
+                return (
+                  <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs ${hasUnpaid ? 'bg-destructive text-destructive-foreground font-bold' : 'hover:bg-muted'}`}>
+                    {day}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="max-h-[200px] overflow-y-auto space-y-2">
+            {selectedStallForCalendar?.invoices.map(inv => (
+              <div key={inv.id} className="flex justify-between items-center p-2 border rounded text-sm">
+                <span>{format(new Date(inv.due_date), 'MMM dd, yyyy')}</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-destructive">₱{inv.amount.toLocaleString()}</span>
+                  <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => markAsPaid(inv.id)}>Pay</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

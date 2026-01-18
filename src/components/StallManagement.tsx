@@ -1041,7 +1041,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                     <Button
                       variant="destructive"
                       size="sm"
-                      disabled={userRole !== "collector" && userRole !== "admin"}
+                      disabled={userRole !== "admin"}
                       onClick={() => setStallToDelete(selectedStall)}
                     >
                       <Archive className="mr-2 h-4 w-4" /> Archive

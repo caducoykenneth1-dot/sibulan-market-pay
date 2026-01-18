@@ -54,9 +54,10 @@ interface ArchivedStallRecord extends StallRecord {
 interface ArchivedStallsProps {
   onDataChange: () => void;
   allStalls: StallRecord[];
+  userRole: string;
 }
 
-export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps) => {
+export const ArchivedStalls = ({ onDataChange, allStalls, userRole }: ArchivedStallsProps) => {
   const { toast } = useToast();
 
   const [sectionFilter, setSectionFilter] = useState("all");
@@ -408,10 +409,12 @@ export const ArchivedStalls = ({ onDataChange, allStalls }: ArchivedStallsProps)
               </div>
 
               <div className="flex justify-end gap-2 pt-4">
-                <Button variant="destructive" onClick={() => setStallToDelete(selectedStall)}>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete Permanently
-                </Button>
+                {userRole === "admin" && (
+                  <Button variant="destructive" onClick={() => setStallToDelete(selectedStall)}>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Permanently
+                  </Button>
+                )}
                 <Button onClick={() => setStallToRestore(selectedStall)}>
                   <ArchiveRestore className="mr-2 h-4 w-4" />
                   Restore Stall

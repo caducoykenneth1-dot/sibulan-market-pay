@@ -763,7 +763,11 @@ const handleForgotPassword = async (
         );
       case "archived":
         return (
-          <ArchivedStalls onDataChange={refreshData} allStalls={rawStalls} />
+          <ArchivedStalls 
+            onDataChange={refreshData} 
+            allStalls={rawStalls} 
+            userRole={user?.user_metadata?.role ?? ""} 
+          />
         );
       case "unpaid":
         return <UnpaidDues invoices={allInvoices} />;
