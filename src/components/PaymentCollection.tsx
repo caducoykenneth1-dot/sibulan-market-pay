@@ -11,7 +11,7 @@ import { format } from "date-fns";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabaseClient"; // Supabase client
-import { Loader2, Wifi, WifiOff } from "lucide-react";
+import { Loader2, Wifi, WifiOff, AlertCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 type PaymentData = {
@@ -24,6 +24,8 @@ interface PaymentCollectionProps {
   collectorName: string;
   collectorId: string;
   onPaymentSuccess: () => void;
+  userRole?: string;
+  userSection?: string;
 }
 
 const OFFLINE_PAYMENT_QUEUE_KEY = "offlinePaymentQueue";
@@ -43,7 +45,7 @@ export interface QueuedPayment {
   collectorName: string;
   rentalType: 'daily' | 'monthly';
   nextDue: string | null;
-  paymentMethod: 'cash' | 'gcash' | 'maya';
+  paymentMethod: 'cash' | 'gcash' | 'maycana';
   referenceNumber: string;
   duration?: number;
 }
@@ -74,7 +76,14 @@ const formatDateForDisplay = (value: string | null | undefined) => {
   });
 };
 
-export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymentSuccess }: PaymentCollectionProps) => {
+export const PaymentCollection = ({ 
+  stalls, 
+  collectorName, 
+  collectorId, 
+  onPaymentSuccess,
+  userRole,
+  userSection
+}: PaymentCollectionProps) => {
   const { toast } = useToast();
   const [selectedType, setSelectedType] = useState<string>("");
   const [selectedStallId, setSelectedStallId] = useState<string>("");
@@ -97,8 +106,6 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     duration?: number;
   } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [assignedSection, setAssignedSection] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [offlineQueueCount, setOfflineQueueCount] = useState(0);
@@ -146,23 +153,6 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     localStorage.setItem(OFFLINE_PAYMENT_QUEUE_KEY, JSON.stringify(queue));
     setOfflineQueueCount(queue.length);
   };
-
-  useEffect(() => {
-    const fetchAssignment = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
-      if (user) {
-        setUserRole(user.user_metadata?.role);
-        if (user.id === collectorId) {
-          const section = user.user_metadata?.market_section || user.user_metadata?.section;
-          if (section && section !== "unassigned") {
-            setAssignedSection(section);
-          }
-        }
-      }
-    };
-    fetchAssignment();
-  }, [collectorId]);
 
   const syncOfflinePayments = useCallback(async () => {
     if (isSyncing) return;
@@ -313,9 +303,11 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   }, [getQueue, syncOfflinePayments, toast]);
 
   const availableStalls = useMemo(() => {
-    if (!assignedSection) return localStalls;
-    return localStalls.filter((s) => s.section === assignedSection);
-  }, [localStalls, assignedSection]);
+    if (userRole === 'admin') return localStalls;
+    // If collector is unassigned or section is missing, show no stalls
+    if (!userSection || userSection === "unassigned") return [];
+    return localStalls.filter((s) => s.section === userSection);
+  }, [localStalls, userSection, userRole]);
 
   const stallTypeOptions = useMemo(
     () => Array.from(new Set(availableStalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
@@ -628,6 +620,11 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         }
       }
 
+      // If no next due date is found (e.g. new stall or missing data), start from today
+      if (!nextEligibleDate) {
+        nextEligibleDate = new Date(todayStart);
+      }
+
       const canCollectNow = (() => {
         if (statusFromDb === "vacant" || statusFromDb === "archived") return false;
         if (nextEligibleDate) {
@@ -938,6 +935,27 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
   /* ----------------------------------------------------------
      ÃƒÂ°Ã…Â¸Ã‚Â§Ã‚Â¾ PAYMENT FORM
   ---------------------------------------------------------- */
+  
+  // Block access if collector is unassigned
+  if (userRole === 'collector' && (!userSection || userSection === 'unassigned')) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-6 p-6 animate-in fade-in zoom-in duration-300">
+        <div className="bg-destructive/10 p-6 rounded-full shadow-sm">
+          <AlertCircle className="h-16 w-16 text-destructive" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-3xl font-bold text-destructive">Access Revoked</h2>
+          <p className="text-xl font-medium text-foreground">
+            You have been unassigned.
+          </p>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            Your section assignment has been removed by an administrator. You cannot collect payments until you are reassigned.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -948,9 +966,9 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
               {isOnline ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
               {isOnline ? "Online" : "Offline"}
             </Badge>
-            {assignedSection && (
+            {userSection && (
               <Badge variant="secondary">
-                {assignedSection}
+                {userSection}
               </Badge>
             )}
           </div>

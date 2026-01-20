@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/button"; 
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Bell, Trash2, Check } from "lucide-react";
+import { Loader2, Bell, Trash2, Check, Archive } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
@@ -18,6 +18,17 @@ interface Notification {
 
 interface NotificationsPanelProps {
   userId?: string;
+}
+
+const getNotificationInfo = (type: string): { label: string; icon: React.ReactNode; variant: "default" | "secondary" | "destructive" } => {
+  switch (type) {
+    case 'assignment':
+      return { label: "Assignment", icon: <Bell className="h-3 w-3" />, variant: "default" };
+    case 'archive_status':
+      return { label: "Archive Update", icon: <Archive className="h-3 w-3" />, variant: "secondary" };
+    default:
+      return { label: type, icon: <Bell className="h-3 w-3" />, variant: "secondary" };
+  }
 }
 
 export const NotificationsPanel = ({ userId }: NotificationsPanelProps) => {
@@ -173,9 +184,10 @@ export const NotificationsPanel = ({ userId }: NotificationsPanelProps) => {
               <CardContent className="pt-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant={notification.type === "assignment" ? "default" : "secondary"}>
-                        {notification.type === "assignment" ? "📢 Assignment" : notification.type}
+                    <div className="flex items-center gap-2 mb-2"> 
+                      <Badge variant={getNotificationInfo(notification.type).variant} className="flex items-center gap-1.5">
+                        {getNotificationInfo(notification.type).icon}
+                        {getNotificationInfo(notification.type).label}
                       </Badge>
                       {!notification.read && (
                         <div className="h-2 w-2 rounded-full bg-primary" />

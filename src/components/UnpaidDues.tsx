@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type TouchEvent } from "react";
+import { useEffect, useMemo, useState, useCallback, type TouchEvent } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { DataTable } from "./data-table";
 import { RowSelectionState } from "@tanstack/react-table";
@@ -95,6 +95,8 @@ type ViewMode = "dashboard" | "table" | "invoice";
 
 interface UnpaidDuesProps {
   invoices?: Invoice[];
+  userRole?: string;
+  userSection?: string;
 }
 
 // Mobile Invoice Card Component
@@ -196,7 +198,7 @@ const Breadcrumbs = ({
   </nav>
 );
 
-export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
+export const UnpaidDues = ({ invoices: externalInvoices, userRole, userSection }: UnpaidDuesProps) => {
   const { toast } = useToast();
   const [localInvoices, setLocalInvoices] = useState<Invoice[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<UnpaidStall | null>(null);
@@ -211,12 +213,13 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [isMobile, setIsMobile] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [recentlyPaidIds, setRecentlyPaidIds] = useState<Set<number>>(new Set());
 
   const [selectedInvoicesInDialog, setSelectedInvoicesInDialog] = useState<Set<number>>(new Set());
   const [activeTypeIndex, setActiveTypeIndex] = useState(0);
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
-  const [selectedStallForCalendar, setSelectedStallForCalendar] = useState<GroupedStallData | null>(null);
+  const [selectedStallId, setSelectedStallId] = useState<string | number | null>(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
 
   const generateReceiptNo = () => `DPM-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -243,19 +246,25 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   }, []);
 
   useEffect(() => {
-    if (selectedStallForCalendar) {
+    if (selectedStallId) {
       setSelectedInvoicesInDialog(new Set());
     }
-  }, [selectedStallForCalendar]);
+  }, [selectedStallId]);
 
   const invoices = useMemo(() => {
+    let source = localInvoices;
     if (externalInvoices) {
-      return externalInvoices.filter((inv) => ["unpaid", "overdue"].includes(inv.status));
+      source = externalInvoices.filter((inv) => ["unpaid", "overdue"].includes(inv.status));
     }
-    return localInvoices;
-  }, [externalInvoices, localInvoices]);
+    
+    // Filter out recently paid invoices for instant UI feedback
+    if (recentlyPaidIds.size > 0) {
+      return source.filter(inv => !recentlyPaidIds.has(inv.id));
+    }
+    return source;
+  }, [externalInvoices, localInvoices, recentlyPaidIds]);
 
-  const fetchUnpaid = async () => {
+  const fetchUnpaid = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from("invoices")
@@ -273,15 +282,31 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
       setLocalInvoices(data || []);
     }
     setLoading(false);
-  };
+  }, [toast]);
 
   useEffect(() => {
     if (!externalInvoices) {
       fetchUnpaid();
+
+      // Realtime subscription for standalone mode
+      const channel = supabase
+        .channel('unpaid-dues-realtime')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'invoices' },
+          () => {
+            fetchUnpaid();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     } else {
       setLoading(false);
     }
-  }, [externalInvoices]);
+  }, [externalInvoices, fetchUnpaid]);
 
   useEffect(() => {
     const fetchCollector = async () => {
@@ -309,8 +334,9 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
        invoiceToPay = sourceList.find(inv => inv.id === id) as UnpaidStall;
     }
 
-    if (!invoiceToPay && selectedStallForCalendar) {
-        invoiceToPay = selectedStallForCalendar.invoices.find(i => i.id === id) as UnpaidStall;
+    if (!invoiceToPay && selectedStallId) {
+        // Try to find in current invoices list
+        invoiceToPay = invoices.find(i => i.id === id) as UnpaidStall;
     }
 
     if (!invoiceToPay) return;
@@ -377,6 +403,9 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         description: "The invoice has been marked as paid.",
       });
 
+      // Optimistic update
+      setRecentlyPaidIds(prev => new Set(prev).add(id));
+
       if (!externalInvoices) {
         setLocalInvoices((prevInvoices) => prevInvoices.filter((invoice) => invoice.id !== id));
       }
@@ -385,30 +414,9 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         setSelectedInvoice(null);
         setViewMode("table");
       }
-
-      if (selectedStallForCalendar) {
-          setSelectedStallForCalendar(prev => {
-              if (!prev) return null;
-              return {
-                  ...prev,
-                  invoices: prev.invoices.filter(inv => inv.id !== id),
-                  totalAmount: prev.totalAmount - invoiceToPay!.amount
-              };
-          });
-      }
     }
     setMarking(null);
   };  
-
-  const totalSelectedAmount = useMemo(() => {
-    if (!selectedStallForCalendar) return 0;
-    return selectedStallForCalendar.invoices.reduce((sum, inv) => {
-      if (selectedInvoicesInDialog.has(inv.id)) {
-        return sum + inv.amount;
-      }
-      return sum;
-    }, 0);
-  }, [selectedInvoicesInDialog, selectedStallForCalendar]);
 
   const handleToggleInvoiceSelection = (invoiceId: number) => {
     setSelectedInvoicesInDialog(prev => {
@@ -420,66 +428,6 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
       }
       return newSet;
     });
-  };
-
-  const handlePaySelectedInvoices = async () => {
-    const selectedIds = Array.from(selectedInvoicesInDialog);
-    if (selectedIds.length === 0 || !selectedStallForCalendar) return;
-
-    setMarking(-1); // Bulk update indicator
-    const receiptNumber = generateReceiptNo();
-
-    const { error: invoiceError } = await supabase
-      .from("invoices")
-      .update({ 
-        status: "paid", 
-        paid_at: new Date().toISOString(), 
-        collector_name: collectorName,
-        collector_id: collectorId,
-        receipt_number: receiptNumber
-      })
-      .in("id", selectedIds);
-
-    if (invoiceError) {
-      toast({ title: "Payment Update Failed", description: invoiceError.message, variant: "destructive" });
-      setMarking(null);
-      return;
-    }
-
-    const paidInvoices = selectedStallForCalendar.invoices.filter(inv => selectedIds.includes(inv.id));
-    paidInvoices.sort((a, b) => new Date(b.due_date).getTime() - new Date(a.due_date).getTime());
-    const latestDueDate = new Date(paidInvoices[0].due_date);
-
-    const { data: vendorData } = await supabase.from("vendors").select("rental_type, contact").eq("id", selectedStallForCalendar.stallId).single();
-    
-    if (vendorData?.contact) {
-      sendSmsReceipt(receiptNumber, vendorData.contact);
-    }
-    const rentalType = vendorData?.rental_type || 'monthly';
-
-    const nextDue = new Date(latestDueDate);
-    if (rentalType === 'daily') nextDue.setDate(nextDue.getDate() + 1);
-    else nextDue.setMonth(nextDue.getMonth() + 1);
-
-    await supabase.from('vendors').update({
-      last_payment: new Date().toISOString().split('T')[0],
-      next_due: nextDue.toISOString().split('T')[0],
-      status: 'current'
-    }).eq('id', selectedStallForCalendar.stallId);
-
-    // Log Activity
-    if (collectorId) {
-      await supabase.from("activity_logs").insert({
-        user_id: collectorId,
-        user_name: collectorName,
-        action: "PAY_MULTIPLE_DUES",
-        details: `Paid ${selectedIds.length} invoices for ${selectedStallForCalendar.vendorName} (${selectedStallForCalendar.stallName})`
-      });
-    }
-
-    toast({ title: "Payment Recorded", description: `${selectedIds.length} invoice(s) paid for ${selectedStallForCalendar.vendorName}.` });
-    setSelectedStallForCalendar(null);
-    setMarking(null);
   };
 
   const handleBulkPay = async () => {
@@ -523,6 +471,13 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         description: `${selectedInvoices.length} invoice${selectedInvoices.length > 1 ? 's' : ''} marked as paid.` 
       });
       
+      // Optimistic update
+      setRecentlyPaidIds(prev => {
+        const next = new Set(prev);
+        selectedInvoices.forEach(inv => next.add(inv.id));
+        return next;
+      });
+
       if (!externalInvoices) {
         setLocalInvoices(prev => prev.filter(inv => !selectedInvoices.find(s => s.id === inv.id)));
       }
@@ -535,27 +490,9 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     setRowSelection({});
   }, [searchTerm, sectionFilter, typeFilter]);
 
-  const summary = useMemo(() => {
-    const totalAmount = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
-    return {
-      count: invoices.length,
-      totalAmount: totalAmount,
-    };
-  }, [invoices]);
-
   const isOverdue = (dueDate: string) => {
     return new Date(dueDate) < new Date() && !new Date(dueDate).toDateString().includes(new Date().toDateString());
   }
-
-  const handleSelectOverdue = () => {
-    if (!selectedStallForCalendar) return;
-    const overdueIds = new Set(
-      selectedStallForCalendar.invoices
-        .filter(inv => isOverdue(inv.due_date))
-        .map(inv => inv.id)
-    );
-    setSelectedInvoicesInDialog(overdueIds);
-  };
 
   const resolveStallMeta = (invoice: Invoice) => {
     const rawType = invoice.stall_type?.trim() ?? "";
@@ -606,6 +543,22 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     [invoices]
   );
 
+  // Filter invoices based on user permissions (Role & Section)
+  const allowedInvoices = useMemo(() => {
+    if (userRole?.toLowerCase() === 'collector' && userSection && userSection !== 'unassigned') {
+      return invoicesWithMeta.filter(inv => inv.sectionTag === userSection);
+    }
+    return invoicesWithMeta;
+  }, [invoicesWithMeta, userRole, userSection]);
+
+  const summary = useMemo(() => {
+    const totalAmount = allowedInvoices.reduce((sum, invoice) => sum + invoice.amount, 0);
+    return {
+      count: allowedInvoices.length,
+      totalAmount: totalAmount,
+    };
+  }, [allowedInvoices]);
+
   const availableStallTypes = useMemo(() => {
     let types: string[];
     if (sectionFilter === "all") {
@@ -628,7 +581,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   const baseFilteredInvoices = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
-    return invoicesWithMeta.filter((inv) => {
+    return allowedInvoices.filter((inv) => {
       const matchesSection =
         sectionFilter === "all" || inv.sectionTag === sectionFilter;
       const matchesType = typeFilter === "all" || inv.typeTag === typeFilter;
@@ -645,7 +598,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
 
       return matchesSection && matchesType && matchesSearch;
     });
-  }, [invoicesWithMeta, searchTerm, sectionFilter, typeFilter]);
+  }, [allowedInvoices, searchTerm, sectionFilter, typeFilter]);
 
   const handleSectionSelect = (value: "all" | "Dry Section" | "Wet Section") => {
     setSectionFilter(value);
@@ -713,6 +666,105 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     return byType;
   }, [baseFilteredInvoices]);
 
+  // Derived state for the calendar view
+  const selectedStallForCalendar = useMemo(() => {
+    if (!selectedStallId) return null;
+    for (const type in groupedStalls) {
+      const stall = groupedStalls[type].find((s) => s.stallId === selectedStallId);
+      if (stall) return stall;
+    }
+    return null;
+  }, [selectedStallId, groupedStalls]);
+
+  const totalSelectedAmount = useMemo(() => {
+    if (!selectedStallForCalendar) return 0;
+    return selectedStallForCalendar.invoices.reduce((sum, inv) => {
+      if (selectedInvoicesInDialog.has(inv.id)) {
+        return sum + inv.amount;
+      }
+      return sum;
+    }, 0);
+  }, [selectedInvoicesInDialog, selectedStallForCalendar]);
+
+  const handlePaySelectedInvoices = async () => {
+    const selectedIds = Array.from(selectedInvoicesInDialog);
+    if (selectedIds.length === 0 || !selectedStallForCalendar) return;
+
+    setMarking(-1); // Bulk update indicator
+    const receiptNumber = generateReceiptNo();
+
+    const { error: invoiceError } = await supabase
+      .from("invoices")
+      .update({ 
+        status: "paid", 
+        paid_at: new Date().toISOString(), 
+        collector_name: collectorName,
+        collector_id: collectorId,
+        receipt_number: receiptNumber
+      })
+      .in("id", selectedIds);
+
+    if (invoiceError) {
+      toast({ title: "Payment Update Failed", description: invoiceError.message, variant: "destructive" });
+      setMarking(null);
+      return;
+    }
+
+    const paidInvoices = selectedStallForCalendar.invoices.filter(inv => selectedIds.includes(inv.id));
+    paidInvoices.sort((a, b) => new Date(b.due_date).getTime() - new Date(a.due_date).getTime());
+    const latestDueDate = new Date(paidInvoices[0].due_date);
+
+    const { data: vendorData } = await supabase.from("vendors").select("rental_type, contact").eq("id", selectedStallForCalendar.stallId).single();
+    
+    if (vendorData?.contact) {
+      sendSmsReceipt(receiptNumber, vendorData.contact);
+    }
+    const rentalType = vendorData?.rental_type || 'monthly';
+
+    const nextDue = new Date(latestDueDate);
+    if (rentalType === 'daily') nextDue.setDate(nextDue.getDate() + 1);
+    else nextDue.setMonth(nextDue.getMonth() + 1);
+
+    await supabase.from('vendors').update({
+      last_payment: new Date().toISOString().split('T')[0],
+      next_due: nextDue.toISOString().split('T')[0],
+      status: 'current'
+    }).eq('id', selectedStallForCalendar.stallId);
+
+    // Log Activity
+    if (collectorId) {
+      await supabase.from("activity_logs").insert({
+        user_id: collectorId,
+        user_name: collectorName,
+        action: "PAY_MULTIPLE_DUES",
+        details: `Paid ${selectedIds.length} invoices for ${selectedStallForCalendar.vendorName} (${selectedStallForCalendar.stallName})`
+      });
+    }
+
+    toast({ title: "Payment Recorded", description: `${selectedIds.length} invoice(s) paid for ${selectedStallForCalendar.vendorName}.` });
+    
+    // Optimistic update
+    setRecentlyPaidIds(prev => {
+      const next = new Set(prev);
+      selectedIds.forEach(id => next.add(id));
+      return next;
+    });
+    
+    // Don't close the dialog immediately, let it update reactively
+    // setSelectedStallId(null); 
+    setMarking(null);
+  };
+
+  const handleSelectOverdue = () => {
+    if (!selectedStallForCalendar) return;
+    const overdueIds = new Set(
+      selectedStallForCalendar.invoices
+        .filter(inv => isOverdue(inv.due_date))
+        .map(inv => inv.id)
+    );
+    setSelectedInvoicesInDialog(overdueIds);
+  };
+
   const sortedTypes = useMemo(() => Object.keys(groupedStalls).sort(), [groupedStalls]);
 
   useEffect(() => {
@@ -744,6 +796,25 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
       }
     }
   };
+
+  if (userRole?.toLowerCase() === 'collector' && (!userSection || userSection === 'unassigned')) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-6 p-6 animate-in fade-in zoom-in duration-300">
+        <div className="bg-destructive/10 p-6 rounded-full shadow-sm">
+          <AlertCircle className="h-16 w-16 text-destructive" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-3xl font-bold text-destructive">Access Revoked</h2>
+          <p className="text-xl font-medium text-foreground">
+            You have been unassigned.
+          </p>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            Your section assignment has been removed by an administrator. You cannot view unpaid dues until you are reassigned.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading && !externalInvoices) {
     return (
@@ -802,17 +873,19 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
             )}
           </CardContent>
           <DialogFooter className="px-4 md:px-6 pb-4 md:pb-6">
-            <Button
-              className="w-full min-h-[44px] text-sm md:text-base"
-              disabled={marking === selectedInvoice?.id}
-              onClick={() => selectedInvoice && markAsPaid(selectedInvoice.id)}
-            >
-              {marking === selectedInvoice?.id ? (
-                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Updating...</>
-              ) : (
-                <><CheckCircle className="mr-2 h-4 w-4" />Mark as Paid</>
-              )}
-            </Button>
+            {userRole !== 'admin' && (
+              <Button
+                className="w-full min-h-[44px] text-sm md:text-base"
+                disabled={marking === selectedInvoice?.id}
+                onClick={() => selectedInvoice && markAsPaid(selectedInvoice.id)}
+              >
+                {marking === selectedInvoice?.id ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Updating...</>
+                ) : (
+                  <><CheckCircle className="mr-2 h-4 w-4" />Mark as Paid</>
+                )}
+              </Button>
+            )}
           </DialogFooter>
         </Card>
       </div>
@@ -827,17 +900,6 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
           <div className="min-w-0">
             <h1 className="text-2xl md:text-3xl font-bold">Unpaid Dues</h1>
             <p className="text-xs md:text-sm text-muted-foreground">Review and manage outstanding payments.</p>
-          </div>
-          <div className="flex gap-2">
-            <Button 
-              size="sm" 
-              onClick={fetchUnpaid} 
-              disabled={loading || !!externalInvoices}
-              className="whitespace-nowrap text-xs md:text-sm min-h-[44px]"
-            >
-              <RefreshCw className={`mr-2 h-3 w-3 md:h-4 md:w-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
           </div>
         </div>
 
@@ -864,6 +926,8 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
           </Card>
         </div>
 
+        {/* Only show section filter if user is Admin or unassigned */}
+        {(userRole === 'admin' || !userSection || userSection === 'unassigned') && (
         <Card>
           <CardHeader>
             <CardTitle className="text-sm md:text-base font-semibold">Choose Section</CardTitle>
@@ -888,6 +952,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* STALL GROUPS VIEW */}
         {sortedTypes.length > 0 ? (
@@ -925,7 +990,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
             </div>
 
             <div 
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-in fade-in slide-in-from-right-4 duration-300 touch-pan-y"
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 animate-in fade-in slide-in-from-right-4 duration-300 touch-pan-y"
               onTouchStart={handleTouchStart}
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
@@ -935,7 +1000,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
                 <Card 
                   key={stall.stallId}
                   className="cursor-pointer hover:shadow-md transition-all active:scale-98 border-l-4 border-l-destructive"
-                  onClick={() => setSelectedStallForCalendar(stall)}
+                  onClick={() => setSelectedStallId(stall.stallId)}
                 >
                   <CardContent className="p-4">
                     <div className="flex justify-between items-start mb-2">
@@ -981,7 +1046,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
 
       {/* CALENDAR DIALOG */}
       {isMobile ? (
-        <Sheet open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallForCalendar(null)}>
+        <Sheet open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallId(null)}>
           <SheetContent side="bottom" className="h-[85vh] flex flex-col rounded-t-xl p-0 gap-0">
             <SheetHeader className="p-4 border-b text-left">
               <SheetTitle>{selectedStallForCalendar?.stallName}</SheetTitle>
@@ -1027,6 +1092,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
               </div>
 
                <div className="flex flex-col gap-3 mb-4">
+                {userRole !== 'admin' && (
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
@@ -1052,6 +1118,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
                     Select Overdue
                   </Button>
                 </div>
+                )}
                 <div className="text-xs text-muted-foreground text-right">{selectedInvoicesInDialog.size} selected</div>
               </div>
 
@@ -1059,9 +1126,11 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
                 {selectedStallForCalendar?.invoices.sort((a,b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()).map(inv => {
                   const isSelected = selectedInvoicesInDialog.has(inv.id);
                   return (
-                    <div key={inv.id} className={`flex justify-between items-center p-3 border rounded-lg text-sm cursor-pointer transition-colors ${isSelected ? 'bg-primary/10 border-primary' : 'hover:bg-muted/50'}`} onClick={() => handleToggleInvoiceSelection(inv.id)}>
+                    <div key={inv.id} className={`flex justify-between items-center p-3 border rounded-lg text-sm cursor-pointer transition-colors ${isSelected ? 'bg-primary/10 border-primary' : 'hover:bg-muted/50'}`} onClick={() => userRole !== 'admin' && handleToggleInvoiceSelection(inv.id)}>
                       <div className="flex items-center gap-3">
-                        <input type="checkbox" checked={isSelected} readOnly className="h-5 w-5 accent-primary pointer-events-none" />
+                        {userRole !== 'admin' && (
+                          <input type="checkbox" checked={isSelected} readOnly className="h-5 w-5 accent-primary pointer-events-none" />
+                        )}
                         <span>{format(new Date(inv.due_date), 'MMM dd, yyyy')}</span>
                       </div>
                       <span className="font-bold text-destructive">₱{inv.amount.toLocaleString()}</span>
@@ -1073,18 +1142,20 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
 
             <div className="p-4 border-t bg-background">
                <div className="flex gap-3">
-                  <Button variant="outline" className="flex-1" onClick={() => setSelectedStallForCalendar(null)}>Cancel</Button>
+                  <Button variant="outline" className="flex-1" onClick={() => setSelectedStallId(null)}>Cancel</Button>
+                  {userRole !== 'admin' && (
                   <Button className="flex-1" onClick={handlePaySelectedInvoices} disabled={selectedInvoicesInDialog.size === 0 || marking !== null}>
                     {marking !== null ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     Pay (₱{totalSelectedAmount.toLocaleString()})
                   </Button>
+                  )}
                </div>
             </div>
           </SheetContent>
         </Sheet>
       ) : (
-        <Dialog open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallForCalendar(null)}>
-          <DialogContent className="sm:max-w-md">
+        <Dialog open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallId(null)}>
+          <DialogContent className="sm:max-w-3xl">
             <DialogHeader>
               <DialogTitle>{selectedStallForCalendar?.stallName} - Unpaid Dates</DialogTitle>
               <DialogDescription>
@@ -1092,86 +1163,98 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
               </DialogDescription>
             </DialogHeader>
             
-            <div className="border rounded-lg p-3 bg-card">
-              <div className="flex items-center justify-between mb-4">
-                <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <div className="font-semibold">
-                  {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-7 gap-1 text-center mb-2 text-xs font-medium text-muted-foreground">
-                {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => <div key={d}>{d}</div>)}
-              </div>
-              
-              <div className="grid grid-cols-7 gap-1">
-                {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => <div key={`empty-${i}`} />)}
-                {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
-                  const day = i + 1;
-                  const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const hasUnpaid = selectedStallForCalendar?.invoices.some(inv => inv.due_date === dateStr);
-                  
-                  return (
-                    <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs ${hasUnpaid ? 'bg-destructive text-destructive-foreground font-bold' : 'hover:bg-muted'}`}>
-                      {day}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center mt-4 gap-2">
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length) {
-                      setSelectedInvoicesInDialog(new Set());
-                    } else {
-                      const allIds = new Set(selectedStallForCalendar?.invoices.map(i => i.id));
-                      setSelectedInvoicesInDialog(allIds);
-                    }
-                  }}
-                >
-                  {selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length ? 'Deselect All' : 'Select All'}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleSelectOverdue}
-                >
-                  Select Overdue
-                </Button>
-              </div>
-              <div className="text-sm text-muted-foreground">{selectedInvoicesInDialog.size} selected</div>
-            </div>
-
-            <div className="max-h-[200px] overflow-y-auto space-y-2 mt-2">
-              {selectedStallForCalendar?.invoices.sort((a,b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()).map(inv => {
-                const isSelected = selectedInvoicesInDialog.has(inv.id);
-                return (
-                  <div key={inv.id} className={`flex justify-between items-center p-2 border rounded text-sm cursor-pointer transition-colors ${isSelected ? 'bg-primary/10 border-primary' : 'hover:bg-muted/50'}`} onClick={() => handleToggleInvoiceSelection(inv.id)}>
-                    <div className="flex items-center gap-3">
-                      <input type="checkbox" checked={isSelected} readOnly className="h-4 w-4 accent-primary pointer-events-none" />
-                      <span>{format(new Date(inv.due_date), 'MMM dd, yyyy')}</span>
-                    </div>
-                    <span className="font-bold text-destructive">₱{inv.amount.toLocaleString()}</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="border rounded-lg p-3 bg-card h-fit">
+                <div className="flex items-center justify-between mb-4">
+                  <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <div className="font-semibold">
+                    {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
                   </div>
-                );
-              })}
+                  <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1 text-center mb-2 text-xs font-medium text-muted-foreground">
+                  {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => <div key={d}>{d}</div>)}
+                </div>
+                
+                <div className="grid grid-cols-7 gap-1">
+                  {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => <div key={`empty-${i}`} />)}
+                  {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
+                    const day = i + 1;
+                    const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    const hasUnpaid = selectedStallForCalendar?.invoices.some(inv => inv.due_date === dateStr);
+                    
+                    return (
+                      <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs ${hasUnpaid ? 'bg-destructive text-destructive-foreground font-bold' : 'hover:bg-muted'}`}>
+                        {day}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex flex-col h-full max-h-[400px]">
+                <div className="flex justify-between items-center mb-4 gap-2">
+                  {userRole !== 'admin' && (
+                  <div className="flex gap-2 w-full">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => {
+                        if (selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length) {
+                          setSelectedInvoicesInDialog(new Set());
+                        } else {
+                          const allIds = new Set(selectedStallForCalendar?.invoices.map(i => i.id));
+                          setSelectedInvoicesInDialog(allIds);
+                        }
+                      }}
+                    >
+                      {selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length ? 'Deselect All' : 'Select All'}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="flex-1"
+                      onClick={handleSelectOverdue}
+                    >
+                      Select Overdue
+                    </Button>
+                  </div>
+                  )}
+                  <div className="text-sm text-muted-foreground whitespace-nowrap ml-auto">{selectedInvoicesInDialog.size} selected</div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+                  {selectedStallForCalendar?.invoices.sort((a,b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()).map(inv => {
+                    const isSelected = selectedInvoicesInDialog.has(inv.id);
+                    return (
+                      <div key={inv.id} className={`flex justify-between items-center p-2 border rounded text-sm cursor-pointer transition-colors ${isSelected ? 'bg-primary/10 border-primary' : 'hover:bg-muted/50'}`} onClick={() => userRole !== 'admin' && handleToggleInvoiceSelection(inv.id)}>
+                        <div className="flex items-center gap-3">
+                          {userRole !== 'admin' && (
+                            <input type="checkbox" checked={isSelected} readOnly className="h-4 w-4 accent-primary pointer-events-none" />
+                          )}
+                          <span>{format(new Date(inv.due_date), 'MMM dd, yyyy')}</span>
+                        </div>
+                        <span className="font-bold text-destructive">₱{inv.amount.toLocaleString()}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
             <DialogFooter className="mt-4">
-              <Button variant="outline" onClick={() => setSelectedStallForCalendar(null)}>Cancel</Button>
+              <Button variant="outline" onClick={() => setSelectedStallId(null)}>Cancel</Button>
+              {userRole !== 'admin' && (
               <Button onClick={handlePaySelectedInvoices} disabled={selectedInvoicesInDialog.size === 0 || marking !== null}>
                 {marking !== null ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Pay Selected (₱{totalSelectedAmount.toLocaleString()})
               </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>

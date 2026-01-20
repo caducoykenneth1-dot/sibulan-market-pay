@@ -39,7 +39,7 @@ const collectorNav = [
   { id: "history", label: "History", icon: History },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "stalls", label: "Stalls", icon: Building2 },
-  { id: "unpaid", label: "Unpaid", icon: AlertCircle },
+  { id: "unpaid", label: "Unpaid Dues", icon: AlertCircle },
   { id: "archived", label: "Archived", icon: Archive },
 ];
 
@@ -50,7 +50,7 @@ const adminNav = [
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "users", label: "User Management", icon: Users },
   { id: "activity", label: "Activity Log", icon: ClipboardList },
- // { id: "unpaid", label: "Unpaid", icon: AlertCircle },
+  { id: "unpaid", label: "Unpaid Dues", icon: AlertCircle },
   { id: "archived", label: "Archived", icon: Archive },
 ];
 

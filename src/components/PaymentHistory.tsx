@@ -32,12 +32,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Filter, Download, Eye, CalendarDays, Calendar } from "lucide-react";
+import { Search, Filter, Download, Eye, CalendarDays, Calendar, RefreshCw } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import {
   format,
 } from "date-fns";
+import { supabase } from "@/lib/supabaseClient";
 import { type Invoice } from "./UnpaidDues";
 import { type StallRecord, STALL_TYPES } from "@/data/stalls";
 import { DataTable } from "./data-table";
@@ -98,6 +99,81 @@ export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHi
   const [selectedMonth, setSelectedMonth] = useState<string>(String(new Date().getMonth()));
   const [selectedYear, setSelectedYear] = useState<string>(String(new Date().getFullYear()));
 
+  const [localInvoices, setLocalInvoices] = useState<Invoice[]>(invoices);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  useEffect(() => {
+    setLocalInvoices(invoices);
+  }, [invoices]);
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    const { data, error } = await supabase
+      .from("invoices")
+      .select("*");
+    
+    if (!error && data) {
+      // Ensure amount is a number
+      const formattedData = data.map((d: any) => ({
+        ...d,
+        amount: typeof d.amount === 'string' ? parseFloat(d.amount) : d.amount
+      })) as Invoice[];
+      setLocalInvoices(formattedData);
+    }
+    setIsRefreshing(false);
+  };
+
+  // ✅ Poll for updates every 15 seconds as a fallback
+  useEffect(() => {
+    const interval = setInterval(handleManualRefresh, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("payment-history-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "invoices" },
+        (payload) => {
+          console.log("🔔 PaymentHistory Realtime Event:", payload);
+
+          if (payload.eventType === "INSERT") {
+            const newInvoice = payload.new as Invoice;
+            // Ensure amount is a number (Postgres numeric types can come as strings)
+            if (typeof newInvoice.amount === 'string') {
+                newInvoice.amount = parseFloat(newInvoice.amount);
+            }
+            
+            setLocalInvoices((prev) => {
+              // Prevent duplicates using loose equality (==) to handle string/number id mismatch
+              if (prev.some((inv) => inv.id == newInvoice.id)) return prev;
+              // Add new invoice to the list
+              return [...prev, newInvoice];
+            });
+          } else if (payload.eventType === "UPDATE") {
+            const updatedInvoice = payload.new as Invoice;
+            if (typeof updatedInvoice.amount === 'string') {
+                updatedInvoice.amount = parseFloat(updatedInvoice.amount);
+            }
+            setLocalInvoices((prev) => prev.map((inv) => (inv.id == updatedInvoice.id ? updatedInvoice : inv)));
+          } else if (payload.eventType === "DELETE") {
+            setLocalInvoices((prev) => prev.filter((inv) => inv.id != payload.old.id));
+          }
+
+          // 🔄 Always trigger a full refresh on any event to ensure consistency
+          handleManualRefresh();
+        }
+      )
+      .subscribe((status) => {
+        console.log("📡 PaymentHistory Subscription Status:", status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const displayNameById = useMemo(() => buildDisplayNameMap(stalls), [stalls]);
 
   // 🧾 Paid invoices only, sorted
@@ -107,7 +183,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHi
         // Group paid invoices by receipt number base (stripping suffix like -1, -2)
         const groupedInvoices = new Map<string, ConsolidatedInvoice & { due_dates: Date[] }>();
         
-        invoices.forEach(inv => {
+        localInvoices.forEach(inv => {
           if (inv.status === 'paid' && inv.paid_at) {
             // Filter: Collectors only see their own collections
             if (userRole !== 'admin' && inv.collector_id !== userId) {
@@ -148,7 +224,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHi
           }
         });
         const consolidatedPaid = Array.from(groupedInvoices.values());
-        const unpaidInvoices = invoices.filter(inv => inv.status !== 'paid');
+        const unpaidInvoices = localInvoices.filter(inv => inv.status !== 'paid');
 
         // Combine consolidated paid invoices with unpaid ones
         const allItems = [...consolidatedPaid, ...unpaidInvoices];
@@ -169,20 +245,20 @@ export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHi
           return (b.paid_at ? new Date(b.paid_at).getTime() : 0) - (a.paid_at ? new Date(a.paid_at).getTime() : 0);
         });
       },
-    [invoices, statusFilter, userRole, userId]
+    [localInvoices, statusFilter, userRole, userId]
   );
 
   const availableYears = useMemo(() => {
     const years = new Set<number>();
     const currentYear = new Date().getFullYear();
     years.add(currentYear);
-    invoices.forEach((inv) => {
+    localInvoices.forEach((inv) => {
       if (inv.paid_at) {
         years.add(new Date(inv.paid_at).getFullYear());
       }
     });
     return Array.from(years).sort((a, b) => b - a);
-  }, [invoices]);
+  }, [localInvoices]);
 
   const months = [
     "January", "February", "March", "April", "May", "June",
@@ -430,8 +506,8 @@ export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHi
   );
 
   const unpaidCount = useMemo(() => {
-    return invoices.filter(inv => inv.status === 'unpaid' || inv.status === 'overdue').length;
-  }, [invoices]);
+    return localInvoices.filter(inv => inv.status === 'unpaid' || inv.status === 'overdue').length;
+  }, [localInvoices]);
 
   // 🧾 Export PDF
   const handleExport = async () => {
@@ -535,14 +611,14 @@ export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHi
                 onClick={() => setStatusFilter("all")}
                 className="whitespace-nowrap"
               >
-                All ({invoices.length})
+                All ({localInvoices.length})
               </Button>
               <Button
                 variant={statusFilter === "paid" ? "default" : "outline"}
                 onClick={() => setStatusFilter("paid")}
                 className="whitespace-nowrap bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
               >
-                ✓ Paid ({invoices.filter(inv => inv.status === "paid").length})
+                ✓ Paid ({localInvoices.filter(inv => inv.status === "paid").length})
               </Button>
               <Button
                 variant={statusFilter === "unpaid" ? "default" : "outline"}
@@ -651,6 +727,16 @@ export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHi
                   </div>
                 </SheetContent>
               </Sheet>
+
+              <Button 
+                variant="outline" 
+                size="icon" 
+                onClick={handleManualRefresh} 
+                disabled={isRefreshing}
+                title="Refresh Data"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              </Button>
 
               {userRole === 'admin' && (
                 <Button variant="outline" onClick={handleExport}>

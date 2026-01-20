@@ -58,6 +58,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import {
+  AlertCircle,
   Archive,
   Building2,
   Calendar,
@@ -78,6 +79,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   MoveHorizontal,
+  ClipboardList,
 } from "lucide-react";
 
 /* ======================================================================
@@ -209,7 +211,7 @@ type SectionFilter = "all" | "Dry Section" | "Wet Section";
 /* ======================================================================
    3. FRONTEND COMPONENT
 ====================================================================== */
-export const StallManagement = ({ stalls, onStallsChange, userRole, userName, userId, invoices }) => {
+export const StallManagement = ({ stalls, onStallsChange, userRole, userName, userId, invoices, userSection }) => {
   const { toast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -253,6 +255,8 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [selectedDayInvoices, setSelectedDayInvoices] = useState<any[]>([]);
   const [isDayDialogOpen, setIsDayDialogOpen] = useState(false);
+  const [pendingRegistrations, setPendingRegistrations] = useState<any[]>([]);
+  const [isPendingRegistrationsOpen, setIsPendingRegistrationsOpen] = useState(false);
 
   // Touch state for swiping
   const [touchStart, setTouchStart] = useState<number | null>(null);
@@ -287,6 +291,22 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
       }
     }
   }, [showTransactions, selectedStall, invoices]);
+
+  // Fetch pending registrations for Admin
+  useEffect(() => {
+    if (userRole?.toLowerCase() === 'admin') {
+      const fetchPending = async () => {
+        const { data } = await supabase
+          .from("pending_stall_creations")
+          .select("*")
+          .eq("request_status", "pending")
+          .order("created_at", { ascending: false });
+        setPendingRegistrations(data || []);
+      };
+      fetchPending();
+      // Realtime subscription is handled by the global listener or we can add specific one here if needed
+    }
+  }, [userRole, isRefreshing]); // Refresh when manual refresh is triggered
 
   const handlePayInvoice = async (invoice: any) => {
     if (!selectedStall) return;
@@ -414,6 +434,72 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
     }
   };
 
+  const handleApproveRegistration = async (request: any) => {
+    // Verify role before attempting
+    if (userRole?.toLowerCase() !== 'admin') {
+      toast({ title: "Permission Denied", description: "Only admins can approve requests.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      // Create the stall using the existing function
+      await createStall({
+        vendor: request.vendor,
+        contact: request.contact,
+        type: request.stall_type,
+        rentAmount: Number(request.rent_amount),
+        rentalType: request.rental_type,
+        status: request.status,
+        lastPayment: request.last_payment,
+        nextDue: request.next_due,
+      });
+
+      // Update request status
+      const { error: updateError } = await supabase
+        .from("pending_stall_creations")
+        .update({ request_status: 'approved' })
+        .eq('id', request.id);
+
+      if (updateError) throw updateError;
+
+      // Log Activity
+      await supabase.from("activity_logs").insert({
+        user_id: userId,
+        user_name: userName,
+        action: "APPROVE_STALL",
+        details: `Approved new stall registration for ${request.vendor}`
+      });
+
+      toast({ title: "Approved", description: "Stall created successfully." });
+      
+      // Refresh data
+      onStallsChange();
+      setPendingRegistrations(prev => prev.filter(p => p.id !== request.id));
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to approve.", variant: "destructive" });
+    }
+  };
+
+  const handleRejectRegistration = async (id: number) => {
+    // Verify role before attempting
+    if (userRole?.toLowerCase() !== 'admin') {
+      toast({ title: "Permission Denied", description: "Only admins can reject requests.", variant: "destructive" });
+      return;
+    }
+
+    const { error } = await supabase
+      .from("pending_stall_creations")
+      .update({ request_status: 'rejected' })
+      .eq('id', id);
+
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } else {
+      setPendingRegistrations(prev => prev.filter(p => p.id !== id));
+      toast({ title: "Rejected", description: "Registration request rejected." });
+    }
+  };
+
   /* ======================================================================
      INTERNAL FUNCTIONS
   ====================================================================== */
@@ -509,6 +595,28 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
           description: "Changes saved successfully.",
         });
       } else {
+        // CREATE MODE
+        if (userRole?.toLowerCase() === 'collector') {
+           // Collector: Submit for approval
+           const { error } = await supabase.from("pending_stall_creations").insert({
+             vendor: shouldClear ? "" : formState.vendor.trim(),
+             contact: shouldClear ? "" : formState.contact.trim(),
+             stall_type: trimmedType,
+             rent_amount: rent,
+             rental_type: formState.rentalType,
+             status: finalStatus,
+             last_payment: formState.lastPayment || null,
+             next_due: formState.nextDue || null,
+             requested_by: userId,
+             request_status: 'pending'
+           });
+
+           if (error) throw error;
+           toast({ title: "Request Sent", description: "New stall registration sent to admin for approval." });
+           closeForm();
+           return;
+        }
+
         await createStall({
           vendor: shouldClear ? "" : formState.vendor.trim(),
           contact: shouldClear ? "" : formState.contact.trim(),
@@ -545,23 +653,59 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
     }
   };
 
-  const handleArchive = async () => {
+  const handleArchive = async () => { // This function now handles both admin archive and collector request
     if (!stallToDelete) return;
 
-    try {
-      await updateStall(stallToDelete.dbId, {
-        status: "archived",
-        archive_reason: archiveReason.trim(),
-        occupied: false,
-      });
+    // If user is collector, request archive instead of archiving directly
+    if (userRole?.toLowerCase() === 'collector') {
+        if (!userId) {
+            toast({
+                title: "Authentication Error",
+                description: "User ID is missing. Please refresh the page.",
+                variant: "destructive",
+            });
+            return;
+        }
 
-      // Log Activity
-      await supabase.from("activity_logs").insert({
-        user_id: userId,
-        user_name: userName,
-        action: "ARCHIVE_STALL",
-        details: `Archived ${stallToDelete.name}. Reason: ${archiveReason}`
-      });
+        try {
+            console.log("Submitting archive request for:", stallToDelete.name);
+            const { error } = await supabase.from('pending_archives').insert({
+                stall_id: stallToDelete.dbId,
+                stall_name: stallToDelete.name,
+                vendor_name: stallToDelete.vendor || "Vacant",
+                reason: archiveReason.trim(),
+                requested_by_id: userId,
+                requested_by_name: userName || "Unknown Collector",
+                status: 'pending'
+            });
+
+            if (error) throw error;
+
+            toast({
+                title: "Archive Request Sent",
+                description: "Your request to archive this stall has been sent to an administrator for review.",
+            });
+
+            onStallsChange();
+            setStallToDelete(null);
+            setArchiveReason("");
+
+        } catch (err: any) {
+            console.error("Archive request error:", err);
+            toast({
+                title: "Request Failed",
+                description: err.message || "Could not send archive request.",
+                variant: "destructive",
+            });
+        }
+        return;
+    }
+
+    // Admin archive logic (existing)
+    try {
+      await updateStall(stallToDelete.dbId, { status: "archived", archive_reason: archiveReason.trim(), occupied: false });
+
+      await supabase.from("activity_logs").insert({ user_id: userId, user_name: userName, action: "ARCHIVE_STALL", details: `Archived ${stallToDelete.name}. Reason: ${archiveReason}` });
 
       toast({
         title: "Stall archived",
@@ -571,7 +715,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
       onStallsChange();
       setStallToDelete(null);
       setArchiveReason("");
-    } catch (err) {
+    } catch (err: any) {
       toast({
         title: "Archive failed",
         description: err.message || "Could not archive stall.",
@@ -685,6 +829,25 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
     setActiveTypeIndex(0);
   }, [sortedTypes.length, sectionFilter, searchTerm]);
 
+  if (userRole?.toLowerCase() === 'collector' && (!userSection || userSection === 'unassigned')) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-6 p-6 animate-in fade-in zoom-in duration-300">
+        <div className="bg-destructive/10 p-6 rounded-full shadow-sm">
+          <AlertCircle className="h-16 w-16 text-destructive" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-3xl font-bold text-destructive">Access Revoked</h2>
+          <p className="text-xl font-medium text-foreground">
+            You have been unassigned.
+          </p>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            Your section assignment has been removed by an administrator. You cannot view stalls until you are reassigned.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   /* ======================================================================
      6. PAGE HEADER
   ====================================================================== */
@@ -713,11 +876,21 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
             Refresh
           </Button>
 
+          {userRole?.toLowerCase() === 'admin' && (
+            <Button variant="outline" onClick={() => setIsPendingRegistrationsOpen(true)} className="relative">
+              <ClipboardList className="mr-2 h-4 w-4" />
+              Pending Approvals
+              {pendingRegistrations.length > 0 && (
+                <Badge variant="destructive" className="absolute -top-2 -right-2 h-5 w-5 p-0 flex items-center justify-center rounded-full text-[10px]">{pendingRegistrations.length}</Badge>
+              )}
+            </Button>
+          )}
+
           <Button onClick={() => setIsCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> Add Stall
           </Button>
 
-          {(userRole === "admin" || userRole === "collector") && (
+          {(userRole?.toLowerCase() === "admin" || userRole?.toLowerCase() === "collector") && (
             <Button
               variant="secondary"
               disabled={isGenerating}
@@ -1063,6 +1236,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                       Transactions
                     </Button>
 
+                    {(userRole?.toLowerCase() === "admin" || (userRole?.toLowerCase() === "collector" && selectedStall.section === userSection)) && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -1085,16 +1259,19 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                     >
                       <Pencil className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Edit
                     </Button>
+                    )}
 
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="md:h-10 md:px-4 md:text-sm"
-                      disabled={userRole !== "admin"}
-                      onClick={() => setStallToDelete(selectedStall)}
-                    >
-                      <Archive className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Archive
-                    </Button>
+                    {(userRole?.toLowerCase() === "admin" || (userRole?.toLowerCase() === "collector" && selectedStall.section === userSection)) && (
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="md:h-10 md:px-4 md:text-sm"
+                        onClick={() => setStallToDelete(selectedStall)}
+                      >
+                        <Archive className="mr-2 h-4 w-4 md:h-5 md:w-5" />
+                        {userRole?.toLowerCase() === 'admin' ? 'Archive' : 'Request Archive'}
+                      </Button>
+                    )}
                   </div>
 
               </CardContent>
@@ -1334,9 +1511,14 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Stall Archival</AlertDialogTitle>
+            <AlertDialogTitle>
+              {userRole?.toLowerCase() === 'admin' ? 'Confirm Stall Archival' : 'Request Stall Archival'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Provide a reason for archiving this stall.
+              {userRole?.toLowerCase() === 'admin' 
+                ? 'Provide a reason for archiving this stall. This will remove it from active lists.'
+                : 'Provide a reason for requesting to archive this stall. An admin will review your request.'
+              }
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -1365,7 +1547,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
               className="bg-amber-600 hover:bg-amber-700 text-white"
               onClick={handleArchive}
             >
-              Yes, Archive Stall
+              {userRole?.toLowerCase() === 'admin' ? 'Yes, Archive Stall' : 'Submit Request'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1566,7 +1748,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                             <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Paid</Badge>
                         ) : (
                            // Conditionally render the "Mark as Paid" button for collectors only
-                           userRole === "collector" && (
+                           userRole?.toLowerCase() === "collector" && (
                               <Button size="sm" onClick={() => handlePayInvoice(inv)}>Mark Paid</Button>
                            )
                         )}
@@ -1574,6 +1756,56 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                  ))
                 )}
             </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ======================================================================
+          14. PENDING REGISTRATIONS DIALOG (ADMIN)
+      ====================================================================== */}
+      <Dialog open={isPendingRegistrationsOpen} onOpenChange={setIsPendingRegistrationsOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Pending Stall Registrations</DialogTitle>
+            <DialogDescription>
+              Review and approve new stall registrations submitted by collectors.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto space-y-4">
+            {pendingRegistrations.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No pending registrations.
+              </div>
+            ) : (
+              pendingRegistrations.map((req) => (
+                <Card key={req.id} className="bg-muted/30">
+                  <CardContent className="p-4">
+                    <div className="flex flex-col md:flex-row justify-between gap-4">
+                      <div className="space-y-1 text-sm">
+                        <div className="font-bold text-base">{req.vendor || "Vacant Stall"}</div>
+                        <div className="text-muted-foreground">Type: <span className="text-foreground">{req.stall_type}</span></div>
+                        <div className="text-muted-foreground">Rent: <span className="text-foreground">₱{req.rent_amount} / {req.rental_type}</span></div>
+                        <div className="text-muted-foreground">Contact: <span className="text-foreground">{req.contact || "N/A"}</span></div>
+                        <div className="text-xs text-muted-foreground mt-2">
+                          Requested on {new Date(req.created_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <div className="flex flex-row md:flex-col gap-2 justify-center">
+                        <Button size="sm" onClick={() => handleApproveRegistration(req)} className="bg-emerald-600 hover:bg-emerald-700">
+                          <CheckCircle className="mr-2 h-4 w-4" /> Approve
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => handleRejectRegistration(req.id)}>
+                          Reject
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsPendingRegistrationsOpen(false)}>Close</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

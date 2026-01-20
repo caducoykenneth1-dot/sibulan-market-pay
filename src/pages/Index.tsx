@@ -132,6 +132,42 @@ const Index = () => {
     return () => authListener.subscription.unsubscribe();
   }, []);
 
+  // ✅ Poll for user updates (Real-time unassignment check)
+  useEffect(() => {
+    if (!user) return;
+
+    const interval = setInterval(async () => {
+      // Fetch latest user data from Supabase Auth
+      const { data: { user: latestUser }, error } = await supabase.auth.getUser();
+      
+      if (latestUser && !error) {
+        // Check if section assignment has changed
+        const currentSection = user.user_metadata?.market_section || user.user_metadata?.section;
+        const newSection = latestUser.user_metadata?.market_section || latestUser.user_metadata?.section;
+        
+        // Check if role has changed
+        const currentRole = user.user_metadata?.role;
+        const newRole = latestUser.user_metadata?.role;
+
+        if (currentSection !== newSection || currentRole !== newRole) {
+          console.log("🔄 User assignment/role updated from server.");
+          setUser(latestUser);
+          
+          // If unassigned, show a toast
+          if (latestUser.user_metadata?.role === 'collector' && (!newSection || newSection === 'unassigned') && currentSection && currentSection !== 'unassigned') {
+             toast({
+               title: "Access Updated",
+               description: "You have been unassigned from your section.",
+               variant: "destructive"
+             });
+          }
+        }
+      }
+    }, 3000); // Check every 3 seconds for responsiveness
+
+    return () => clearInterval(interval);
+  }, [user, toast]);
+
   // ✅ Fetch unread notifications badge count
   useEffect(() => {
     if (!user?.id) return;
@@ -753,6 +789,8 @@ const handleForgotPassword = async (
             collectorName={user?.user_metadata?.full_name ?? "System"}
             collectorId={user?.id ?? ""}
             onPaymentSuccess={refreshData}
+            userRole={user?.user_metadata?.role}
+            userSection={user?.user_metadata?.market_section || user?.user_metadata?.section}
           />
         );
       case "history":
@@ -766,6 +804,7 @@ const handleForgotPassword = async (
             userName={user?.user_metadata?.full_name ?? ""}
             userId={user?.id}
             invoices={allInvoices}
+            userSection={user?.user_metadata?.market_section || user?.user_metadata?.section}
           />
         );
       case "reports":
@@ -780,10 +819,16 @@ const handleForgotPassword = async (
             onDataChange={refreshData} 
             allStalls={rawStalls} 
             userRole={user?.user_metadata?.role ?? ""} 
+            userName={user?.user_metadata?.full_name ?? ""}
+            userId={user?.id}
           />
         );
       case "unpaid":
-        return <UnpaidDues invoices={allInvoices} />;
+        return <UnpaidDues 
+          invoices={allInvoices} 
+          userRole={user?.user_metadata?.role}
+          userSection={user?.user_metadata?.market_section || user?.user_metadata?.section}
+        />;
       case "notifications":
         return <NotificationsPanel userId={user?.id} />;
       case "activity":
