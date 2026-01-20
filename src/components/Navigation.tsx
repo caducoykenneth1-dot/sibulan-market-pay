@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Home,
@@ -16,6 +16,7 @@ import {
   Bell,
   WifiOff,
   ClipboardList,
+  Signal,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -28,6 +29,7 @@ interface NavigationProps {
   userUsername?: string;
   unreadNotifications?: number;
   newCollections?: number;
+  realtimeStatus?: string;
 }
 
 const collectorNav = [
@@ -61,6 +63,7 @@ export const Navigation = ({
   userUsername,
   unreadNotifications = 0,
   newCollections = 0,
+  realtimeStatus,
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNavVisible, setIsNavVisible] = useState(true);
@@ -132,6 +135,45 @@ export const Navigation = ({
     window.location.reload();
   };
 
+  const RealtimeStatusIndicator = ({ status }: { status?: string }) => {
+    const indicator = useMemo(() => {
+      switch (status) {
+        case "SUBSCRIBED":
+          return {
+            label: "Real-time Sync Active",
+            Icon: Signal,
+            className: "text-green-500",
+          };
+        case "TIMED_OUT":
+        case "CHANNEL_ERROR":
+          return {
+            label: "Sync Disconnected",
+            Icon: Signal,
+            className: "text-red-500",
+          };
+        case "CLOSED":
+          return {
+            label: "Sync Closed",
+            Icon: Signal,
+            className: "text-gray-500",
+          };
+        default: // CONNECTING
+          return {
+            label: "Connecting...",
+            Icon: Signal,
+            className: "text-yellow-500 animate-pulse",
+          };
+      }
+    }, [status]);
+
+    return (
+      <div className="flex items-center gap-2" title={indicator.label}>
+        <indicator.Icon className={`h-3.5 w-3.5 ${indicator.className}`} />
+        <span className="text-xs text-muted-foreground">{indicator.label}</span>
+      </div>
+    );
+  };
+
   return (
     <>
       {/* Offline Banner for Collectors */}
@@ -143,8 +185,8 @@ export const Navigation = ({
       )}
 
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
-      <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background shadow-lg transition-transform duration-500 ease-in-out ${isNavVisible ? "translate-y-0" : "translate-y-[160%]"}`}>
-        <div className="grid grid-cols-5 items-center gap-2 px-2 py-2">
+      <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background/80 backdrop-blur-xl shadow-lg transition-transform duration-500 ease-in-out ${isNavVisible ? "translate-y-0" : "translate-y-[160%]"}`}>
+        <div className="grid grid-cols-5 items-end gap-1 px-2 pb-3 pt-2">
           {(userRole === "admin"
             ? [
                 { id: "reports", label: "Reports", icon: BarChart3 },
@@ -168,10 +210,10 @@ export const Navigation = ({
 
             if (isCenterButton) {
               return (
-                <div key={item.id} className="relative flex justify-center">
+                <div key={item.id} className="relative flex justify-center -mt-8">
                   <button
                     onClick={() => handleMobileNav(item.id)}
-                    className={`flex h-16 w-16 items-center justify-center rounded-full border-2 border-background shadow-lg transition-all ${
+                    className={`flex h-14 w-14 items-center justify-center rounded-full border-4 border-background shadow-xl transition-all ${
                       active
                         ? "bg-primary text-primary-foreground scale-110"
                         : "bg-primary text-primary-foreground hover:bg-primary/90"
@@ -187,9 +229,9 @@ export const Navigation = ({
               <button
                 key={item.id}
                 onClick={() => handleMobileNav(item.id)}
-                className={`flex flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-xs font-medium transition-all relative ${
+                className={`group flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium transition-all relative ${
                   active
-                    ? "text-primary bg-primary/10 font-semibold"
+                    ? "text-primary-foreground bg-primary shadow-sm"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
                 }`}
               >
@@ -197,16 +239,17 @@ export const Navigation = ({
                   <Icon
                     className={`h-5 w-5 transition-transform duration-200 ${
                       active
-                        ? "scale-110"
-                        : "text-muted-foreground group-hover:text-foreground"
+                        ? ""
+                        : "group-hover:scale-110"
                     }`}
                   />
                   {badgeCount > 0 && (
-                    <div className="absolute -top-2 -right-2 bg-destructive text-white rounded-full w-4 h-4 flex items-center justify-center text-xs font-bold">
+                    <div className={`absolute -top-1.5 -right-1.5 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[9px] font-bold ${active ? "bg-background text-primary" : "bg-destructive text-white"}`}>
                       {badgeCount > 9 ? '9+' : badgeCount}
                     </div>
                   )}
                 </div>
+                <span className="truncate max-w-full leading-none">{item.label}</span>
               </button>
             );
           })}
@@ -233,7 +276,7 @@ export const Navigation = ({
 
       {isMenuOpen && (
         <div
-          className="md:hidden fixed inset-0 z-50 bg-black/40"
+          className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-[2px] transition-opacity duration-300"
           onClick={() => setIsMenuOpen(false)}
           aria-hidden="true"
         />
@@ -241,29 +284,33 @@ export const Navigation = ({
 
       {/* ✅ Ultra-Compact Sidebar */}
       <aside
-        className={`fixed top-0 left-0 z-50 h-full w-56 sm:w-60 md:w-80 transform transition-transform duration-300 md:relative md:h-full md:translate-x-0 ${
-          isMenuOpen ? "translate-x-0" : "-translate-x-full"
+        className={`fixed top-0 left-0 z-50 h-full w-72 transform transition-transform duration-300 ease-in-out md:relative md:h-full md:w-full md:translate-x-0 ${
+          isMenuOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
         }`}
         aria-label="Primary navigation"
       >
-        <div className="flex h-full flex-col border-r bg-card shadow-xl md:shadow-none rounded-r-2xl md:rounded-none">
+        <div className="flex h-full flex-col border-r bg-background md:bg-card/50 md:backdrop-blur-xl">
           {/* ✅ Logo + Header */}
-          <div className="shrink-0 mb-6 px-4 pt-6 text-center">
-            <img
-              src="/logo.png"
-              alt="Sibulan Market Pay Logo"
-              className="mx-auto mb-2 h-16 w-16 rounded-lg"
-            />
-            <h2 className="text-xl font-bold text-primary">
-              Sibulan Market
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Stall System
-            </p>
+          <div className="shrink-0 px-6 pt-8 pb-6 flex items-center gap-4">
+            <div className="relative flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 shadow-sm ring-1 ring-inset ring-primary/20">
+              <img
+                src="/logo.png"
+                alt="Logo"
+                className="h-8 w-8 object-contain"
+              />
+            </div>
+            <div className="flex flex-col">
+              <h2 className="text-lg font-bold tracking-tight text-foreground leading-tight">
+                Sibulan Market
+              </h2>
+              <p className="text-xs font-medium text-muted-foreground">
+                Stall System
+              </p>
+            </div>
           </div>
 
           {/* ✅ Scrollable Nav Section */}
-          <div className="flex-1 overflow-y-auto px-2 pb-24 md:pb-4">
+          <div className="flex-1 overflow-y-auto px-3 py-2">
             <nav className="space-y-1">
               {navItems.map((item) => {
                 const Icon = item.icon;
@@ -279,31 +326,29 @@ export const Navigation = ({
                 return (
                   <Button
                     key={item.id}
-                    variant={isActive ? "default" : "ghost"}
-                    className={`group w-full justify-start items-center gap-2.5 text-sm px-3 py-2 h-auto relative ${
+                    variant="ghost"
+                    className={`group w-full justify-start items-center gap-3 text-sm font-medium px-3 py-3 h-auto relative transition-all duration-200 rounded-xl ${
                       isActive
-                        ? "font-semibold"
-                        : "text-muted-foreground hover:text-foreground"
+                        ? "bg-primary text-primary-foreground shadow-md hover:bg-primary/90"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
                     }`}
                     onClick={() => {
                       handleMobileNav(item.id);
                     }}
                   >
-                    <div className="relative">
-                      <Icon
-                        className={`h-5 w-5 transition-transform duration-200 group-hover:scale-110 ${
-                          isActive
-                            ? ""
-                            : "text-muted-foreground group-hover:text-foreground"
-                        }`}
-                      />
-                      {badgeCount > 0 && (
-                        <div className="absolute -top-2 -right-2 bg-destructive text-white rounded-full w-4 h-4 flex items-center justify-center text-xs font-bold">
-                          {badgeCount > 9 ? '9+' : badgeCount}
-                        </div>
-                      )}
-                    </div>
-                    {item.label}
+                    <Icon
+                      className={`h-5 w-5 shrink-0 transition-transform duration-200 ${
+                        isActive ? "" : "group-hover:scale-110"
+                      }`}
+                    />
+                    <span className="flex-1 truncate">{item.label}</span>
+                    {badgeCount > 0 && (
+                      <span className={`flex h-5 min-w-[1.25rem] px-1 items-center justify-center rounded-full text-[10px] font-bold shadow-sm ${
+                        isActive ? "bg-background text-foreground" : "bg-destructive text-white"
+                      }`}>
+                        {badgeCount > 9 ? '9+' : badgeCount}
+                      </span>
+                    )}
                   </Button>
                 );
               })}
@@ -312,30 +357,33 @@ export const Navigation = ({
 
           {/* ✅ Fixed Footer / Logout Section */}
           {onLogout && (
-            <div className="sticky bottom-0 left-0 mt-auto w-full border-t bg-card/95 p-4 text-xs text-muted-foreground backdrop-blur-sm">
+            <div className="p-4 border-t bg-muted/20">
               {(userName || userRole || userUsername) && (
-                <div className="mb-3 space-y-1 text-left">
-                  {userName && (
-                    <p className="text-sm font-semibold text-foreground">
+                <div className="mb-4 flex items-center gap-3 px-2">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm">
+                    {userName?.charAt(0) || "U"}
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <p className="text-sm font-semibold text-foreground truncate">
                       {userName}
                     </p>
-                  )}
-                  {userUsername && (
-                    <p className="truncate text-xs">Username: {userUsername}</p>
-                  )}
-                  {userRole && (
-                    <p className="capitalize text-xs">Role: {userRole}</p>
-                  )}
+                    <p className="text-xs text-muted-foreground capitalize truncate">
+                      {userRole}
+                    </p>
+                  </div>
                 </div>
               )}
               <Button
                 variant="ghost"
-                className="w-full justify-start text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="w-full justify-start gap-2 border-destructive/20 text-destructive hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30"
                 onClick={handleLogout}
               >
                 <LogOut className="mr-2 h-4 w-4" />
                 Log out
               </Button>
+              <div className="mt-4 flex justify-center">
+                <RealtimeStatusIndicator status={realtimeStatus} />
+              </div>
             </div>
           )}
         </div>

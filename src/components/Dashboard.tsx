@@ -213,8 +213,15 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
       inv.paid_at.startsWith(todayString)
     );
     
+    // Count unique transactions (receipts) instead of individual invoices
+    const uniqueTransactions = new Set(paidToday.map(inv => {
+      return inv.receipt_number 
+        ? inv.receipt_number.replace(/-\d+$/, '') 
+        : `TX-${inv.id}`;
+    }));
+
     return {
-      countToday: paidToday.length,
+      countToday: uniqueTransactions.size,
       amountToday: paidToday.reduce((sum, inv) => sum + inv.amount, 0),
       totalCount: relevantPaidInvoices.length,
     };
@@ -249,29 +256,30 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3 md:gap-4">
-  <button
-    type="button"
-    onClick={() => onPageChange("profile")}
-    className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
-    title="Change profile photo"
-  >
-    <Avatar key={avatarUrl} className="h-16 w-16 md:h-20 md:w-20 border-2 border-transparent transition group-hover:border-primary">
-      {avatarUrl ? (
-        <AvatarImage src={avatarUrl} alt="Collector profile" />
-      ) : (
-        <AvatarFallback className="text-lg md:text-xl font-semibold">
-          {initials}
-        </AvatarFallback>
-      )}
-    </Avatar>
-    <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-primary px-2 py-[2px] text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
-      Edit
-    </span>
-  </button>
-         <div>
+      {/* Sticky Header & Balance Card */}
+      <div className="sticky top-0 z-30 -mx-4 -mt-6 px-4 pt-6 pb-4 bg-background/80 backdrop-blur-md border-b border-border/40 space-y-6 shadow-sm transition-all">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 md:gap-4">
+            <button
+              type="button"
+              onClick={() => onPageChange("profile")}
+              className="group relative rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+              title="Change profile photo"
+            >
+              <Avatar key={avatarUrl} className="h-16 w-16 md:h-20 md:w-20 border-2 border-transparent transition group-hover:border-primary">
+                {avatarUrl ? (
+                  <AvatarImage src={avatarUrl} alt="Collector profile" />
+                ) : (
+                  <AvatarFallback className="text-lg md:text-xl font-semibold">
+                    {initials}
+                  </AvatarFallback>
+                )}
+              </Avatar>
+              <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-primary px-2 py-[2px] text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
+                Edit
+              </span>
+            </button>
+            <div>
               <p className="text-base md:text-lg font-medium text-primary">
                 Welcome back
               </p>
@@ -279,26 +287,27 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
                 {userName || "Sibulan Market Team"}
               </h1>
               <div className="text-xs md:text-sm text-muted-foreground">
-              <span>
-                {userUsername}
-              </span>
-              <span className="mx-1">•</span>
-              <span className="capitalize">{userRole}</span>
+                <span>
+                  {userUsername}
+                </span>
+                <span className="mx-1">•</span>
+                <span className="capitalize">{userRole}</span>
+              </div>
             </div>
           </div>
+          {userRole?.toLowerCase() === "collector" && (
+            <Button variant="outline" onClick={() => onPageChange("collect")}>
+              <Receipt className="mr-2 h-4 w-4" /> Collect
+            </Button>
+          )}
         </div>
-        {userRole?.toLowerCase() === "collector" && (
-          <Button variant="outline" onClick={() => onPageChange("collect")}>
-            <Receipt className="mr-2 h-4 w-4" /> Collect
-          </Button>
-        )}
-      </div>
 
-      {/* Balance card */}
-      <div className="rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-400 to-purple-500 p-5 text-white shadow-lg">
-        <div className="text-sm/5 opacity-90">Total Collections This Month</div>
-        <div className="mt-1 text-4xl font-bold">{formattedTotalCollectedThisMonth}</div>
-        <div className="mt-1 text-xs opacity-90">Active stalls: {occupiedCount}</div>
+        {/* Balance card */}
+        <div className="rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-400 to-purple-500 p-5 text-white shadow-lg">
+          <div className="text-sm/5 opacity-90">Total Collections This Month</div>
+          <div className="mt-1 text-4xl font-bold">{formattedTotalCollectedThisMonth}</div>
+          <div className="mt-1 text-xs opacity-90">Active stalls: {occupiedCount}</div>
+        </div>
       </div>
 
       {/* Shortcuts */}

@@ -15,6 +15,7 @@ interface CollectorProfileProps {
   onBack: () => void;
   avatarUrl?: string | null;
   onAvatarChange?: (url: string | null) => void;
+  invoices?: any[];
 }
 
 interface Collection {
@@ -30,6 +31,7 @@ export const CollectorProfile = ({
   onBack,
   avatarUrl: avatarUrlProp = null,
   onAvatarChange,
+  invoices,
 }: CollectorProfileProps) => {
   const { toast } = useToast();
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -160,29 +162,39 @@ export const CollectorProfile = ({
 
   useEffect(() => {
     if (showCollections && userName) {
-      const fetchCollections = async () => {
+      if (invoices) {
+        // Optimize: Use passed invoices
         setIsLoadingCollections(true);
-        const { data, error } = await supabase
-          .from("invoices")
-          .select("id, amount, paid_at")
-          .eq("collector_name", userName)
-          .eq("status", "paid");
-
-        if (error) {
-          toast({
-            title: "Error fetching collections",
-            description: error.message,
-            variant: "destructive",
-          });
-          setCollections([]);
-        } else {
-          setCollections(data || []);
-        }
+        const myCollections = invoices.filter(inv => 
+          inv.collector_name === userName && inv.status === "paid"
+        );
+        setCollections(myCollections);
         setIsLoadingCollections(false);
-      };
-      fetchCollections();
+      } else {
+        const fetchCollections = async () => {
+          setIsLoadingCollections(true);
+          const { data, error } = await supabase
+            .from("invoices")
+            .select("id, amount, paid_at")
+            .eq("collector_name", userName)
+            .eq("status", "paid");
+
+          if (error) {
+            toast({
+              title: "Error fetching collections",
+              description: error.message,
+              variant: "destructive",
+            });
+            setCollections([]);
+          } else {
+            setCollections(data || []);
+          }
+          setIsLoadingCollections(false);
+        };
+        fetchCollections();
+      }
     }
-  }, [showCollections, userName, toast]);
+  }, [showCollections, userName, toast, invoices]);
 
   const dailyTotals = useMemo(() => {
     const totals = new Map<string, number>();
@@ -213,7 +225,7 @@ export const CollectorProfile = ({
     }
   };
 
-  return (
+ return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

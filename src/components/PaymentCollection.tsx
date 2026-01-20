@@ -7,8 +7,9 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { computeStatusFromDueDate, type StallRecord, type StallTypeInfo } from "@/data/stalls";
+import { format } from "date-fns";
 import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabaseClient"; // Supabase client
 import { Loader2, Wifi, WifiOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -46,20 +47,6 @@ export interface QueuedPayment {
   referenceNumber: string;
   duration?: number;
 }
-
-const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
-  const counters = new Map<string, number>();
-  const names = new Map<string, string>();
-
-  stalls.forEach((stall) => {
-    const typeKey = stall.type?.trim().toLowerCase() || "uncategorised";
-    const nextNumber = (counters.get(typeKey) ?? 0) + 1;
-    counters.set(typeKey, nextNumber);
-    names.set(stall.id, `Stall ${nextNumber}`);
-  });
-
-  return names;
-};
 
 const generateReceiptNo = () => `DPM-${Math.floor(100000 + Math.random() * 900000)}`;
 
@@ -106,6 +93,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     paymentMethod: string;
     referenceNumber: string;
     isOffline?: boolean;
+    paymentPeriod?: { start: Date; end: Date };
+    duration?: number;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [assignedSection, setAssignedSection] = useState<string | null>(null);
@@ -328,7 +317,6 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     return localStalls.filter((s) => s.section === assignedSection);
   }, [localStalls, assignedSection]);
 
-  const displayNameById = useMemo(() => buildDisplayNameMap(localStalls), [localStalls]);
   const stallTypeOptions = useMemo(
     () => Array.from(new Set(availableStalls.map((stall) => stall.type))).sort((a, b) => a.localeCompare(b)),
     [availableStalls]
@@ -412,9 +400,24 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
     [localStalls, selectedStallId]
   );
 
-  const selectedStallDisplayName = selectedStall
-    ? displayNameById.get(selectedStall.id) ?? selectedStall.name
-    : "";
+  const selectedStallDisplayName = selectedStall ? selectedStall.name : "";
+
+  const paymentPeriod = useMemo(() => {
+    if (!selectedStall || selectedStall.rentalType !== 'daily' || !duration) {
+      return null;
+    }
+    const dur = typeof duration === 'number' ? duration : parseInt(String(duration), 10) || 0;
+    if (dur <= 0) return null;
+
+    const startDate = parseISODate(selectedStall.nextDue) || getStartOfToday();
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + dur - 1);
+
+    return {
+      start: startDate,
+      end: endDate,
+    };
+  }, [selectedStall, duration]);
 
   useEffect(() => {
     if (!selectedStall) {
@@ -508,6 +511,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         paymentMethod,
         referenceNumber,
         duration: loopCount,
+        paymentPeriod: paymentPeriod || undefined,
+        duration: dur,
       };
 
       const queue = getQueue();
@@ -523,6 +528,8 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
         paymentMethod: paymentMethod === 'cash' ? 'Cash' : (paymentMethod === 'gcash' ? 'GCash' : 'Maya'),
         referenceNumber,
         isOffline: true,
+        paymentPeriod: paymentPeriod || undefined,
+        duration: dur,
       });
       setShowReceipt(true);
       toast({ title: "Payment Saved Offline", description: "It will be synced when you're back online." });
@@ -803,7 +810,9 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
       paymentType,
       paymentDate: paymentTimestamp.toLocaleString(),
       paymentMethod: paymentMethod === 'cash' ? 'Cash' : (paymentMethod === 'gcash' ? 'GCash' : 'Maya'),
-      referenceNumber
+      referenceNumber,
+      paymentPeriod: paymentPeriod || undefined,
+      duration: dur,
 
     });
     setShowReceipt(true);
@@ -884,6 +893,14 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                   <span>Payment Type:</span>
                   <span className="font-medium">{receiptContext.paymentType}</span>
                 </div>
+                {receiptContext.paymentPeriod && (
+                  <div className="flex justify-between font-semibold text-primary bg-primary/10 p-2 rounded-md my-1">
+                    <span>Period Covered:</span>
+                    <span>
+                      {format(receiptContext.paymentPeriod.start, "MMM d")} - {format(receiptContext.paymentPeriod.end, "MMM d, yyyy")}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span>Method:</span>
                   <span className="font-medium uppercase">{receiptContext.paymentMethod}</span>
@@ -1007,10 +1024,9 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                     <SelectGroup>
                       <SelectLabel>Due &amp; Overdue</SelectLabel>
                       {collectableStalls.map((stall) => {
-                        const displayName = displayNameById.get(stall.id) ?? stall.name;
                         return (
                           <SelectItem key={stall.id} value={stall.id}>
-                            {displayName} - {stall.vendor || "No vendor"}
+                            {stall.name} - {stall.vendor || "No vendor"}
                           </SelectItem>
                         );
                       })}
@@ -1021,11 +1037,10 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
                     <SelectGroup>
                       <SelectLabel>Already Settled</SelectLabel>
                       {nonCollectableStalls.map((stall) => {
-                        const displayName = displayNameById.get(stall.id) ?? stall.name;
                         const nextDueLabel = formatDateForDisplay(stall.nextDue);
                         return (
                           <SelectItem key={stall.id} value={stall.id} disabled>
-                            {displayName} - Next due {nextDueLabel}
+                            {stall.name} - Next due {nextDueLabel}
                           </SelectItem>
                         );
                       })}
@@ -1060,6 +1075,11 @@ export const PaymentCollection = ({ stalls, collectorName, collectorId, onPaymen
               <div>
                 <strong>Next Due:</strong> {formatDateForDisplay(selectedStall.nextDue)}
               </div>
+              {paymentPeriod && (
+                <div className="font-medium text-primary bg-primary/10 p-2 rounded-md mt-2">
+                  <strong>Paying for:</strong> {format(paymentPeriod.start, "MMM d")} - {format(paymentPeriod.end, "MMM d, yyyy")} ({duration} {Number(duration) === 1 ? 'day' : 'days'})
+                </div>
+              )}
               <div className="capitalize">
                 <strong>Status:</strong> {selectedStall.status}
               </div>

@@ -51,6 +51,7 @@ interface PaymentHistoryProps {
   stalls: StallRecord[];
   invoices: Invoice[];
   userRole: string;
+  userId?: string;
 }
 
 // 🟦 Helpers
@@ -63,6 +64,12 @@ const getStatusBadge = (status: Invoice["status"]) => {
     default:
       return "outline" as const;
   }
+};
+
+type ConsolidatedInvoice = Invoice & {
+  payment_period_start?: string;
+  payment_period_end?: string;
+  invoice_count?: number;
 };
 
 // 🟦 Generate display names for stalls
@@ -81,7 +88,7 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
 };
 
 
-export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryProps) => {
+export const PaymentHistory = ({ stalls, invoices, userRole, userId }: PaymentHistoryProps) => {
   const [selectedPayment, setSelectedPayment] = useState<Invoice | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -98,10 +105,15 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
     () =>
       {
         // Group paid invoices by receipt number base (stripping suffix like -1, -2)
-        const groupedInvoices = new Map<string, Invoice>();
+        const groupedInvoices = new Map<string, ConsolidatedInvoice & { due_dates: Date[] }>();
         
         invoices.forEach(inv => {
           if (inv.status === 'paid' && inv.paid_at) {
+            // Filter: Collectors only see their own collections
+            if (userRole !== 'admin' && inv.collector_id !== userId) {
+              return;
+            }
+
             // Extract base receipt (e.g., DPM-123456 from DPM-123456-1)
             const baseReceipt = inv.receipt_number 
               ? inv.receipt_number.replace(/-\d+$/, '') 
@@ -112,15 +124,29 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
             const key = `${baseReceipt}_${inv.vendor_id}_${inv.paid_at}`;
             
             if (!groupedInvoices.has(key)) {
-              groupedInvoices.set(key, { ...inv, receipt_number: baseReceipt });
+              groupedInvoices.set(key, { 
+                ...inv, 
+                receipt_number: baseReceipt,
+                due_dates: [new Date(inv.due_date)],
+                invoice_count: 1,
+              });
             } else {
               const existing = groupedInvoices.get(key)!;
               existing.amount += inv.amount;
-              // We keep the rest of the details from the first invoice found
+              existing.due_dates.push(new Date(inv.due_date));
+              existing.invoice_count = (existing.invoice_count || 1) + 1;
             }
           }
         });
 
+        // Post-process to set payment periods for multi-invoice payments
+        groupedInvoices.forEach(inv => {
+          if (inv.invoice_count && inv.invoice_count > 1 && inv.payment_type === 'Daily Fee') {
+            inv.due_dates.sort((a, b) => a.getTime() - b.getTime());
+            inv.payment_period_start = inv.due_dates[0].toISOString();
+            inv.payment_period_end = inv.due_dates[inv.due_dates.length - 1].toISOString();
+          }
+        });
         const consolidatedPaid = Array.from(groupedInvoices.values());
         const unpaidInvoices = invoices.filter(inv => inv.status !== 'paid');
 
@@ -143,7 +169,7 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
           return (b.paid_at ? new Date(b.paid_at).getTime() : 0) - (a.paid_at ? new Date(a.paid_at).getTime() : 0);
         });
       },
-    [invoices, statusFilter]
+    [invoices, statusFilter, userRole, userId]
   );
 
   const availableYears = useMemo(() => {
@@ -310,8 +336,9 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
         accessorKey: statusFilter === "unpaid" ? "due_date" : "paid_at",
         header: statusFilter === "unpaid" ? "Due Date" : "Paid Date",
         cell: ({ row }) => {
+          const invoice = row.original as ConsolidatedInvoice;
           if (statusFilter === "unpaid") {
-            const date = new Date(row.original.due_date);
+            const date = new Date(invoice.due_date);
             return (
               <div className="flex flex-col">
                 <span className="font-medium text-destructive">
@@ -320,15 +347,28 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
               </div>
             );
           }
-          if (!row.original.paid_at) return "-";
+          if (!invoice.paid_at) return "-";
+
+          // Check for payment period for daily fees
+          if (invoice.payment_type === 'Daily Fee' && invoice.payment_period_start && invoice.payment_period_end) {
+            const startDate = new Date(invoice.payment_period_start);
+            const endDate = new Date(invoice.payment_period_end);
+            return (
+              <div className="flex flex-col">
+                <span className="font-medium">
+                  {format(startDate, "MMM d")} - {format(endDate, "MMM d, yyyy")}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Paid on {format(new Date(invoice.paid_at), "MMM d, h:mm a")}
+                </span>
+              </div>
+            );
+          }
+
           return (
             <div className="flex flex-col">
-              <span className="font-medium">
-                {format(new Date(row.original.paid_at), "MMM d, yyyy")}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {format(new Date(row.original.paid_at), "h:mm a")}
-              </span>
+              <span className="font-medium">{format(new Date(invoice.paid_at), "MMM d, yyyy")}</span>
+              <span className="text-xs text-muted-foreground">{format(new Date(invoice.paid_at), "h:mm a")}</span>
             </div>
           );
         },
@@ -764,12 +804,21 @@ export const PaymentHistory = ({ stalls, invoices, userRole }: PaymentHistoryPro
                   <p className="text-muted-foreground">Stall</p>
                   <p className="font-medium">{selectedPayment.stall_name}</p>
                 </div>
-                <div>
-                  <p className="text-muted-foreground">Collected on</p>
-                  <p className="font-medium">
-                    {new Date(selectedPayment.paid_at!).toLocaleString()}
-                  </p>
-                </div>
+                {(selectedPayment as ConsolidatedInvoice).payment_period_start && (selectedPayment as ConsolidatedInvoice).payment_period_end ? (
+                  <div className="sm:col-span-2 rounded-md bg-primary/10 p-3">
+                    <p className="text-muted-foreground">Period Covered</p>
+                    <p className="font-semibold text-primary">
+                      {format(new Date((selectedPayment as ConsolidatedInvoice).payment_period_start!), "MMM d")} - {format(new Date((selectedPayment as ConsolidatedInvoice).payment_period_end!), "MMM d, yyyy")}
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-muted-foreground">Collected on</p>
+                    <p className="font-medium">
+                      {new Date(selectedPayment.paid_at!).toLocaleString()}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <p className="text-muted-foreground">Collector</p>
                   <p className="font-medium">

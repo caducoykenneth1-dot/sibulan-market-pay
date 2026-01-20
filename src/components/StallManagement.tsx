@@ -209,7 +209,7 @@ type SectionFilter = "all" | "Dry Section" | "Wet Section";
 /* ======================================================================
    3. FRONTEND COMPONENT
 ====================================================================== */
-export const StallManagement = ({ stalls, onStallsChange, userRole, userName, userId }) => {
+export const StallManagement = ({ stalls, onStallsChange, userRole, userName, userId, invoices }) => {
   const { toast } = useToast();
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -261,24 +261,39 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
 
   useEffect(() => {
     if (showTransactions && selectedStall) {
-      const fetchTransactions = async () => {
-        setIsLoadingTransactions(true);
-        const { data } = await supabase
-          .from("invoices")
-          .select("*")
-          .eq("vendor_id", selectedStall.dbId)
-          .order("paid_at", { ascending: false });
-        setTransactions(data || []);
+      if (invoices) {
+        // Optimize: Use passed invoices instead of fetching
+        const stallInvoices = invoices.filter(inv => 
+          String(inv.vendor_id) === String(selectedStall.dbId)
+        ).sort((a, b) => {
+          const dateA = a.paid_at ? new Date(a.paid_at).getTime() : (a.due_date ? new Date(a.due_date).getTime() : 0);
+          const dateB = b.paid_at ? new Date(b.paid_at).getTime() : (b.due_date ? new Date(b.due_date).getTime() : 0);
+          return dateB - dateA;
+        });
+        setTransactions(stallInvoices);
         setIsLoadingTransactions(false);
-      };
-      fetchTransactions();
+      } else {
+        const fetchTransactions = async () => {
+          setIsLoadingTransactions(true);
+          const { data } = await supabase
+            .from("invoices")
+            .select("*")
+            .eq("vendor_id", selectedStall.dbId)
+            .order("paid_at", { ascending: false });
+          setTransactions(data || []);
+          setIsLoadingTransactions(false);
+        };
+        fetchTransactions();
+      }
     }
-  }, [showTransactions, selectedStall]);
+  }, [showTransactions, selectedStall, invoices]);
 
   const handlePayInvoice = async (invoice: any) => {
     if (!selectedStall) return;
 
+    const receiptNumber = `DPM-${Math.floor(100000 + Math.random() * 900000)}`;
     const paymentType = selectedStall.rentalType === 'daily' ? 'Daily Fee' : 'Monthly Rent';
+    let smsFailed = false;
 
     const { error: invError } = await supabase
       .from("invoices")
@@ -287,12 +302,40 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
         paid_at: new Date().toISOString(),
         collector_name: userName,
         payment_type: paymentType,
+        receipt_number: receiptNumber,
       })
       .eq("id", invoice.id);
 
     if (invError) {
       toast({ title: "Error", description: "Failed to update invoice", variant: "destructive" });
       return;
+    }
+
+    // Send SMS Receipt
+    if (selectedStall.contact) {
+      try {
+        const { data, error } = await supabase.functions.invoke(
+          "send-sms-receipt",
+          {
+            body: {
+              receiptNumber: receiptNumber,
+            },
+          }
+        );
+
+        if (error) {
+          console.error("SMS Function Error:", error);
+          smsFailed = true;
+        } else if (!data?.success) {
+          console.warn("SMS failed response:", data);
+          smsFailed = true;
+        } else {
+          console.log("SMS sent successfully");
+        }
+      } catch (err) {
+        console.error("Unexpected SMS exception:", err);
+        smsFailed = true;
+      }
     }
 
     const currentDue = new Date(invoice.due_date);
@@ -322,7 +365,10 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
       details: `Marked invoice #${invoice.id} as paid for ${selectedStall.name}`
     });
 
-    toast({ title: "Payment Recorded", description: "Invoice marked as paid." });
+    toast({ 
+      title: "Payment Recorded", 
+      description: `Invoice marked as paid.${smsFailed ? " Warning: SMS receipt could not be sent." : ""}` 
+    });
     onStallsChange();
     setIsDayDialogOpen(false);
     setShowTransactions(false);
@@ -937,7 +983,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
         open={Boolean(selectedStall)}
         onOpenChange={(open) => (!open ? setSelectedStall(null) : null)}
       >
-        <DialogContent className="sm:max-w-lg md:max-w-xl border-none p-0 overflow-hidden px-4">
+        <DialogContent className="sm:max-w-lg md:max-w-3xl border-none p-0 overflow-hidden px-4">
           <DialogHeader className="hidden">
             <DialogTitle>Stall Details</DialogTitle>
             <DialogDescription>Details for {selectedStall?.name}</DialogDescription>
@@ -948,34 +994,34 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
               <CardHeader className="px-6 pt-6 pb-0">
                 <div className="flex items-start justify-between gap-3">
 
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <Building2 className="h-5 w-5 text-muted-foreground" />
+                  <CardTitle className="flex items-center gap-2 text-lg md:text-2xl">
+                    <Building2 className="h-5 w-5 md:h-6 md:w-6 text-muted-foreground" />
                     {selectedStall.name}
                   </CardTitle>
 
-                  <Badge variant="outline" className="capitalize">
+                  <Badge variant="outline" className="capitalize md:text-sm md:px-3 md:py-1">
                     {selectedStall.status}
                   </Badge>
                 </div>
               </CardHeader>
 
-              <CardContent className="space-y-3 text-sm px-6 pb-6">
-                <div className="grid gap-3 sm:grid-cols-2">
+              <CardContent className="space-y-3 text-sm md:text-base px-6 pb-6 pt-4">
+                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 md:gap-6">
 
                   <div className="flex items-center gap-2">
-                    <User className="h-4 w-4 text-muted-foreground" />
+                    <User className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground" />
                     <span>
                       {selectedStall.vendor || "No vendor assigned"}
                     </span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Phone className="h-4 w-4 text-muted-foreground" />
+                    <Phone className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground" />
                     <span>{selectedStall.contact || "N/A"}</span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
+                    <DollarSign className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground" />
                     <span>
                       Rent: ₱
                       {selectedStall.rentAmount.toLocaleString()} /{" "}
@@ -984,41 +1030,43 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="capitalize">
+                    <Badge variant="outline" className="capitalize md:text-sm">
                       {selectedStall.type}
                     </Badge>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <Calendar className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground" />
                     <span>
                       Last Payment: {selectedStall.lastPayment || "N/A"}
                     </span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <Calendar className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground" />
                     <span>Next Due: {selectedStall.nextDue || "N/A"}</span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline">{selectedStall.section}</Badge>
+                    <Badge variant="outline" className="md:text-sm">{selectedStall.section}</Badge>
                   </div>
                 </div>
 
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-4 md:pt-6">
                     <Button
                       variant="outline"
                       size="sm"
+                      className="md:h-10 md:px-4 md:text-sm"
                       onClick={() => setShowTransactions(true)}
                     >
-                      <Calendar className="mr-2 h-4 w-4" />
+                      <Calendar className="mr-2 h-4 w-4 md:h-5 md:w-5" />
                       Transactions
                     </Button>
 
                     <Button
                       variant="outline"
                       size="sm"
+                      className="md:h-10 md:px-4 md:text-sm"
                       onClick={() => {
                         setIsEditMode(true);
                         setStallBeingEdited(selectedStall);
@@ -1035,16 +1083,17 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                         setIsCreateOpen(true);
                       }}
                     >
-                      <Pencil className="mr-2 h-4 w-4" /> Edit
+                      <Pencil className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Edit
                     </Button>
 
                     <Button
                       variant="destructive"
                       size="sm"
+                      className="md:h-10 md:px-4 md:text-sm"
                       disabled={userRole !== "admin"}
                       onClick={() => setStallToDelete(selectedStall)}
                     >
-                      <Archive className="mr-2 h-4 w-4" /> Archive
+                      <Archive className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Archive
                     </Button>
                   </div>
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Navigation } from "@/components/Navigation.tsx";
 import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection";
@@ -72,6 +72,7 @@ const Index = () => {
   const [user, setUser] = useState<any>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [newCollections, setNewCollections] = useState(0);
+  const [realtimeStatus, setRealtimeStatus] = useState<string>("CONNECTING");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
     if (typeof localStorage === "undefined") return null;
     return localStorage.getItem("collectorAvatarUrl");
@@ -107,6 +108,7 @@ const Index = () => {
   const [registerPasswordVisible, setRegisterPasswordVisible] = useState(false);
   const [registerConfirmVisible, setRegisterConfirmVisible] = useState(false);
   const { toast } = useToast();
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // ✅ Check for active session
   useEffect(() => {
@@ -284,6 +286,15 @@ const Index = () => {
 
   const refreshData = useCallback(() => setDataVersion((v) => v + 1), []);
 
+  const debouncedRefresh = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = setTimeout(() => {
+      refreshData();
+    }, 500);
+  }, [refreshData]);
+
   // ✅ Real-time Data Sync
   useEffect(() => {
     if (!user?.id) return;
@@ -295,7 +306,7 @@ const Index = () => {
         { event: "*", schema: "public", table: "invoices" },
         (payload) => {
           console.log("🔔 Realtime Invoice Update:", payload);
-          refreshData();
+          debouncedRefresh();
 
           // Notify Admin when a payment is marked as PAID
           if (user?.user_metadata?.role === "admin") {
@@ -321,17 +332,18 @@ const Index = () => {
         { event: "*", schema: "public", table: "vendors" },
         (payload) => {
           console.log("🔔 Realtime Vendor Update:", payload);
-          refreshData();
+          debouncedRefresh();
         }
       )
       .subscribe((status) => {
         console.log("📡 Realtime Status:", status);
+        setRealtimeStatus(status);
       });
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, toast, refreshData]);
+  }, [user?.id, toast, debouncedRefresh]);
 
   // ✅ Load ALL invoices for reports
   // This runs on mount and when dataVersion changes (manual refresh or vendor change)
@@ -340,7 +352,7 @@ const Index = () => {
       const { data, error } = await supabase
         .from("invoices")
         .select(
-          "id, vendor_id, vendor_name, stall_name, amount, due_date, status, paid_at, payment_type, collector_name, notes, stall_type, receipt_number"
+          "id, vendor_id, vendor_name, stall_name, amount, due_date, status, paid_at, payment_type, collector_name, collector_id, notes, stall_type, receipt_number"
         );
 
       if (!error) {
@@ -744,7 +756,7 @@ const handleForgotPassword = async (
           />
         );
       case "history":
-        return <PaymentHistory stalls={rawStalls} invoices={allInvoices} userRole={user?.user_metadata?.role ?? ""} />;
+        return <PaymentHistory stalls={rawStalls} invoices={allInvoices} userRole={user?.user_metadata?.role ?? ""} userId={user?.id} />;
       case "stalls":
         return (
           <StallManagement
@@ -753,6 +765,7 @@ const handleForgotPassword = async (
             userRole={user?.user_metadata?.role ?? ""}
             userName={user?.user_metadata?.full_name ?? ""}
             userId={user?.id}
+            invoices={allInvoices}
           />
         );
       case "reports":
@@ -784,6 +797,7 @@ const handleForgotPassword = async (
             onBack={() => setCurrentPage("dashboard")}
             avatarUrl={avatarUrl}
             onAvatarChange={setAvatarUrl}
+            invoices={allInvoices}
           />
         );
       default:
@@ -1380,6 +1394,7 @@ const handleForgotPassword = async (
             userUsername={user?.email?.split("@")[0]}
             unreadNotifications={unreadNotifications}
             newCollections={newCollections}
+            realtimeStatus={realtimeStatus}
           />
         </div>
 

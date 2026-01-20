@@ -49,6 +49,7 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
+  SheetFooter,
 } from "@/components/ui/sheet";
 import { format } from "date-fns";
 import { columns as createDesktopColumns, createMobileColumns } from "./unpaid-dues-columns";
@@ -65,6 +66,7 @@ export interface Invoice {
   stall_type?: string | null;
   payment_type?: string | null;
   collector_name?: string | null;
+  collector_id?: string | null;
   notes?: string | null;
   receipt_number?: string | null;
 }
@@ -204,16 +206,30 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [collectorName, setCollectorName] = useState("Unknown Collector");
+  const [collectorId, setCollectorId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [isMobile, setIsMobile] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
 
+  const [selectedInvoicesInDialog, setSelectedInvoicesInDialog] = useState<Set<number>>(new Set());
   const [activeTypeIndex, setActiveTypeIndex] = useState(0);
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
   const [selectedStallForCalendar, setSelectedStallForCalendar] = useState<GroupedStallData | null>(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
+
+  const generateReceiptNo = () => `DPM-${Math.floor(100000 + Math.random() * 900000)}`;
+
+  const sendSmsReceipt = async (receiptNumber: string, contactNumber: string) => {
+    try {
+      await supabase.functions.invoke("send-sms-receipt", {
+        body: { receiptNumber },
+      });
+    } catch (err) {
+      console.error("Failed to send SMS:", err);
+    }
+  };
 
   // Detect mobile viewport
   useEffect(() => {
@@ -225,6 +241,12 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  useEffect(() => {
+    if (selectedStallForCalendar) {
+      setSelectedInvoicesInDialog(new Set());
+    }
+  }, [selectedStallForCalendar]);
 
   const invoices = useMemo(() => {
     if (externalInvoices) {
@@ -264,6 +286,9 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   useEffect(() => {
     const fetchCollector = async () => {
       const { data } = await supabase.auth.getUser();
+      if (data.user) {
+        setCollectorId(data.user.id);
+      }
       const meta = data.user?.user_metadata;
       const resolved =
         meta?.full_name ||
@@ -290,6 +315,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
 
     if (!invoiceToPay) return;
     setMarking(id);
+    const receiptNumber = generateReceiptNo();
 
     const { data: vendorData } = await supabase
       .from("vendors")
@@ -303,6 +329,8 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         status: "paid",
         paid_at: new Date().toISOString(),
         collector_name: collectorName,
+        collector_id: collectorId,
+        receipt_number: receiptNumber,
       })
       .eq("id", id);
   
@@ -313,6 +341,10 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         variant: "destructive",
       });
     } else {
+      if (vendorData?.contact) {
+        sendSmsReceipt(receiptNumber, vendorData.contact);
+      }
+
       if (vendorData && invoiceToPay.due_date) {
         const dueDate = new Date(invoiceToPay.due_date);
         const nextDue = new Date(dueDate);
@@ -328,6 +360,16 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
           next_due: nextDue.toISOString().split('T')[0],
           status: 'current'
         }).eq('id', invoiceToPay.vendor_id);
+      }
+
+      // Log Activity
+      if (collectorId) {
+        await supabase.from("activity_logs").insert({
+          user_id: collectorId,
+          user_name: collectorName,
+          action: "PAY_UNPAID_DUE",
+          details: `Marked invoice #${id} as paid for ${invoiceToPay.vendor_name} (${invoiceToPay.stall_name})`
+        });
       }
 
       toast({
@@ -358,6 +400,88 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     setMarking(null);
   };  
 
+  const totalSelectedAmount = useMemo(() => {
+    if (!selectedStallForCalendar) return 0;
+    return selectedStallForCalendar.invoices.reduce((sum, inv) => {
+      if (selectedInvoicesInDialog.has(inv.id)) {
+        return sum + inv.amount;
+      }
+      return sum;
+    }, 0);
+  }, [selectedInvoicesInDialog, selectedStallForCalendar]);
+
+  const handleToggleInvoiceSelection = (invoiceId: number) => {
+    setSelectedInvoicesInDialog(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(invoiceId)) {
+        newSet.delete(invoiceId);
+      } else {
+        newSet.add(invoiceId);
+      }
+      return newSet;
+    });
+  };
+
+  const handlePaySelectedInvoices = async () => {
+    const selectedIds = Array.from(selectedInvoicesInDialog);
+    if (selectedIds.length === 0 || !selectedStallForCalendar) return;
+
+    setMarking(-1); // Bulk update indicator
+    const receiptNumber = generateReceiptNo();
+
+    const { error: invoiceError } = await supabase
+      .from("invoices")
+      .update({ 
+        status: "paid", 
+        paid_at: new Date().toISOString(), 
+        collector_name: collectorName,
+        collector_id: collectorId,
+        receipt_number: receiptNumber
+      })
+      .in("id", selectedIds);
+
+    if (invoiceError) {
+      toast({ title: "Payment Update Failed", description: invoiceError.message, variant: "destructive" });
+      setMarking(null);
+      return;
+    }
+
+    const paidInvoices = selectedStallForCalendar.invoices.filter(inv => selectedIds.includes(inv.id));
+    paidInvoices.sort((a, b) => new Date(b.due_date).getTime() - new Date(a.due_date).getTime());
+    const latestDueDate = new Date(paidInvoices[0].due_date);
+
+    const { data: vendorData } = await supabase.from("vendors").select("rental_type, contact").eq("id", selectedStallForCalendar.stallId).single();
+    
+    if (vendorData?.contact) {
+      sendSmsReceipt(receiptNumber, vendorData.contact);
+    }
+    const rentalType = vendorData?.rental_type || 'monthly';
+
+    const nextDue = new Date(latestDueDate);
+    if (rentalType === 'daily') nextDue.setDate(nextDue.getDate() + 1);
+    else nextDue.setMonth(nextDue.getMonth() + 1);
+
+    await supabase.from('vendors').update({
+      last_payment: new Date().toISOString().split('T')[0],
+      next_due: nextDue.toISOString().split('T')[0],
+      status: 'current'
+    }).eq('id', selectedStallForCalendar.stallId);
+
+    // Log Activity
+    if (collectorId) {
+      await supabase.from("activity_logs").insert({
+        user_id: collectorId,
+        user_name: collectorName,
+        action: "PAY_MULTIPLE_DUES",
+        details: `Paid ${selectedIds.length} invoices for ${selectedStallForCalendar.vendorName} (${selectedStallForCalendar.stallName})`
+      });
+    }
+
+    toast({ title: "Payment Recorded", description: `${selectedIds.length} invoice(s) paid for ${selectedStallForCalendar.vendorName}.` });
+    setSelectedStallForCalendar(null);
+    setMarking(null);
+  };
+
   const handleBulkPay = async () => {
     const selectedIndices = Object.keys(rowSelection).map(Number);
     const selectedInvoices = selectedIndices.map(idx => visibleInvoices[idx]).filter(Boolean);
@@ -368,6 +492,7 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
     if (!confirm) return;
 
     setMarking(-1);
+    const receiptNumber = generateReceiptNo();
 
     const { error } = await supabase
       .from("invoices")
@@ -375,12 +500,24 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
         status: "paid",
         paid_at: new Date().toISOString(),
         collector_name: collectorName,
+        collector_id: collectorId,
+        receipt_number: receiptNumber,
       })
       .in("id", selectedInvoices.map(inv => inv.id));
 
     if (error) {
       toast({ title: "Bulk Update Failed", description: error.message, variant: "destructive" });
     } else {
+      // Log Activity
+      if (collectorId) {
+        await supabase.from("activity_logs").insert({
+          user_id: collectorId,
+          user_name: collectorName,
+          action: "BULK_PAY_DUES",
+          details: `Bulk paid ${selectedInvoices.length} invoices`
+        });
+      }
+
       toast({ 
         title: "Bulk Payment Recorded", 
         description: `${selectedInvoices.length} invoice${selectedInvoices.length > 1 ? 's' : ''} marked as paid.` 
@@ -409,6 +546,16 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
   const isOverdue = (dueDate: string) => {
     return new Date(dueDate) < new Date() && !new Date(dueDate).toDateString().includes(new Date().toDateString());
   }
+
+  const handleSelectOverdue = () => {
+    if (!selectedStallForCalendar) return;
+    const overdueIds = new Set(
+      selectedStallForCalendar.invoices
+        .filter(inv => isOverdue(inv.due_date))
+        .map(inv => inv.id)
+    );
+    setSelectedInvoicesInDialog(overdueIds);
+  };
 
   const resolveStallMeta = (invoice: Invoice) => {
     const rawType = invoice.stall_type?.trim() ?? "";
@@ -833,61 +980,202 @@ export const UnpaidDues = ({ invoices: externalInvoices }: UnpaidDuesProps) => {
       </div>
 
       {/* CALENDAR DIALOG */}
-      <Dialog open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallForCalendar(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{selectedStallForCalendar?.stallName} - Unpaid Dates</DialogTitle>
-            <DialogDescription>
-              Vendor: {selectedStallForCalendar?.vendorName}
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="border rounded-lg p-3 bg-card">
-            <div className="flex items-center justify-between mb-4">
-              <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <div className="font-semibold">
-                {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+      {isMobile ? (
+        <Sheet open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallForCalendar(null)}>
+          <SheetContent side="bottom" className="h-[85vh] flex flex-col rounded-t-xl p-0 gap-0">
+            <SheetHeader className="p-4 border-b text-left">
+              <SheetTitle>{selectedStallForCalendar?.stallName}</SheetTitle>
+              <SheetDescription>
+                Vendor: {selectedStallForCalendar?.vendorName}
+                <br />
+                Select unpaid dates to process payment.
+              </SheetDescription>
+            </SheetHeader>
+            
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="border rounded-lg p-3 bg-card mb-4">
+                <div className="flex items-center justify-between mb-4">
+                  <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <div className="font-semibold">
+                    {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1 text-center mb-2 text-xs font-medium text-muted-foreground">
+                  {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => <div key={d}>{d}</div>)}
+                </div>
+                
+                <div className="grid grid-cols-7 gap-1">
+                  {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => <div key={`empty-${i}`} />)}
+                  {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
+                    const day = i + 1;
+                    const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    const hasUnpaid = selectedStallForCalendar?.invoices.some(inv => inv.due_date === dateStr);
+                    
+                    return (
+                      <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs ${hasUnpaid ? 'bg-destructive text-destructive-foreground font-bold' : 'hover:bg-muted'}`}>
+                        {day}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+
+               <div className="flex flex-col gap-3 mb-4">
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => {
+                      if (selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length) {
+                        setSelectedInvoicesInDialog(new Set());
+                      } else {
+                        const allIds = new Set(selectedStallForCalendar?.invoices.map(i => i.id));
+                        setSelectedInvoicesInDialog(allIds);
+                      }
+                    }}
+                  >
+                    {selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length ? 'Deselect All' : 'Select All'}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="flex-1"
+                    onClick={handleSelectOverdue}
+                  >
+                    Select Overdue
+                  </Button>
+                </div>
+                <div className="text-xs text-muted-foreground text-right">{selectedInvoicesInDialog.size} selected</div>
+              </div>
+
+              <div className="space-y-2">
+                {selectedStallForCalendar?.invoices.sort((a,b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()).map(inv => {
+                  const isSelected = selectedInvoicesInDialog.has(inv.id);
+                  return (
+                    <div key={inv.id} className={`flex justify-between items-center p-3 border rounded-lg text-sm cursor-pointer transition-colors ${isSelected ? 'bg-primary/10 border-primary' : 'hover:bg-muted/50'}`} onClick={() => handleToggleInvoiceSelection(inv.id)}>
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" checked={isSelected} readOnly className="h-5 w-5 accent-primary pointer-events-none" />
+                        <span>{format(new Date(inv.due_date), 'MMM dd, yyyy')}</span>
+                      </div>
+                      <span className="font-bold text-destructive">₱{inv.amount.toLocaleString()}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="grid grid-cols-7 gap-1 text-center mb-2 text-xs font-medium text-muted-foreground">
-              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => <div key={d}>{d}</div>)}
+            <div className="p-4 border-t bg-background">
+               <div className="flex gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => setSelectedStallForCalendar(null)}>Cancel</Button>
+                  <Button className="flex-1" onClick={handlePaySelectedInvoices} disabled={selectedInvoicesInDialog.size === 0 || marking !== null}>
+                    {marking !== null ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Pay (₱{totalSelectedAmount.toLocaleString()})
+                  </Button>
+               </div>
             </div>
+          </SheetContent>
+        </Sheet>
+      ) : (
+        <Dialog open={!!selectedStallForCalendar} onOpenChange={(open) => !open && setSelectedStallForCalendar(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{selectedStallForCalendar?.stallName} - Unpaid Dates</DialogTitle>
+              <DialogDescription>
+                Vendor: {selectedStallForCalendar?.vendorName}
+              </DialogDescription>
+            </DialogHeader>
             
-            <div className="grid grid-cols-7 gap-1">
-              {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => <div key={`empty-${i}`} />)}
-              {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
-                const day = i + 1;
-                const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const hasUnpaid = selectedStallForCalendar?.invoices.some(inv => inv.due_date === dateStr);
-                
+            <div className="border rounded-lg p-3 bg-card">
+              <div className="flex items-center justify-between mb-4">
+                <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() - 1)))}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <div className="font-semibold">
+                  {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setCalendarDate(new Date(calendarDate.setMonth(calendarDate.getMonth() + 1)))}>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-7 gap-1 text-center mb-2 text-xs font-medium text-muted-foreground">
+                {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => <div key={d}>{d}</div>)}
+              </div>
+              
+              <div className="grid grid-cols-7 gap-1">
+                {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => <div key={`empty-${i}`} />)}
+                {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
+                  const day = i + 1;
+                  const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                  const hasUnpaid = selectedStallForCalendar?.invoices.some(inv => inv.due_date === dateStr);
+                  
+                  return (
+                    <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs ${hasUnpaid ? 'bg-destructive text-destructive-foreground font-bold' : 'hover:bg-muted'}`}>
+                      {day}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center mt-4 gap-2">
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length) {
+                      setSelectedInvoicesInDialog(new Set());
+                    } else {
+                      const allIds = new Set(selectedStallForCalendar?.invoices.map(i => i.id));
+                      setSelectedInvoicesInDialog(allIds);
+                    }
+                  }}
+                >
+                  {selectedInvoicesInDialog.size === selectedStallForCalendar?.invoices.length ? 'Deselect All' : 'Select All'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleSelectOverdue}
+                >
+                  Select Overdue
+                </Button>
+              </div>
+              <div className="text-sm text-muted-foreground">{selectedInvoicesInDialog.size} selected</div>
+            </div>
+
+            <div className="max-h-[200px] overflow-y-auto space-y-2 mt-2">
+              {selectedStallForCalendar?.invoices.sort((a,b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime()).map(inv => {
+                const isSelected = selectedInvoicesInDialog.has(inv.id);
                 return (
-                  <div key={day} className={`aspect-square flex items-center justify-center rounded-md text-xs ${hasUnpaid ? 'bg-destructive text-destructive-foreground font-bold' : 'hover:bg-muted'}`}>
-                    {day}
+                  <div key={inv.id} className={`flex justify-between items-center p-2 border rounded text-sm cursor-pointer transition-colors ${isSelected ? 'bg-primary/10 border-primary' : 'hover:bg-muted/50'}`} onClick={() => handleToggleInvoiceSelection(inv.id)}>
+                    <div className="flex items-center gap-3">
+                      <input type="checkbox" checked={isSelected} readOnly className="h-4 w-4 accent-primary pointer-events-none" />
+                      <span>{format(new Date(inv.due_date), 'MMM dd, yyyy')}</span>
+                    </div>
+                    <span className="font-bold text-destructive">₱{inv.amount.toLocaleString()}</span>
                   </div>
                 );
               })}
             </div>
-          </div>
-
-          <div className="max-h-[200px] overflow-y-auto space-y-2">
-            {selectedStallForCalendar?.invoices.map(inv => (
-              <div key={inv.id} className="flex justify-between items-center p-2 border rounded text-sm">
-                <span>{format(new Date(inv.due_date), 'MMM dd, yyyy')}</span>
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-destructive">₱{inv.amount.toLocaleString()}</span>
-                  <Button size="sm" variant="outline" className="h-7 px-2" onClick={() => markAsPaid(inv.id)}>Pay</Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter className="mt-4">
+              <Button variant="outline" onClick={() => setSelectedStallForCalendar(null)}>Cancel</Button>
+              <Button onClick={handlePaySelectedInvoices} disabled={selectedInvoicesInDialog.size === 0 || marking !== null}>
+                {marking !== null ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Pay Selected (₱{totalSelectedAmount.toLocaleString()})
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 };
