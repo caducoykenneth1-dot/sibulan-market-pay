@@ -1,4 +1,4 @@
-import * as React from "react";
+import * as React from "react"; 
 import {
   Dialog,
   DialogContent,
@@ -37,6 +37,11 @@ import {
   ShieldAlert,
   ShieldCheck,
   UserCircle2,
+  History,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 
 type AccountStatus = "active" | "suspended";
@@ -125,6 +130,7 @@ interface AccountProfileModalProps {
   canEdit?: boolean;
   activityLoading?: boolean;
   activityError?: string | null;
+  invoices?: any[];
 }
 
 export const AccountProfileModal: React.FC<AccountProfileModalProps> = ({
@@ -134,7 +140,9 @@ export const AccountProfileModal: React.FC<AccountProfileModalProps> = ({
   canEdit = account.role === "admin",
   activityLoading = false,
   activityError = null,
+  invoices = [],
 }) => {
+  const [calendarDate, setCalendarDate] = React.useState(new Date());
   const statusBadge =
     account.status === "active" ? (
       <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
@@ -145,6 +153,46 @@ export const AccountProfileModal: React.FC<AccountProfileModalProps> = ({
         <ShieldAlert className="mr-1 h-3.5 w-3.5" /> Suspended
       </Badge>
     );
+
+  // Group invoices by date for the history view
+  const dailyHistory = React.useMemo(() => {
+    if (!invoices || invoices.length === 0) return [];
+    
+    const groups: Record<string, { date: string; count: number; total: number }> = {};
+    
+    invoices.forEach(inv => {
+      if (inv.status === 'paid' && inv.paid_at) {
+        const date = new Date(inv.paid_at).toLocaleDateString();
+        if (!groups[date]) {
+          groups[date] = { date, count: 0, total: 0 };
+        }
+        groups[date].count += 1;
+        groups[date].total += inv.amount;
+      }
+    });
+
+    // Sort by date descending (newest first)
+    return Object.values(groups).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [invoices]);
+
+  const dailyStats = React.useMemo(() => {
+    const stats = new Map<string, { total: number; count: number }>();
+    if (!invoices) return stats;
+    
+    invoices.forEach(inv => {
+      if (inv.status === 'paid' && inv.paid_at) {
+        const d = new Date(inv.paid_at);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`;
+        
+        const current = stats.get(dateStr) || { total: 0, count: 0 };
+        stats.set(dateStr, { total: current.total + inv.amount, count: current.count + 1 });
+      }
+    });
+    return stats;
+  }, [invoices]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -297,6 +345,107 @@ export const AccountProfileModal: React.FC<AccountProfileModalProps> = ({
                 </>
               )}
             </Section>
+
+            {/* Daily Collection History Section - Only for Collectors */}
+            {account.role === 'collector' && (
+              <Section icon={<History className="h-4 w-4" />} title="Recent Daily Collections">
+                <div className="mb-4 border rounded-lg p-3 bg-card">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
+                        const d = new Date(calendarDate);
+                        d.setFullYear(d.getFullYear() - 1);
+                        setCalendarDate(d);
+                      }}>
+                        <ChevronsLeft className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
+                        const d = new Date(calendarDate);
+                        d.setMonth(d.getMonth() - 1);
+                        setCalendarDate(d);
+                      }}>
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <div className="font-semibold text-sm">
+                      {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
+                        const d = new Date(calendarDate);
+                        d.setMonth(d.getMonth() + 1);
+                        setCalendarDate(d);
+                      }}>
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
+                        const d = new Date(calendarDate);
+                        d.setFullYear(d.getFullYear() + 1);
+                        setCalendarDate(d);
+                      }}>
+                        <ChevronsRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-1 text-center mb-2">
+                    {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => (
+                      <div key={d} className="text-[10px] font-medium text-muted-foreground py-1">{d}</div>
+                    ))}
+                    {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay() }).map((_, i) => (
+                      <div key={`empty-${i}`} />
+                    ))}
+                    {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
+                      const day = i + 1;
+                      const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      const hasCollection = dailyStats.has(dateStr);
+                      const stat = dailyStats.get(dateStr);
+                      
+                      let statusClass = "hover:bg-muted";
+                      if (hasCollection) {
+                        statusClass = "bg-emerald-100 text-emerald-700 font-bold";
+                      }
+
+                      return (
+                        <div key={day} className={`aspect-square flex flex-col items-center justify-center rounded-md text-xs cursor-default ${statusClass}`} title={hasCollection ? `₱${stat?.total.toLocaleString()}` : ''}>
+                          <span>{day}</span>
+                          {hasCollection && <span className="text-[8px] leading-none">₱{(stat?.total || 0) / 1000}k</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-lg border border-border/70 flex flex-col max-h-[300px]">
+                  <div className="overflow-y-auto">
+                  <Table>
+                    <TableHeader className="bg-muted/60">
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-center">Transactions</TableHead>
+                        <TableHead className="text-right">Total Collected</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {dailyHistory.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="text-center text-muted-foreground py-4">No collection history found.</TableCell>
+                        </TableRow>
+                      ) : (
+                        dailyHistory.map((day) => (
+                          <TableRow key={day.date}>
+                            <TableCell className="font-medium">{day.date}</TableCell>
+                            <TableCell className="text-center">{day.count}</TableCell>
+                            <TableCell className="text-right font-semibold text-emerald-600">{formatCurrency(day.total)}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                  </div>
+                </div>
+              </Section>
+            )}
 
             <Separator />
 

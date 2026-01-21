@@ -43,6 +43,7 @@ export interface Account extends SupabaseUser {
 interface UserManagementProps {
   accounts: Account[];
   onAccountsChange: () => void;
+  invoices?: any[];
 }
 
 // ✅ Supabase Edge Function URL
@@ -59,6 +60,7 @@ type PendingChange = {
 export const UserManagement = ({
   accounts,
   onAccountsChange,
+  invoices = [],
 }: UserManagementProps) => {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
@@ -910,6 +912,7 @@ export const UserManagement = ({
         account={selectedProfileData ?? undefined}
         activityLoading={profileActivityLoading}
         activityError={profileActivityError}
+        invoices={profileAccount ? invoices.filter(inv => inv.collector_id === profileAccount.id) : []}
       />
     </div>
   );

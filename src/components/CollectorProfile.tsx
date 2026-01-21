@@ -196,8 +196,8 @@ export const CollectorProfile = ({
     }
   }, [showCollections, userName, toast, invoices]);
 
-  const dailyTotals = useMemo(() => {
-    const totals = new Map<string, number>();
+  const dailyStats = useMemo(() => {
+    const stats = new Map<string, { total: number; count: number }>();
     collections.forEach(c => {
       if (c.paid_at) {
         const d = new Date(c.paid_at);
@@ -205,12 +205,29 @@ export const CollectorProfile = ({
         const month = String(d.getMonth() + 1).padStart(2, '0');
         const day = String(d.getDate()).padStart(2, '0');
         const dateStr = `${year}-${month}-${day}`;
-        const currentTotal = totals.get(dateStr) || 0;
-        totals.set(dateStr, currentTotal + c.amount);
+        
+        const current = stats.get(dateStr) || { total: 0, count: 0 };
+        stats.set(dateStr, { total: current.total + c.amount, count: current.count + 1 });
       }
     });
-    return totals;
+    return stats;
   }, [collections]);
+
+  const monthlyTotal = useMemo(() => {
+    const year = calendarDate.getFullYear();
+    const month = calendarDate.getMonth();
+    let total = 0;
+    
+    collections.forEach(c => {
+      if (c.paid_at) {
+        const d = new Date(c.paid_at);
+        if (d.getFullYear() === year && d.getMonth() === month) {
+          total += c.amount;
+        }
+      }
+    });
+    return total;
+  }, [collections, calendarDate]);
 
   const handleDayClick = (day: number) => {
     const date = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), day);
@@ -218,12 +235,19 @@ export const CollectorProfile = ({
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const dayStr = String(date.getDate()).padStart(2, '0');
     const dateStr = `${year}-${month}-${dayStr}`;
-    const total = dailyTotals.get(dateStr);
-    if (total !== undefined) {
-      setSelectedDayInfo({ date, total });
+    const stat = dailyStats.get(dateStr);
+    if (stat !== undefined) {
+      setSelectedDayInfo({ date, total: stat.total });
       setIsDayDialogOpen(true);
     }
   };
+
+  // Convert stats map to array for table display, sorted by date descending
+  const sortedHistory = useMemo(() => {
+    return Array.from(dailyStats.entries())
+      .map(([date, stat]) => ({ date, ...stat }))
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [dailyStats]);
 
  return (
     <div className="space-y-6">
@@ -336,7 +360,8 @@ export const CollectorProfile = ({
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <div className="mb-4 border rounded-lg p-3 bg-card">
+            <div className="space-y-4">
+            <div className="border rounded-lg p-3 bg-card">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-1">
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
@@ -355,7 +380,10 @@ export const CollectorProfile = ({
                   </Button>
                 </div>
                 <div className="font-semibold text-sm">
-                  {calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                  <div className="text-center">
+                    <div>{calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })}</div>
+                    <div className="text-xs text-emerald-600 font-normal">Total: ₱{monthlyTotal.toLocaleString()}</div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-1">
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
@@ -385,7 +413,7 @@ export const CollectorProfile = ({
                 {Array.from({ length: new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate() }).map((_, i) => {
                   const day = i + 1;
                   const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const hasCollection = dailyTotals.has(dateStr);
+                  const hasCollection = dailyStats.has(dateStr);
                   
                   let statusClass = "hover:bg-muted";
                   if (hasCollection) {
@@ -402,6 +430,31 @@ export const CollectorProfile = ({
               <div className="flex gap-4 text-[10px] justify-center text-muted-foreground">
                 <div className="flex items-center gap-1"><div className="w-2 h-2 bg-emerald-100 rounded-full"></div> Collection Day</div>
               </div>
+            </div>
+
+            {/* List View for Reconciliation */}
+            <div className="border rounded-lg overflow-hidden">
+              <div className="bg-muted/50 px-4 py-2 text-xs font-medium text-muted-foreground border-b flex justify-between">
+                <span>Date</span>
+                <div className="flex gap-8">
+                  <span>Count</span>
+                  <span className="w-20 text-right">Total</span>
+                </div>
+              </div>
+              <div className="max-h-[200px] overflow-y-auto">
+                {sortedHistory.map((item) => (
+                  <div key={item.date} className="px-4 py-2 text-sm border-b last:border-0 flex justify-between items-center hover:bg-muted/20">
+                    <span className="font-medium">{new Date(item.date).toLocaleDateString()}</span>
+                    <div className="flex gap-8">
+                      <span className="text-muted-foreground w-8 text-center">{item.count}</span>
+                      <span className="w-20 text-right font-semibold text-emerald-600">
+                        ₱{item.total.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
             </div>
           )}
         </DialogContent>

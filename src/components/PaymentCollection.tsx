@@ -421,12 +421,12 @@ export const PaymentCollection = ({
     }
     // If it's daily, calculate based on duration, otherwise just rentAmount
     const dur = typeof duration === 'number' ? duration : (parseInt(duration as string) || 0);
-    if (selectedStall.rentalType === 'daily') {
-        const total = selectedStall.rentAmount * dur;
-        setPaymentData((prev) => ({ ...prev, amount: dur > 0 ? String(total) : "" }));
-    } else {
-        setPaymentData((prev) => ({ ...prev, amount: String(selectedStall.rentAmount) }));
-    }
+    
+    // Calculate total based on rate * duration for BOTH daily and monthly
+    // This ensures centavos are handled correctly (e.g. 26.25 * 3 = 78.75)
+    const total = selectedStall.rentAmount * dur;
+    // Fix to 2 decimal places to prevent floating point errors (e.g. 78.75000001)
+    setPaymentData((prev) => ({ ...prev, amount: dur > 0 ? total.toFixed(2) : "" }));
   }, [selectedStall, duration]);
 
   // Reset duration when stall changes explicitly
@@ -483,7 +483,7 @@ export const PaymentCollection = ({
     const paymentTimestamp = new Date();
     const currentReceiptNo = generateReceiptNo();
     const dur = typeof duration === 'number' ? duration : (parseInt(duration as string) || 1);
-    const loopCount = selectedStall.rentalType === 'daily' ? dur : 1;
+    const loopCount = dur; // Allow multiple periods for both daily and monthly
 
     if (!isOnline) {
       const newPayment: QueuedPayment = {
@@ -746,17 +746,35 @@ export const PaymentCollection = ({
     // Start from the date we just paid off (nextEligibleDate)
     let nextDueDate = new Date(nextEligibleDate!);
 
+    // Helper to get days in a month
+    const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
+
     if (selectedStall.rentalType === "daily") {
       nextDueDate.setDate(nextDueDate.getDate() + loopCount);
     } else {
-      nextDueDate.setMonth(nextDueDate.getMonth() + loopCount);
-      // Preserve the original due day (e.g., 15th) if available
+      // Robust monthly increment handling end-of-month logic
+      const currentYear = nextDueDate.getFullYear();
+      const currentMonth = nextDueDate.getMonth();
+      
+      // Determine the target day of the month
+      let targetDay = nextDueDate.getDate();
+      
+      // If we have an original due date (e.g. 31st), try to stick to it
       if (selectedStall.nextDue) {
         const oldDue = new Date(selectedStall.nextDue);
         if (!isNaN(oldDue.getTime())) {
-          nextDueDate.setDate(oldDue.getDate());
+          targetDay = oldDue.getDate();
         }
       }
+
+      // Calculate target year and month
+      const targetDate = new Date(currentYear, currentMonth + loopCount, 1);
+      const daysInTargetMonth = getDaysInMonth(targetDate.getFullYear(), targetDate.getMonth());
+      
+      // Clamp day to valid range for the target month (e.g. Jan 31 -> Feb 28)
+      const finalDay = Math.min(targetDay, daysInTargetMonth);
+      
+      nextDueDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), finalDay);
     }
 
     // ✅ FIX: Use local date components to avoid timezone shifts (toISOString uses UTC)
@@ -764,6 +782,14 @@ export const PaymentCollection = ({
     const month = String(nextDueDate.getMonth() + 1).padStart(2, "0");
     const day = String(nextDueDate.getDate()).padStart(2, "0");
     const nextDueDateString = `${year}-${month}-${day}`;
+
+    // Calculate Last Payment Date (Coverage Based) = Next Due Date - 1 Day
+    const lastCoveredDate = new Date(nextDueDate);
+    lastCoveredDate.setDate(lastCoveredDate.getDate() - 1);
+    const lcYear = lastCoveredDate.getFullYear();
+    const lcMonth = String(lastCoveredDate.getMonth() + 1).padStart(2, "0");
+    const lcDay = String(lastCoveredDate.getDate()).padStart(2, "0");
+    const lastPaymentDateString = `${lcYear}-${lcMonth}-${lcDay}`;
 
     const updatedStatus = computeStatusFromDueDate(
       nextDueDateString,
@@ -775,7 +801,7 @@ export const PaymentCollection = ({
     const { data: updateData, error: vendorUpdateError } = await supabase
       .from("vendors")
       .update({
-        last_payment: paymentDateString,
+        last_payment: lastPaymentDateString, // Updated to coverage date
         next_due: nextDueDateString,
         status: updatedStatus,
       })
@@ -1164,14 +1190,16 @@ export const PaymentCollection = ({
               </div>
             )}
 
-            {selectedStall && selectedStall.rentalType === 'daily' && (
+            {selectedStall && (
               <div className="animate-in fade-in slide-in-from-top-1">
-                <Label htmlFor="duration">Number of Days</Label>
+                <Label htmlFor="duration">
+                  {selectedStall.rentalType === 'daily' ? 'Number of Days' : 'Number of Months'}
+                </Label>
                 <Input
                   id="duration"
                   type="number"
-                  min={0}
-                  max={365}
+                  min={1}
+                  max={selectedStall.rentalType === 'daily' ? 365 : 12}
                   value={duration}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -1180,22 +1208,34 @@ export const PaymentCollection = ({
                   }}
                 />
                 <div className="flex gap-2 mt-2">
-                  <Button type="button" size="sm" variant="outline" onClick={() => setDuration(7)} className="flex-1">1 Week</Button>
-                  <Button type="button" size="sm" variant="outline" onClick={() => setDuration(30)} className="flex-1">1 Month</Button>
+                  {selectedStall.rentalType === 'daily' ? (
+                    <>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setDuration(7)} className="flex-1">1 Week</Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setDuration(30)} className="flex-1">1 Month</Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setDuration(3)} className="flex-1">1 Quarter</Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setDuration(12)} className="flex-1">1 Year</Button>
+                    </>
+                  )}
                 </div>
               </div>
             )}
 
             <div>
-              <Label htmlFor="amount">Amount (PHP)</Label>
+              <Label htmlFor="amount">Total Amount (PHP)</Label>
               <Input
                 id="amount"
                 type="number"
-                min={0}
                 value={paymentData.amount}
-                onChange={(event) => setPaymentData({ ...paymentData, amount: event.target.value })}
+                readOnly
+                className="bg-muted font-bold text-lg"
                 placeholder="0.00"
               />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Calculated automatically: {selectedStall ? `₱${selectedStall.rentAmount.toFixed(2)}` : 'Rate'} × {duration || 0}
+              </p>
             </div>
           </div>
 

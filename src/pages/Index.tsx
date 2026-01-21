@@ -811,7 +811,7 @@ const handleForgotPassword = async (
         return <Reports stalls={stalls} invoices={allInvoices} />;
       case "users":
         return (
-          <UserManagement accounts={accounts} onAccountsChange={refreshData} />
+          <UserManagement accounts={accounts} onAccountsChange={refreshData} invoices={allInvoices} />
         );
       case "archived":
         return (

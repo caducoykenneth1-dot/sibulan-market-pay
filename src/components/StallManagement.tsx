@@ -80,6 +80,9 @@ import {
   ChevronsRight,
   MoveHorizontal,
   ClipboardList,
+  UserMinus,
+  UserPlus,
+  Layers,
 } from "lucide-react";
 
 /* ======================================================================
@@ -176,9 +179,21 @@ async function generateMonthlyInvoices() {
         if (stall.rental_type === 'daily') {
             currentDueDate.setUTCDate(currentDueDate.getUTCDate() + 1);
         } else {
-            // This logic correctly handles monthly increments, even across year boundaries
-            // and for months with different numbers of days (e.g., Jan 31 -> Feb 28/29).
-            currentDueDate.setUTCMonth(currentDueDate.getUTCMonth() + 1);
+            // Robust monthly increment
+            const currentMonth = currentDueDate.getUTCMonth();
+            const currentDay = currentDueDate.getUTCDate();
+            
+            // Move to first day of next month
+            currentDueDate.setUTCMonth(currentMonth + 1, 1);
+            
+            // Try to set back to original day, or last day of that month if it doesn't exist
+            const daysInNextMonth = new Date(Date.UTC(currentDueDate.getUTCFullYear(), currentDueDate.getUTCMonth() + 1, 0)).getUTCDate();
+            
+            // If we started on 31st, and next month has 30, use 30. 
+            // Note: This simple logic assumes we want to stick to the previous due day. 
+            // For strict original-day adherence (e.g. always 31st), we'd need the original anchor date.
+            // Here we stick to "same day or last day of month".
+            currentDueDate.setUTCDate(Math.min(currentDay, daysInNextMonth));
         }
     }
 
@@ -257,11 +272,33 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
   const [isDayDialogOpen, setIsDayDialogOpen] = useState(false);
   const [pendingRegistrations, setPendingRegistrations] = useState<any[]>([]);
   const [isPendingRegistrationsOpen, setIsPendingRegistrationsOpen] = useState(false);
+  const [stallToVacate, setStallToVacate] = useState<any>(null);
+  const [isBulkCreateOpen, setIsBulkCreateOpen] = useState(false);
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
+  const [bulkFormState, setBulkFormState] = useState({
+    type: "",
+    rentAmount: "",
+    rentalType: "monthly",
+    count: "1",
+  });
 
   // Touch state for swiping
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
   const [activeTypeIndex, setActiveTypeIndex] = useState(0);
+
+  // Helper to determine status based on date
+  const deriveStatus = (nextDue: string): string => {
+    if (!nextDue) return "current"; // Default for new occupied stalls until date is set
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const due = new Date(nextDue);
+    due.setHours(0, 0, 0, 0);
+
+    if (due < today) return "overdue";
+    if (due.getTime() === today.getTime()) return "due";
+    return "current";
+  };
 
   useEffect(() => {
     if (showTransactions && selectedStall) {
@@ -497,6 +534,76 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
     } else {
       setPendingRegistrations(prev => prev.filter(p => p.id !== id));
       toast({ title: "Rejected", description: "Registration request rejected." });
+    }
+  };
+
+  const handleVacateStall = async () => {
+    if (!stallToVacate) return;
+
+    try {
+      await updateStall(stallToVacate.dbId, {
+        vendor: "",
+        contact: "",
+        status: "vacant",
+        lastPayment: null,
+        nextDue: null,
+      });
+
+      await supabase.from("activity_logs").insert({
+        user_id: userId,
+        user_name: userName,
+        action: "VACATE_STALL",
+        details: `Vacated stall ${stallToVacate.name} (Previous: ${stallToVacate.vendor})`
+      });
+
+      toast({ title: "Stall Vacated", description: "Vendor removed and stall marked as vacant." });
+      onStallsChange();
+      setStallToVacate(null);
+      setSelectedStall(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const handleBulkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsBulkSubmitting(true);
+
+    try {
+      const count = parseInt(bulkFormState.count);
+      const rent = parseFloat(bulkFormState.rentAmount);
+      
+      if (count <= 0) throw new Error("Count must be greater than 0");
+      if (!bulkFormState.type) throw new Error("Please select a stall type");
+
+      const rows = Array.from({ length: count }).map(() => ({
+        vendor: "",
+        contact: "",
+        type: bulkFormState.type,
+        monthly_rent: rent,
+        rental_type: bulkFormState.rentalType,
+        status: "vacant",
+        last_payment: null,
+        next_due: null,
+      }));
+
+      const { error } = await supabase.from("vendors").insert(rows);
+      if (error) throw error;
+
+      await supabase.from("activity_logs").insert({
+        user_id: userId,
+        user_name: userName,
+        action: "BULK_CREATE_STALLS",
+        details: `Bulk created ${count} stalls (${bulkFormState.type})`
+      });
+
+      toast({ title: "Success", description: `${count} stalls created successfully.` });
+      setIsBulkCreateOpen(false);
+      onStallsChange();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setIsBulkSubmitting(false);
     }
   };
 
@@ -886,6 +993,12 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
             </Button>
           )}
 
+          {userRole?.toLowerCase() === 'admin' && (
+            <Button variant="secondary" onClick={() => setIsBulkCreateOpen(true)}>
+              <Layers className="mr-2 h-4 w-4" /> Bulk Create
+            </Button>
+          )}
+
           <Button onClick={() => setIsCreateOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> Add Stall
           </Button>
@@ -1156,7 +1269,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
         open={Boolean(selectedStall)}
         onOpenChange={(open) => (!open ? setSelectedStall(null) : null)}
       >
-        <DialogContent className="sm:max-w-lg md:max-w-3xl border-none p-0 overflow-hidden px-4">
+        <DialogContent className="w-[95vw] sm:max-w-lg md:max-w-3xl border-none p-0 overflow-hidden">
           <DialogHeader className="hidden">
             <DialogTitle>Stall Details</DialogTitle>
             <DialogDescription>Details for {selectedStall?.name}</DialogDescription>
@@ -1164,7 +1277,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
           {selectedStall && (
             <Card key={selectedStall.id} className="border-none shadow-none">
 
-              <CardHeader className="px-6 pt-6 pb-0">
+              <CardHeader className="px-4 pt-4 pb-0 md:px-6 md:pt-6">
                 <div className="flex items-start justify-between gap-3">
 
                   <CardTitle className="flex items-center gap-2 text-lg md:text-2xl">
@@ -1178,7 +1291,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                 </div>
               </CardHeader>
 
-              <CardContent className="space-y-3 text-sm md:text-base px-6 pb-6 pt-4">
+              <CardContent className="space-y-3 text-sm md:text-base px-4 pb-4 pt-4 md:px-6 md:pb-6">
                 <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 md:gap-6">
 
                   <div className="flex items-center gap-2">
@@ -1237,28 +1350,65 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                     </Button>
 
                     {(userRole?.toLowerCase() === "admin" || (userRole?.toLowerCase() === "collector" && selectedStall.section === userSection)) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="md:h-10 md:px-4 md:text-sm"
-                      onClick={() => {
-                        setIsEditMode(true);
-                        setStallBeingEdited(selectedStall);
-                        setFormState({
-                          vendor: selectedStall.vendor,
-                          contact: selectedStall.contact,
-                          type: selectedStall.type,
-                          rentAmount: selectedStall.rentAmount.toString(),
-                          rentalType: selectedStall.rentalType,
-                          status: selectedStall.status,
-                          lastPayment: selectedStall.lastPayment,
-                          nextDue: selectedStall.nextDue,
+                      <>
+                        {selectedStall.status === 'vacant' ? (
+                          <Button
+                            size="sm"
+                            className="md:h-10 md:px-4 md:text-sm bg-primary hover:bg-primary/90"
+                            onClick={() => {
+                              setIsEditMode(true);
+                              setStallBeingEdited(selectedStall);
+                              setFormState({
+                                vendor: "",
+                                contact: "",
+                                type: selectedStall.type,
+                                rentAmount: selectedStall.rentAmount.toString(),
+                                rentalType: selectedStall.rentalType,
+                                status: "current", // Default to occupied
+                                lastPayment: "", // Empty implies no payment yet
+                                nextDue: new Date().toISOString().split('T')[0], // Default start date to Today
+                              });
+                              setIsCreateOpen(true);
+                            }}
+                          >
+                            <UserPlus className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Assign Vendor
+                          </Button>
+                        ) : (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="md:h-10 md:px-4 md:text-sm"
+                              onClick={() => {
+                                setIsEditMode(true);
+                                setStallBeingEdited(selectedStall);
+                                setFormState({
+                                  vendor: selectedStall.vendor,
+                                  contact: selectedStall.contact,
+                                  type: selectedStall.type,
+                                  rentAmount: selectedStall.rentAmount.toString(),
+                                  rentalType: selectedStall.rentalType,
+                                  status: selectedStall.status,
+                                  lastPayment: selectedStall.lastPayment,
+                                  nextDue: selectedStall.nextDue,
                         });
                         setIsCreateOpen(true);
                       }}
                     >
                       <Pencil className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Edit
                     </Button>
+
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="md:h-10 md:px-4 md:text-sm border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+                              onClick={() => setStallToVacate(selectedStall)}
+                            >
+                              <UserMinus className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Vacate
+                            </Button>
+                          </>
+                        )}
+                      </>
                     )}
 
                     {(userRole?.toLowerCase() === "admin" || (userRole?.toLowerCase() === "collector" && selectedStall.section === userSection)) && (
@@ -1305,176 +1455,253 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
             onSubmit={handleSubmit}
             className="flex-1 overflow-y-auto pr-6 pl-1 -mr-6 -ml-1 space-y-5"
           >
-            <div className="grid gap-4 sm:grid-cols-2">
+            {/* SECTION 1: ASSET DETAILS (The Physical Stall) */}
+            <div className="space-y-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b pb-2">
+                Asset Details (Physical Stall)
+              </h3>
+              <div className="grid gap-4 sm:grid-cols-2">
 
-              <div className="space-y-2">
-                <Label htmlFor="type">Stall Type</Label>
-                <Select
-                  value={formState.type}
-                  onValueChange={(v) =>
-                    setFormState({ ...formState, type: v })
-                  }
-                >
-                  <SelectTrigger id="type">
-                    <SelectValue placeholder="Select stall type" />
-                  </SelectTrigger>
+                <div className="space-y-2">
+                  <Label htmlFor="type">Stall Type</Label>
+                  <Select
+                    value={formState.type}
+                    onValueChange={(v) =>
+                      setFormState({ ...formState, type: v })
+                    }
+                  >
+                    <SelectTrigger id="type">
+                      <SelectValue placeholder="Select stall type" />
+                    </SelectTrigger>
 
-                  <SelectContent>
-                    {Object.entries(
-                      STALL_TYPES.reduce((acc, item) => {
-                        if (!acc[item.section]) acc[item.section] = [];
-                        acc[item.section].push(item);
-                        return acc;
-                      }, {})
-                    ).map(([section, types]) => (
-                      <SelectGroup key={section}>
-                        <SelectLabel>{section}</SelectLabel>
-                        {types.map((t) => (
-                          <SelectItem key={t.name} value={t.name}>
-                            {t.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ))}
-                  </SelectContent>
-                </Select>
+                    <SelectContent>
+                      {Object.entries(
+                        STALL_TYPES.reduce((acc, item) => {
+                          if (!acc[item.section]) acc[item.section] = [];
+                          acc[item.section].push(item);
+                          return acc;
+                        }, {})
+                      ).map(([section, types]) => (
+                        <SelectGroup key={section}>
+                          <SelectLabel>{section}</SelectLabel>
+                          {types.map((t) => (
+                            <SelectItem key={t.name} value={t.name}>
+                              {t.name}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="rentalType">Rental Type</Label>
+                  <Select
+                    value={formState.rentalType}
+                    onValueChange={(v) =>
+                      setFormState({ ...formState, rentalType: v })
+                    }
+                  >
+                    <SelectTrigger id="rentalType">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="daily">Daily</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Rent Amount (PHP)</Label>
+                  <div className="flex items-start gap-1">
+                    <div className="flex-1">
+                      <Input
+                        id="rent-pesos"
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        value={formState.rentAmount.split('.')[0]}
+                        onChange={(e) => {
+                          const pesos = e.target.value;
+                          const parts = formState.rentAmount.split('.');
+                          const centavos = parts.length > 1 ? parts[1] : "";
+                          setFormState({
+                            ...formState,
+                            rentAmount: centavos ? `${pesos}.${centavos}` : pesos,
+                          });
+                        }}
+                      />
+                      <p className="text-[10px] text-muted-foreground mt-1">Pesos</p>
+                    </div>
+                    <span className="text-xl font-bold pt-1">.</span>
+                    <div className="w-20">
+                      <Input
+                        id="rent-centavos"
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={2}
+                        placeholder="00"
+                        value={formState.rentAmount.split('.')[1] || ""}
+                        onChange={(e) => {
+                          let val = e.target.value.replace(/\D/g, '');
+                          if (val.length > 2) val = val.slice(0, 2);
+                          
+                          const pesos = formState.rentAmount.split('.')[0] || "0";
+                          setFormState({
+                            ...formState,
+                            rentAmount: `${pesos}.${val}`,
+                          });
+                        }}
+                      />
+                      <p className="text-[10px] text-muted-foreground mt-1">Centavos</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="status">Status</Label>
+                  <Select
+                    value={formState.status}
+                    onValueChange={(v) =>
+                      setFormState((prev) => {
+                        const isVacating = v === "vacant" || v === "archived";
+                        // If switching to occupied (current/due/overdue), recalculate based on date
+                        const newStatus = isVacating ? v : (prev.nextDue ? deriveStatus(prev.nextDue) : "current");
+                        
+                        return {
+                          ...prev,
+                          status: newStatus,
+                          vendor: isVacating ? "" : prev.vendor,
+                          contact: isVacating ? "" : prev.contact,
+                          lastPayment: isVacating ? "" : prev.lastPayment,
+                          nextDue: isVacating ? "" : prev.nextDue,
+                        };
+                      })
+                    }
+                  >
+                    <SelectTrigger id="status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="current">Current (Occupied)</SelectItem>
+                      <SelectItem value="due">Due (Occupied)</SelectItem>
+                      <SelectItem value="overdue">Overdue (Occupied)</SelectItem>
+                      <SelectItem value="vacant">Vacant (Empty)</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
+            </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="status">Status</Label>
-                <Select
-                  value={formState.status}
-                  onValueChange={(v) =>
-                    setFormState((prev) => ({
-                      ...prev,
-                      status: v,
-                      vendor:
-                        v === "vacant" || v === "archived"
-                          ? ""
-                          : prev.vendor,
-                      contact:
-                        v === "vacant" || v === "archived"
-                          ? ""
-                          : prev.contact,
-                    }))
-                  }
-                >
-                  <SelectTrigger id="status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="current">Current</SelectItem>
-                    <SelectItem value="due">Due</SelectItem>
-                    <SelectItem value="overdue">Overdue</SelectItem>
-                    <SelectItem value="vacant">Vacant</SelectItem>
-                    <SelectItem value="archived">Archived</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            {/* SECTION 2: OCCUPANCY DETAILS (The Vendor) */}
+            <div className="space-y-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b pb-2">
+                Occupancy Details (Vendor)
+              </h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="vendor">Vendor Name</Label>
+                  <Input
+                    id="vendor"
+                    value={formState.vendor}
+                    onChange={(e) =>
+                      setFormState({
+                        ...formState,
+                        vendor: e.target.value,
+                      })
+                    }
+                    placeholder={formState.status === "vacant" ? "Stall is vacant" : "Enter vendor name"}
+                    disabled={formState.status === "vacant"}
+                  />
+                  {isEditMode && formState.status !== "vacant" && (
+                    <p className="text-[10px] text-amber-600 flex items-center gap-1 mt-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Only edit to correct spelling. For a new tenant, use "Vacate" then "Assign".
+                    </p>
+                  )}
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="rentalType">Rental Type</Label>
-                <Select
-                  value={formState.rentalType}
-                  onValueChange={(v) =>
-                    setFormState({ ...formState, rentalType: v })
-                  }
-                >
-                  <SelectTrigger id="rentalType">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="daily">Daily</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="contact">Contact Number</Label>
+                  <Input
+                    id="contact"
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={11}
+                    value={formState.contact}
+                    onChange={(e) => {
+                      const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 11);
+                      setFormState({
+                        ...formState,
+                        contact: digitsOnly,
+                      });
+                    }}
+                    placeholder="09XXXXXXXXX"
+                    disabled={formState.status === "vacant"}
+                  />
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="rent">Rent Amount (PHP)</Label>
-                <Input
-                  id="rent"
-                  type="number"
-                  min={0}
-                  value={formState.rentAmount}
-                  onChange={(e) =>
-                    setFormState({
-                      ...formState,
-                      rentAmount: e.target.value,
-                    })
-                  }
-                  required
-                />
-              </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="lastPayment">Last Payment Date (Coverage End)</Label>
+                  <Input
+                    id="lastPayment"
+                    type="date"
+                    value={formState.lastPayment}
+                    disabled={formState.status === "vacant"}
+                    onChange={(e) => {
+                      const newLastPayment = e.target.value;
+                      let newNextDue = formState.nextDue;
+                      let newStatus = formState.status;
 
-              <div className="space-y-2">
-                <Label htmlFor="vendor">Vendor Name</Label>
-                <Input
-                  id="vendor"
-                  value={formState.vendor}
-                  onChange={(e) =>
-                    setFormState({
-                      ...formState,
-                      vendor: e.target.value,
-                    })
-                  }
-                  placeholder="Leave blank if vacant"
-                  disabled={formState.status === "vacant"}
-                />
-              </div>
+                      // Auto-calculate Next Due Date (Last Payment + 1 Day)
+                      if (newLastPayment) {
+                        const d = new Date(newLastPayment);
+                        if (!isNaN(d.getTime())) {
+                          d.setDate(d.getDate() + 1);
+                          newNextDue = d.toISOString().split('T')[0];
+                          newStatus = deriveStatus(newNextDue);
+                        }
+                      }
 
-              <div className="space-y-2">
-                <Label htmlFor="contact">Contact Number</Label>
-                <Input
-  id="contact"
-  type="tel"
-  inputMode="numeric"
-  pattern="[0-9]*"
-  maxLength={11}
-  value={formState.contact}
-  onChange={(e) => {
-    const digitsOnly = e.target.value.replace(/\D/g, "").slice(0, 11);
-    setFormState({
-      ...formState,
-      contact: digitsOnly,
-    });
-  }}
-  placeholder="09XXXXXXXXX"
-  disabled={formState.status === "vacant"}
-/>
+                      setFormState({
+                        ...formState,
+                        lastPayment: newLastPayment,
+                        nextDue: newNextDue,
+                        status: newStatus,
+                      });
+                    }}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    The last day covered by the previous payment.
+                  </p>
+                </div>
 
-              </div>
-
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="lastPayment">Last Payment Date</Label>
-                <Input
-                  id="lastPayment"
-                  type="date"
-                  value={formState.lastPayment}
-                  disabled={formState.status === "vacant"}
-                  onChange={(e) =>
-                    setFormState({
-                      ...formState,
-                      lastPayment: e.target.value,
-                    })
-                  }
-                />
-              </div>
-
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="nextDue">Next Due Date</Label>
-                <Input
-                  id="nextDue"
-                  type="date"
-                  value={formState.nextDue}
-                  disabled={formState.status === "vacant"}
-                  onChange={(e) =>
-                    setFormState({
-                      ...formState,
-                      nextDue: e.target.value,
-                    })
-                  }
-                />
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="nextDue">Next Due Date (Start of Billing)</Label>
+                  <Input
+                    id="nextDue"
+                    type="date"
+                    value={formState.nextDue}
+                    // Allow editing if: New Stall OR Admin User. Otherwise read-only for continuity.
+                    disabled={formState.status === "vacant" || (isEditMode && userRole?.toLowerCase() !== 'admin')}
+                    onChange={(e) =>
+                      setFormState({
+                        ...formState,
+                        nextDue: e.target.value,
+                        status: deriveStatus(e.target.value),
+                      })
+                    }
+                  />
+                  {isEditMode && userRole?.toLowerCase() !== 'admin' && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Automatically calculated. Contact admin to override.
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1549,6 +1776,27 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
             >
               {userRole?.toLowerCase() === 'admin' ? 'Yes, Archive Stall' : 'Submit Request'}
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ======================================================================
+          13. VACATE STALL CONFIRMATION
+      ====================================================================== */}
+      <AlertDialog
+        open={Boolean(stallToVacate)}
+        onOpenChange={(open) => (!open ? setStallToVacate(null) : null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Vacate Stall?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to vacate <strong>{stallToVacate?.name}</strong>? This will remove the current vendor ({stallToVacate?.vendor}) and reset the stall status to Vacant.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setStallToVacate(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleVacateStall} className="bg-amber-600 hover:bg-amber-700">Confirm Vacate</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1806,6 +2054,134 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsPendingRegistrationsOpen(false)}>Close</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ======================================================================
+          15. BULK CREATE DIALOG
+      ====================================================================== */}
+      <Dialog open={isBulkCreateOpen} onOpenChange={setIsBulkCreateOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Bulk Create Stalls</DialogTitle>
+            <DialogDescription>
+              Quickly add multiple vacant stalls of the same type.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleBulkSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label>Stall Type</Label>
+              <Select
+                value={bulkFormState.type}
+                onValueChange={(v) => setBulkFormState({ ...bulkFormState, type: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(
+                    STALL_TYPES.reduce((acc, item) => {
+                      if (!acc[item.section]) acc[item.section] = [];
+                      acc[item.section].push(item);
+                      return acc;
+                    }, {})
+                  ).map(([section, types]) => (
+                    <SelectGroup key={section}>
+                      <SelectLabel>{section}</SelectLabel>
+                      {types.map((t) => (
+                        <SelectItem key={t.name} value={t.name}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Rental Type</Label>
+                <Select
+                  value={bulkFormState.rentalType}
+                  onValueChange={(v) => setBulkFormState({ ...bulkFormState, rentalType: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="daily">Daily</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Quantity</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={bulkFormState.count}
+                  onChange={(e) => setBulkFormState({ ...bulkFormState, count: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Rent Amount (PHP)</Label>
+              <div className="flex items-start gap-1">
+                <div className="flex-1">
+                  <Input
+                    id="bulk-rent-pesos"
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={bulkFormState.rentAmount.split('.')[0]}
+                    onChange={(e) => {
+                      const pesos = e.target.value;
+                      const parts = bulkFormState.rentAmount.split('.');
+                      const centavos = parts.length > 1 ? parts[1] : "";
+                      setBulkFormState({
+                        ...bulkFormState,
+                        rentAmount: centavos ? `${pesos}.${centavos}` : pesos,
+                      });
+                    }}
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">Pesos</p>
+                </div>
+                <span className="text-xl font-bold pt-1">.</span>
+                <div className="w-20">
+                  <Input
+                    id="bulk-rent-centavos"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    placeholder="00"
+                    value={bulkFormState.rentAmount.split('.')[1] || ""}
+                    onChange={(e) => {
+                      let val = e.target.value.replace(/\D/g, '');
+                      if (val.length > 2) val = val.slice(0, 2);
+                      
+                      const pesos = bulkFormState.rentAmount.split('.')[0] || "0";
+                      setBulkFormState({
+                        ...bulkFormState,
+                        rentAmount: `${pesos}.${val}`,
+                      });
+                    }}
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">Centavos</p>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsBulkCreateOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={isBulkSubmitting || !bulkFormState.type || !bulkFormState.rentAmount}>
+                {isBulkSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Layers className="mr-2 h-4 w-4" />}
+                Create {bulkFormState.count} Stalls
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
