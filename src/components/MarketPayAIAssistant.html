@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MarketPay AI Assistant</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #eef2f7;
+      color: #0f172a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+    }
+
+    .chat-shell {
+      width: min(420px, 100%);
+      border-radius: 28px;
+      background: #ffffff;
+      box-shadow: 0 24px 80px rgba(15, 23, 42, 0.12);
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      animation: panelIn 0.4s ease-out;
+    }
+
+    .chat-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 22px;
+      background: #1d4ed8;
+      color: #fff;
+      gap: 16px;
+    }
+
+    .chat-header h1 {
+      margin: 0;
+      font-size: 1.05rem;
+      line-height: 1.35;
+    }
+
+    .chat-header p {
+      margin: 4px 0 0;
+      font-size: 0.9rem;
+      color: rgba(255, 255, 255, 0.88);
+    }
+
+    .chat-body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 18px 18px 10px;
+    }
+
+    .message-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 420px;
+      overflow-y: auto;
+      padding-right: 4px;
+      scroll-behavior: smooth;
+    }
+
+    .message-item {
+      display: flex;
+      width: 100%;
+    }
+
+    .message-item.new-message {
+      animation: fadeUp 0.28s ease forwards;
+      opacity: 0;
+    }
+
+    .send-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+      transform: translateY(0);
+      box-shadow: none;
+      background: #1d4ed8;
+    }
+
+    .chat-input:disabled {
+      background: #f8fafc;
+      cursor: not-allowed;
+    }
+
+    .message-item.bot {
+      justify-content: flex-start;
+    }
+
+    .message-item.user {
+      justify-content: flex-end;
+    }
+
+    .message-bubble {
+      max-width: 84%;
+      padding: 14px 16px;
+      border-radius: 22px;
+      position: relative;
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.06);
+      line-height: 1.6;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .message-item.bot .message-bubble {
+      background: #f8fafc;
+      color: #0f172a;
+      border: 1px solid #e2e8f0;
+      border-bottom-left-radius: 4px;
+    }
+
+    .message-item.user .message-bubble {
+      background: #2563eb;
+      color: #ffffff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .typing-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 16px;
+      border-radius: 22px;
+      background: rgba(59, 130, 246, 0.12);
+      color: #111827;
+      border: 1px solid rgba(59, 130, 246, 0.22);
+      margin-bottom: 4px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.24s ease, transform 0.24s ease;
+    }
+
+    .message-item.new-message .typing-indicator {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .typing-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #2563eb;
+      animation: bounce 1.2s infinite ease-in-out;
+    }
+
+    .typing-dot:nth-child(2) {
+      animation-delay: 0.15s;
+    }
+
+    .typing-dot:nth-child(3) {
+      animation-delay: 0.3s;
+    }
+
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 0 8px 6px;
+    }
+
+    .suggestion-button {
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #0f172a;
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+    }
+
+    .suggestion-button:hover {
+      background: #eff6ff;
+      transform: translateY(-1px);
+      border-color: #93c5fd;
+    }
+
+    .chat-input-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 0 18px 18px;
+    }
+
+    .chat-input {
+      flex: 1;
+      min-height: 48px;
+      border-radius: 999px;
+      border: 1px solid #cbd5e1;
+      padding: 0 16px;
+      font-size: 0.95rem;
+      color: #0f172a;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .chat-input:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+    }
+
+    .send-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 88px;
+      height: 48px;
+      padding: 0 20px;
+      border: none;
+      border-radius: 999px;
+      background: #2563eb;
+      color: #ffffff;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+      box-shadow: 0 10px 25px rgba(37, 99, 235, 0.18);
+    }
+
+    .send-button:hover {
+      transform: translateY(-1px);
+      background: #1d4ed8;
+    }
+
+    .send-button:active {
+      transform: translateY(0);
+    }
+
+    @keyframes fadeUp {
+      from {
+        opacity: 0;
+        transform: translateY(14px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes bounce {
+      0%, 80%, 100% {
+        transform: translateY(0);
+        opacity: 0.4;
+      }
+      40% {
+        transform: translateY(-4px);
+        opacity: 1;
+      }
+    }
+
+    @keyframes panelIn {
+      from {
+        opacity: 0;
+        transform: translateY(24px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @media (max-width: 480px) {
+      body {
+        padding: 12px;
+      }
+
+      .chat-shell {
+        width: 100%;
+        border-radius: 22px;
+      }
+
+      .chat-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .chat-input-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .send-button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-shell" aria-label="MarketPay AI Assistant">
+    <div class="chat-header">
+      <div>
+        <h1>MarketPay AI Assistant</h1>
+        <p>Your friendly payment collection helper.</p>
+      </div>
+    </div>
+
+    <div class="chat-body">
+      <div id="messageList" class="message-list" aria-live="polite"></div>
+
+      <div class="suggestions" id="suggestions"></div>
+    </div>
+
+    <div class="chat-input-row">
+      <input id="chatInput" type="text" class="chat-input" placeholder="Ask about unpaid today, totals, summaries..." aria-label="Chat message input" />
+      <button id="sendButton" class="send-button" type="button">Send</button>
+    </div>
+  </div>
+
+  <script>
+    const paymentRecords = [
+      { name: "Pedro Santos", status: "unpaid", amount: 150, collector: "Anna", date: "2026-04-01" },
+      { name: "Ana Cruz", status: "unpaid", amount: 200, collector: "Ben", date: "2026-04-01" },
+      { name: "Mia Lopez", status: "paid", amount: 450, collector: "Anna", date: "2026-04-01" },
+      { name: "Rico Tan", status: "paid", amount: 650, collector: "Carlos", date: "2026-03-28" },
+      { name: "Joel Rivera", status: "overdue", amount: 320, collector: "Ben", date: "2026-03-18" },
+      { name: "Liza Dela Cruz", status: "unpaid", amount: 180, collector: "Anna", date: "2026-03-25" },
+      { name: "Arnel Garcia", status: "paid", amount: 520, collector: "Carlos", date: "2026-04-01" },
+      { name: "Nina Reyes", status: "overdue", amount: 410, collector: "Ben", date: "2026-03-12" },
+      { name: "Jomar Santos", status: "paid", amount: 230, collector: "Anna", date: "2026-04-02" }
+    ];
+
+    const messageList = document.getElementById('messageList');
+    const chatInput = document.getElementById('chatInput');
+    const sendButton = document.getElementById('sendButton');
+    const suggestionsContainer = document.getElementById('suggestions');
+    let typingTimeout = null;
+
+    const suggestionPrompts = [
+      'Unpaid today',
+      'Total this month',
+      'Collection update',
+      'Summary today',
+      'Total stalls'
+    ];
+
+    const STORAGE_KEYS = {
+      learnedPatterns: 'mpaiLearnedPatterns',
+      unknownQueries: 'mpaiUnknownQueries'
+    };
+
+    const intentPatterns = {
+      greeting: [
+        'hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening'
+      ],
+      unpaid_today: [
+        'unpaid today', 'today unpaid', "today's unpaid", 'unpaid for today', 'what unpaid today'
+      ],
+      unpaid_month: [
+        'unpaid this month', 'this month unpaid', "this month's unpaid", 'unpaid for this month', 'month unpaid'
+      ],
+      total_today: [
+        'total today', 'today total', 'collection total today', 'how much today', "today's total"
+      ],
+      total_month: [
+        'total this month', 'this month total', 'collection total this month', "this month's total", 'monthly total'
+      ],
+      summary_today: [
+        'summary today', 'today summary', "today's summary", 'collections today', 'report today', 'today report'
+      ],
+      overdue_accounts: [
+        'overdue accounts', 'overdue records', 'late accounts', 'past due', 'past due records', 'overdue today'
+      ],
+      collection_update: [
+        "what's the update of the collections", 'what is the update of the collections', 'give me a collection update',
+        'how are the collections today', 'collection update', 'latest collection update', 'collection status',
+        'how are the collections', 'collections update'
+      ],
+      total_stalls: [
+        'total stalls', 'how many stalls', 'total vendors', 'how many vendors', 'stall count', 'vendor count'
+      ],
+      current_date: [
+        'what day is today', "today's date", 'current date', 'what is todays date', 'what is the date today'
+      ]
+    };
+
+    const supportedIntents = Object.keys(intentPatterns);
+    const learnedPatterns = loadLearnedPatterns();
+    const unknownQueries = loadUnknownQueries();
+    let conversationContext = { lastIntent: null, lastQuery: null };
+
+    function normalizeText(input) {
+      return input
+        .trim()
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function loadLearnedPatterns() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.learnedPatterns);
+        return raw ? JSON.parse(raw) : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function saveLearnedPatterns(patterns) {
+      localStorage.setItem(STORAGE_KEYS.learnedPatterns, JSON.stringify(patterns));
+    }
+
+    function loadUnknownQueries() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.unknownQueries);
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function saveUnknownQueries(queries) {
+      localStorage.setItem(STORAGE_KEYS.unknownQueries, JSON.stringify(queries));
+    }
+
+    function logUnknownQuery(text) {
+      const normalized = normalizeText(text);
+      if (!normalized) return;
+      if (!unknownQueries.includes(normalized)) {
+        unknownQueries.push(normalized);
+        saveUnknownQueries(unknownQueries);
+        console.log('MarketPay unknown query logged:', normalized);
+      }
+    }
+
+    function normalizePattern(pattern) {
+      return normalizeText(pattern);
+    }
+
+    function matchLearnedPattern(text) {
+      return Object.keys(learnedPatterns).find((phrase) => text.includes(normalizePattern(phrase)));
+    }
+
+    function findIntentByPattern(text) {
+      for (const intent of supportedIntents) {
+        const patterns = intentPatterns[intent];
+        for (const pattern of patterns) {
+          if (text.includes(normalizePattern(pattern))) {
+            return intent;
+          }
+        }
+      }
+      return null;
+    }
+
+    function inferFollowUpIntent(text) {
+      if (!conversationContext.lastIntent) return null;
+      if (/^total\??$/i.test(text)) {
+        if (conversationContext.lastIntent === 'unpaid_today') return 'total_today';
+        if (conversationContext.lastIntent === 'unpaid_month') return 'total_month';
+        if (conversationContext.lastIntent === 'summary_today') return 'total_today';
+        return 'total_today';
+      }
+      if (/^summary\??$/i.test(text)) {
+        if (conversationContext.lastIntent === 'unpaid_today') return 'summary_today';
+        return conversationContext.lastIntent === 'total_today' ? 'summary_today' : 'summary_today';
+      }
+      if (/^unpaid\??$/i.test(text)) {
+        if (conversationContext.lastIntent === 'unpaid_month') return 'unpaid_month';
+        return 'unpaid_today';
+      }
+      return null;
+    }
+
+    function parseQuery(input) {
+      const text = normalizeText(input);
+      const followUp = inferFollowUpIntent(text);
+      if (followUp) {
+        return { intent: followUp, text, source: 'context' };
+      }
+
+      const learnedMatch = matchLearnedPattern(text);
+      if (learnedMatch) {
+        return { intent: learnedPatterns[learnedMatch], text, source: 'learned' };
+      }
+
+      const intent = findIntentByPattern(text);
+      if (intent) {
+        return { intent, text, source: 'pattern' };
+      }
+
+      return { intent: 'unknown', text, source: 'unknown' };
+    }
+
+    function getTodayKey() {
+      return new Date().toISOString().slice(0, 10);
+    }
+
+    function getCurrentMonthKey() {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    function filterRecords(intent, records) {
+      const todayKey = getTodayKey();
+      const monthKey = getCurrentMonthKey();
+
+      switch (intent) {
+        case 'unpaid_today':
+          return records.filter((item) =>
+            (item.status === 'unpaid' || item.status === 'overdue') && item.date === todayKey
+          );
+        case 'unpaid_month':
+          return records.filter((item) =>
+            (item.status === 'unpaid' || item.status === 'overdue') && item.date.startsWith(monthKey)
+          );
+        case 'total_today':
+          return records.filter((item) => item.status === 'paid' && item.date === todayKey);
+        case 'total_month':
+          return records.filter((item) => item.status === 'paid' && item.date.startsWith(monthKey));
+        case 'summary_today':
+          return records.filter((item) => item.date === todayKey);
+        case 'overdue_accounts':
+          return records.filter((item) => item.status === 'overdue');
+        case 'collection_update':
+        case 'total_stalls':
+        case 'current_date':
+        case 'greeting':
+          return records;
+        default:
+          return [];
+      }
+    }
+
+    function formatCurrency(value) {
+      return `₱${value.toFixed(2)}`;
+    }
+
+    function generateResponse(query, records) {
+      const filtered = filterRecords(query.intent, records);
+      const totalAmount = filtered.reduce((sum, item) => sum + item.amount, 0);
+      const uniqueStalls = new Set(records.map((item) => item.name)).size;
+      const paidCount = records.filter((item) => item.status === 'paid').length;
+      const unpaidCount = records.filter((item) => item.status === 'unpaid' || item.status === 'overdue').length;
+      const todayKey = getTodayKey();
+      const monthKey = getCurrentMonthKey();
+
+      switch (query.intent) {
+        case 'greeting':
+          return 'Hi! 👋 I\'m your MarketPay assistant. I can help you check unpaid records, collection totals, overdue accounts, and summaries. What would you like to check today?';
+        case 'unpaid_today':
+          if (!filtered.length) {
+            return 'I checked, but I couldn\'t find any records for that. You might want to try a different date or filter.';
+          }
+          return (
+            'Alright, let me check that for you.\n\n' +
+            'Here are the unpaid records for today:\n' +
+            filtered.map((item) => `* ${item.name} – ${formatCurrency(item.amount)}`).join('\n') +
+            '\n\nYou can also ask for total today or a daily summary.'
+          );
+        case 'unpaid_month':
+          if (!filtered.length) {
+            return 'I checked, but I couldn\'t find any records for that. You might want to try a different date or filter.';
+          }
+          return (
+            'Alright, let me check that for you.\n\n' +
+            'Here are the unpaid records for this month:\n' +
+            filtered.map((item) => `* ${item.name} – ${formatCurrency(item.amount)}`).join('\n') +
+            '\n\nYou can also ask for total this month or overdue accounts.'
+          );
+        case 'total_today':
+          if (!filtered.length) {
+            return 'I checked, but I couldn\'t find any records for that. You might want to try a different date or filter.';
+          }
+          return `Sure, here's what I found.\n\nTotal collection for today is ${formatCurrency(totalAmount)} from ${filtered.length} payments.\n\nWould you like a summary or unpaid records?`;
+        case 'total_month':
+          if (!filtered.length) {
+            return 'I checked, but I couldn\'t find any records for that. You might want to try a different date or filter.';
+          }
+          return `Sure, here's what I found.\n\nTotal collection for this month is ${formatCurrency(totalAmount)} from ${filtered.length} payments.\n\nWould you like a summary or overdue accounts?`;
+        case 'summary_today':
+          const paidToday = records.filter((item) => item.status === 'paid' && item.date === todayKey).length;
+          const unpaidToday = records.filter((item) => (item.status === 'unpaid' || item.status === 'overdue') && item.date === todayKey).length;
+          const totalToday = records.filter((item) => item.status === 'paid' && item.date === todayKey).reduce((sum, item) => sum + item.amount, 0);
+          return (
+            'Here\'s a quick summary for today:\n' +
+            `* Total collected: ${formatCurrency(totalToday)}\n` +
+            `* Paid: ${paidToday}\n` +
+            `* Unpaid: ${unpaidToday}\n\n` +
+            'You can also ask for unpaid records or monthly totals.'
+          );
+        case 'overdue_accounts':
+          if (!filtered.length) {
+            return 'I checked, but I couldn\'t find any records for that. You might want to try a different date or filter.';
+          }
+          return (
+            'Got it. Here are the overdue accounts:\n\n' +
+            filtered.map((item) => `* ${item.name} – ${formatCurrency(item.amount)}`).join('\n') +
+            '\n\nYou can also ask for total stalls or a collection update.'
+          );
+        case 'collection_update':
+          return (
+            'Got it. Here\'s the latest collection update:\n\n' +
+            `* Total collected: ${formatCurrency(records.filter((item) => item.status === 'paid').reduce((sum, item) => sum + item.amount, 0))}\n` +
+            `* Paid records: ${paidCount}\n` +
+            `* Unpaid records: ${unpaidCount}\n` +
+            `* Total stalls: ${uniqueStalls}\n\n` +
+            'You can also ask me to show unpaid records or today\'s summary.'
+          );
+        case 'total_stalls':
+          return `Sure! Here\'s what I found:\n\n* Total stalls/vendors: ${uniqueStalls}\n\nWould you like to see how many are unpaid or overdue?`;
+        case 'current_date':
+          const now = new Date();
+          return `Today is ${now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You can also ask for today\'s collection summary.`;
+        default:
+          return 'Sorry, I can currently help with collections, unpaid records, totals, summaries, overdue accounts, and stall counts.';
+      }
+    }
+
+    function getTypingDelay(responseText) {
+      const length = responseText.length;
+      const variance = Math.random() * 250;
+      if (length < 80) return 900 + variance;
+      if (length < 170) return 1300 + variance;
+      return 1800 + variance;
+    }
+
+    function addMessage(role, text) {
+      const wrapper = document.createElement('div');
+      wrapper.className = `message-item ${role}`;
+      wrapper.style.opacity = '0';
+      wrapper.innerHTML = `<div class="message-bubble">${text.replace(/\n/g, '<br>')}</div>`;
+      messageList.appendChild(wrapper);
+      requestAnimationFrame(() => {
+        wrapper.classList.add('new-message');
+      });
+      messageList.scrollTop = messageList.scrollHeight;
+    }
+
+    function setTypingState(isTyping) {
+      chatInput.disabled = isTyping;
+      sendButton.disabled = isTyping;
+    }
+
+    function showTypingIndicator() {
+      const existing = document.querySelector('.typing-indicator');
+      if (existing) return;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'message-item bot typing-indicator';
+      wrapper.innerHTML = `
+        <div class="message-bubble">
+          <div class="typing-indicator">
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+          </div>
+        </div>
+      `;
+      messageList.appendChild(wrapper);
+      requestAnimationFrame(() => {
+        wrapper.classList.add('new-message');
+      });
+      messageList.scrollTop = messageList.scrollHeight;
+      setTypingState(true);
+    }
+
+    function removeTypingIndicator() {
+      const indicator = document.querySelector('.typing-indicator');
+      if (indicator) {
+        indicator.parentElement.remove();
+      }
+    }
+
+    function handleSendMessage(message) {
+      const trimmed = message.trim();
+      if (!trimmed) return;
+
+      addMessage('user', trimmed);
+      chatInput.value = '';
+      chatInput.focus();
+      suggestionsContainer.style.opacity = '0.5';
+
+      const query = parseQuery(trimmed);
+      if (query.intent === 'unknown') {
+        logUnknownQuery(trimmed);
+      } else if (query.intent !== 'greeting') {
+        conversationContext.lastIntent = query.intent;
+        conversationContext.lastQuery = query;
+      }
+
+      const responseText = generateResponse(query, paymentRecords);
+      const delay = getTypingDelay(responseText);
+
+      removeTypingIndicator();
+      showTypingIndicator();
+
+      if (typingTimeout) {
+        clearTimeout(typingTimeout);
+      }
+
+      typingTimeout = setTimeout(() => {
+        removeTypingIndicator();
+        addMessage('bot', responseText);
+        setTypingState(false);
+        suggestionsContainer.style.opacity = '1';
+      }, delay);
+    }
+
+    function renderSuggestions() {
+      suggestionPrompts.forEach((prompt) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'suggestion-button';
+        button.textContent = prompt;
+        button.addEventListener('click', () => handleSendMessage(prompt));
+        suggestionsContainer.appendChild(button);
+      });
+    }
+
+    sendButton.addEventListener('click', () => handleSendMessage(chatInput.value));
+    chatInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        handleSendMessage(chatInput.value);
+      }
+    });
+
+    function startConversation() {
+      addMessage('bot', 'Hi there! I\'m MarketPay AI Assistant. I can help you check unpaid records, totals, overdue accounts, and summaries. Tap a suggestion or ask a question.');
+      renderSuggestions();
+    }
+
+    startConversation();
+  </script>
+</body>
+</html>

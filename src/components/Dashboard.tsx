@@ -18,6 +18,7 @@ import { type StallRecord } from "@/data/stalls";
 import { type Invoice } from "./UnpaidDues";
 import { MonthlyCollections } from "./MonthlyCollections";
 import { supabase } from "@/lib/supabaseClient";
+import { calculateDashboardStats } from "@/data/dashboardStats";
 
 interface DashboardProps {
   onPageChange: (page: string) => void;
@@ -71,29 +72,20 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     return allPaid;
   }, [unpaidInvoices, userRole, userName]);
 
-  const summary = useMemo(() => {
-    const today = new Date();
-    const todayDateString = today.toISOString().split('T')[0];
-    const currentMonth = today.getMonth();
-    const currentYear = today.getFullYear();
+  const dashboardStats = useMemo(
+    () =>
+      calculateDashboardStats({
+        stalls,
+        invoices: unpaidInvoices,
+        userRole,
+        userName,
+      }),
+    [stalls, unpaidInvoices, userRole, userName]
+  );
 
-    // Use relevantPaidInvoices for collection stats
-    const todaysPaidInvoices = relevantPaidInvoices.filter(inv => inv.paid_at!.startsWith(todayDateString));
-    const totalCollectedToday = todaysPaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
-
-    const currentMonthPaidInvoices = relevantPaidInvoices.filter(inv => {
-      const paidDate = new Date(inv.paid_at!);
-      return paidDate.getMonth() === currentMonth && paidDate.getFullYear() === currentYear;
-    });
-    const totalCollectedThisMonth = currentMonthPaidInvoices.reduce((sum, inv) => sum + inv.amount, 0);
-
-    // This calculation is for the main balance card, representing potential monthly income.
-    // The "Today's Collections" card will use the more accurate `totalCollectedToday`.
-    const totalPotentialRent = stalls.reduce((sum, s) => s.occupied ? sum + s.rentAmount : sum, 0);
-
-    // Get a set of vendor IDs with unpaid invoices for the "Pending Payments" count.
-    const unpaidOnlyInvoices = unpaidInvoices.filter(inv => inv.status === 'unpaid');
-    const unpaidVendorIds = new Set(unpaidOnlyInvoices.map(inv => inv.vendor_id));
+  const pendingCounts = useMemo(() => {
+    const unpaidOnlyInvoices = unpaidInvoices.filter((inv) => inv.status === "unpaid");
+    const unpaidVendorIds = new Set(unpaidOnlyInvoices.map((inv) => inv.vendor_id));
 
     let occupiedCount = 0;
     let vacantCount = 0;
@@ -101,16 +93,12 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     let overdueCount = 0;
 
     stalls.forEach((stall) => {
-      const rent = Number.isFinite(stall.rentAmount) ? stall.rentAmount : 0;
-
       if (stall.occupied) {
         occupiedCount += 1;
       } else {
         vacantCount += 1;
       }
 
-      // A stall has a pending payment if its status is 'due' or 'overdue',
-      // OR if it has an associated unpaid invoice.
       if (stall.status === "overdue") {
         overdueCount += 1;
       }
@@ -119,12 +107,14 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
         pendingCount++;
       }
     });
-    return { totalCollectedToday, totalCollectedThisMonth, occupiedCount, vacantCount, pendingCount, overdueCount };}, [stalls, unpaidInvoices, relevantPaidInvoices]);
 
-  const { totalCollectedToday, totalCollectedThisMonth, occupiedCount, vacantCount, pendingCount, overdueCount } = summary;
-  const totalStalls = stalls.length;
+    return { occupiedCount, vacantCount, pendingCount, overdueCount };
+  }, [stalls, unpaidInvoices]);
 
-  const formattedTotalCollectedThisMonth = useMemo(() => `PHP ${totalCollectedThisMonth.toLocaleString()}`, [totalCollectedThisMonth]);
+  const { occupiedCount, vacantCount, pendingCount, overdueCount } = pendingCounts;
+  const { totalToday, totalMonth, totalStalls, vacantStalls } = dashboardStats;
+
+  const formattedTotalCollectedThisMonth = useMemo(() => `PHP ${totalMonth.toLocaleString()}`, [totalMonth]);
   const occupancyRate = totalStalls === 0 ? 0 : Math.round((occupiedCount / totalStalls) * 100);
   const initials = useMemo(() => {
     if (userName?.trim()) {
@@ -138,14 +128,14 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
   const stats: Array<{ title: string; value: string; change: string; icon: any; className?: string }> = [
     {
       title: "Today's Collections",
-      value: `PHP ${totalCollectedToday.toLocaleString()}`,
+      value: `PHP ${totalToday.toLocaleString()}`,
       change: "From paid invoices today",
       icon: DollarSign
     },
     {
       title: "Total Stalls",
       value: String(totalStalls),
-      change: `${vacantCount} vacant`,
+      change: `${vacantStalls} vacant`,
       icon: Building2
     },
     {
@@ -165,8 +155,8 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
 
   stats.splice(2, 0, {
     title: "Vacant Stalls",
-    value: String(vacantCount),
-    change: `${Math.round((vacantCount / totalStalls) * 100) || 0}% of total`,
+    value: String(vacantStalls),
+    change: `${Math.round((vacantStalls / totalStalls) * 100) || 0}% of total`,
     icon: Home,
     className: "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
   });

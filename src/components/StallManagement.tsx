@@ -1338,11 +1338,11 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                   </div>
                 </div>
 
-                <div className="flex gap-2 pt-4 md:pt-6">
+                <div className="flex flex-col md:flex-row gap-2 pt-4 md:pt-6">
                     <Button
                       variant="outline"
                       size="sm"
-                      className="md:h-10 md:px-4 md:text-sm"
+                      className="w-full md:w-auto md:h-10 md:px-4 md:text-sm"
                       onClick={() => setShowTransactions(true)}
                     >
                       <Calendar className="mr-2 h-4 w-4 md:h-5 md:w-5" />
@@ -1354,7 +1354,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                         {selectedStall.status === 'vacant' ? (
                           <Button
                             size="sm"
-                            className="md:h-10 md:px-4 md:text-sm bg-primary hover:bg-primary/90"
+                            className="w-full md:w-auto md:h-10 md:px-4 md:text-sm bg-primary hover:bg-primary/90"
                             onClick={() => {
                               setIsEditMode(true);
                               setStallBeingEdited(selectedStall);
@@ -1378,7 +1378,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                             <Button
                               variant="outline"
                               size="sm"
-                              className="md:h-10 md:px-4 md:text-sm"
+                              className="w-full md:w-auto md:h-10 md:px-4 md:text-sm"
                               onClick={() => {
                                 setIsEditMode(true);
                                 setStallBeingEdited(selectedStall);
@@ -1401,7 +1401,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                             <Button
                               variant="outline"
                               size="sm"
-                              className="md:h-10 md:px-4 md:text-sm border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+                              className="w-full md:w-auto md:h-10 md:px-4 md:text-sm border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
                               onClick={() => setStallToVacate(selectedStall)}
                             >
                               <UserMinus className="mr-2 h-4 w-4 md:h-5 md:w-5" /> Vacate
@@ -1415,7 +1415,7 @@ export const StallManagement = ({ stalls, onStallsChange, userRole, userName, us
                       <Button
                         variant="destructive"
                         size="sm"
-                        className="md:h-10 md:px-4 md:text-sm"
+                        className="w-full md:w-auto md:h-10 md:px-4 md:text-sm"
                         onClick={() => setStallToDelete(selectedStall)}
                       >
                         <Archive className="mr-2 h-4 w-4 md:h-5 md:w-5" />

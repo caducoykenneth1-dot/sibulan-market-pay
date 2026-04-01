@@ -3,6 +3,7 @@ import { Navigation } from "@/components/Navigation.tsx";
 import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection";
 import { PaymentHistory } from "@/components/PaymentHistory";
+import { GlobalChatLauncher } from "@/components/GlobalChatLauncher";
 import { StallManagement } from "@/components/StallManagement";
 import { Reports } from "@/components/Reports";
 import { UserManagement, type Account } from "@/components/UserManagement";
@@ -18,6 +19,7 @@ import {
   type StallRecord,
   STALL_TYPES,
 } from "@/data/stalls";
+import { calculateDashboardStats, type DashboardStats } from "@/data/dashboardStats";
 import {
   Card,
   CardContent,
@@ -494,6 +496,17 @@ const Index = () => {
   const stalls = useMemo(() => {
     return rawStalls.filter((stall) => stall.status !== "archived");
   }, [rawStalls]);
+
+  const dashboardStats: DashboardStats = useMemo(
+    () =>
+      calculateDashboardStats({
+        stalls,
+        invoices: allInvoices,
+        userRole: user?.user_metadata?.role,
+        userName: user?.user_metadata?.full_name,
+      }),
+    [stalls, allInvoices, user?.user_metadata?.role, user?.user_metadata?.full_name]
+  );
 
   const resetFeedback = () => {
     setAuthError("");
@@ -1447,6 +1460,12 @@ const handleForgotPassword = async (
           {renderCurrentPage()}
         </main>
       </div>
+      {/* Map the latest dashboard metrics into the AI payload so the assistant always has real totals. */}
+      <GlobalChatLauncher
+        records={allInvoices}
+        stalls={stalls}
+        systemStats={dashboardStats}
+      />
     </div>
   );
 };
