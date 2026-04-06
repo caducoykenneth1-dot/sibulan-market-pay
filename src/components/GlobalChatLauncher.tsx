@@ -15,7 +15,7 @@ export const GlobalChatLauncher = ({ records, stalls, systemStats }: GlobalChatL
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="fixed right-4 bottom-4 z-50 flex flex-col items-end gap-3 md:right-6 md:bottom-6">
+    <div className="hidden md:flex fixed right-4 bottom-4 z-50 flex-col items-end gap-3 md:right-6 md:bottom-6">
       {open && (
         <div className="w-[min(100vw-1rem,420px)] rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/10">
           <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">

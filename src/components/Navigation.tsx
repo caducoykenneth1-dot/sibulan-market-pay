@@ -17,6 +17,7 @@ import {
   WifiOff,
   ClipboardList,
   Signal,
+  MessageCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -185,74 +186,86 @@ export const Navigation = ({
       )}
 
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
-      <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background/80 backdrop-blur-xl shadow-lg transition-transform duration-500 ease-in-out ${isNavVisible ? "translate-y-0" : "translate-y-[160%]"}`}>
-        <div className="grid grid-cols-5 items-end gap-1 px-2 pb-3 pt-2">
-          {(userRole === "admin"
-            ? [
-                { id: "reports", label: "Reports", icon: BarChart3 },
-                { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
-                { id: "dashboard", label: "Home", icon: Home },
-                { id: "stalls", label: "Stalls", icon: Building2 },
-                { id: "archived", label: "Archived", icon: Archive },
-              ]
-            : [
-                { id: "dashboard", label: "Dashboard", icon: Home },
-                { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
-                { id: "collect", label: "Collect", icon: Receipt },
-                { id: "stalls", label: "Stalls", icon: Building2 },
-                { id: "archived", label: "Archived", icon: Archive },
-              ]
-          ).map((item) => {
-            const Icon = item.icon;
-            const active = currentPage === item.id;
-            const badgeCount = item.badge || 0;
-            const isCenterButton = item.id === "collect" || (userRole === "admin" && item.id === "dashboard");
+      <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 transition-transform duration-500 ease-in-out ${isNavVisible ? "translate-y-0" : "translate-y-[160%]"}`}>
+        <div className="relative border-t bg-background/80 backdrop-blur-xl shadow-lg">
+          <button
+            type="button"
+            onClick={() => handleMobileNav("assistant")}
+            className="absolute -top-10 right-4 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-xl shadow-primary/30 transition hover:bg-primary/90"
+            aria-label="Open AI assistant"
+          >
+            <MessageCircle className="h-7 w-7" />
+          </button>
 
-            if (isCenterButton) {
+          <div className="grid grid-cols-5 items-end gap-1 px-2 pb-3 pt-6">
+            {(
+              userRole === "admin"
+                ? [
+                    { id: "reports", label: "Reports", icon: BarChart3 },
+                    { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
+                    { id: "dashboard", label: "Home", icon: Home },
+                    { id: "stalls", label: "Stalls", icon: Building2 },
+                    { id: "archived", label: "Archived", icon: Archive },
+                  ]
+                : [
+                    { id: "dashboard", label: "Dashboard", icon: Home },
+                    { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotifications },
+                    { id: "collect", label: "Collect", icon: Receipt },
+                    { id: "stalls", label: "Stalls", icon: Building2 },
+                    { id: "archived", label: "Archived", icon: Archive },
+                  ]
+            ).map((item) => {
+              const Icon = item.icon;
+              const active = currentPage === item.id;
+              const badgeCount = item.badge || 0;
+              const isCenterButton = item.id === "collect" || (userRole === "admin" && item.id === "dashboard");
+
+              if (isCenterButton) {
+                return (
+                  <div key={item.id} className="relative flex justify-center -mt-8">
+                    <button
+                      onClick={() => handleMobileNav(item.id)}
+                      className={`flex h-14 w-14 items-center justify-center rounded-full border-4 border-background shadow-xl transition-all ${
+                        active
+                          ? "bg-primary text-primary-foreground scale-110"
+                          : "bg-primary text-primary-foreground hover:bg-primary/90"
+                      }`}
+                    >
+                      <Icon className="h-7 w-7" />
+                    </button>
+                  </div>
+                );
+              }
+
               return (
-                <div key={item.id} className="relative flex justify-center -mt-8">
-                  <button
-                    onClick={() => handleMobileNav(item.id)}
-                    className={`flex h-14 w-14 items-center justify-center rounded-full border-4 border-background shadow-xl transition-all ${
-                      active
-                        ? "bg-primary text-primary-foreground scale-110"
-                        : "bg-primary text-primary-foreground hover:bg-primary/90"
-                    }`}
-                  >
-                    <Icon className="h-7 w-7" />
-                  </button>
-                </div>
+                <button
+                  key={item.id}
+                  onClick={() => handleMobileNav(item.id)}
+                  className={`group flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium transition-all relative ${
+                    active
+                      ? "text-primary-foreground bg-primary shadow-sm"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                  }`}
+                >
+                  <div className="relative">
+                    <Icon
+                      className={`h-5 w-5 transition-transform duration-200 ${
+                        active
+                          ? ""
+                          : "group-hover:scale-110"
+                      }`}
+                    />
+                    {badgeCount > 0 && (
+                      <div className={`absolute -top-1.5 -right-1.5 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[9px] font-bold ${active ? "bg-background text-primary" : "bg-destructive text-white"}`}>
+                        {badgeCount > 9 ? '9+' : badgeCount}
+                      </div>
+                    )}
+                  </div>
+                  <span className="truncate max-w-full leading-none">{item.label}</span>
+                </button>
               );
-            }
-
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleMobileNav(item.id)}
-                className={`group flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium transition-all relative ${
-                  active
-                    ? "text-primary-foreground bg-primary shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-                }`}
-              >
-                <div className="relative">
-                  <Icon
-                    className={`h-5 w-5 transition-transform duration-200 ${
-                      active
-                        ? ""
-                        : "group-hover:scale-110"
-                    }`}
-                  />
-                  {badgeCount > 0 && (
-                    <div className={`absolute -top-1.5 -right-1.5 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[9px] font-bold ${active ? "bg-background text-primary" : "bg-destructive text-white"}`}>
-                      {badgeCount > 9 ? '9+' : badgeCount}
-                    </div>
-                  )}
-                </div>
-                <span className="truncate max-w-full leading-none">{item.label}</span>
-              </button>
-            );
-          })}
+            })}
+          </div>
         </div>
       </div>
 

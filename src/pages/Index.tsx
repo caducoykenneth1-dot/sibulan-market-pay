@@ -4,6 +4,7 @@ import { Dashboard } from "@/components/Dashboard";
 import { PaymentCollection } from "@/components/PaymentCollection";
 import { PaymentHistory } from "@/components/PaymentHistory";
 import { GlobalChatLauncher } from "@/components/GlobalChatLauncher";
+import { PaymentChatAssistant } from "@/components/PaymentChatAssistant";
 import { StallManagement } from "@/components/StallManagement";
 import { Reports } from "@/components/Reports";
 import { UserManagement, type Account } from "@/components/UserManagement";
@@ -499,13 +500,24 @@ const Index = () => {
 
   const dashboardStats: DashboardStats = useMemo(
     () =>
-      calculateDashboardStats({
-        stalls,
-        invoices: allInvoices,
-        userRole: user?.user_metadata?.role,
-        userName: user?.user_metadata?.full_name,
-      }),
-    [stalls, allInvoices, user?.user_metadata?.role, user?.user_metadata?.full_name]
+    calculateDashboardStats({
+      stalls,
+      invoices: allInvoices,
+      userRole: user?.user_metadata?.role,
+      userName: user?.user_metadata?.full_name,
+      userId: user?.id,
+      userSection: user?.user_metadata?.market_section || user?.user_metadata?.section,
+      collectors: accounts,
+    }),
+    [
+      stalls,
+      allInvoices,
+      user?.user_metadata?.role,
+      user?.user_metadata?.full_name,
+      user?.id,
+      user?.user_metadata?.market_section,
+      user?.user_metadata?.section,
+    ]
   );
 
   const resetFeedback = () => {
@@ -846,6 +858,24 @@ const handleForgotPassword = async (
         return <NotificationsPanel userId={user?.id} />;
       case "activity":
         return <ActivityLog />;
+      case "assistant":
+        return (
+          <div className="space-y-6">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" size="sm" onClick={() => setCurrentPage("dashboard")}> 
+                  <ChevronLeft className="mr-2 h-4 w-4" />
+                  Back
+                </Button>
+                <div>
+                  <h1 className="text-2xl font-bold">AI Assistant</h1>
+                  <p className="text-sm text-muted-foreground">Ask about unpaid invoices, totals, overdue accounts, and summaries.</p>
+                </div>
+              </div>
+            </div>
+            <PaymentChatAssistant records={allInvoices} systemStats={dashboardStats} />
+          </div>
+        );
       case "profile":
         return (
           <CollectorProfile
