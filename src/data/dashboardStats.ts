@@ -86,17 +86,20 @@ const formatTodayLabel = () => {
 const filterRelevantPaid = (
   invoices: Invoice[],
   isCollectorRole: boolean,
-  collectorName?: string | null
+  collectorName?: string | null,
+  collectorId?: string | null
 ) => {
   const paidInvoices = invoices.filter(
     (invoice) => invoice.status === "paid" && invoice.paid_at
   );
 
-  if (!isCollectorRole || !collectorName) {
+  if (!isCollectorRole) {
     return paidInvoices;
   }
   return paidInvoices.filter(
-    (invoice) => invoice.collector_name === collectorName
+    (invoice) =>
+      (collectorId && invoice.collector_id === collectorId) ||
+      (collectorName && invoice.collector_name === collectorName)
   );
 };
 
@@ -114,7 +117,8 @@ export const calculateDashboardStats = ({
   const relevantPaidInvoices = filterRelevantPaid(
     invoices,
     isCollector(userRole),
-    userName
+    userName,
+    userId
   );
 
   const totalToday = relevantPaidInvoices
@@ -137,24 +141,36 @@ export const calculateDashboardStats = ({
   const vacantStalls = stalls.filter((stall) => !stall.occupied).length;
   const activeVendors = stalls.filter((stall) => stall.occupied).length;
 
-  const collectorInvoices = invoices.filter(
+  const assignedStallIds = new Set(
+    userSection
+      ? stalls
+          .filter((stall) => stall.section === userSection)
+          .map((stall) => String(stall.dbId))
+      : []
+  );
+
+  const collectorRecordedInvoices = invoices.filter(
     (invoice) =>
       invoice.collector_id === userId ||
       (userName && invoice.collector_name === userName)
   );
 
-  const collectorPaidToday = collectorInvoices.filter(
+  const collectorAssignedInvoices = invoices.filter((invoice) =>
+    assignedStallIds.has(String(invoice.vendor_id))
+  );
+
+  const collectorPaidToday = collectorRecordedInvoices.filter(
     (invoice) => invoice.status === "paid" && invoice.paid_at?.startsWith(todayKey)
   );
 
   const myCollectionsToday = collectorPaidToday.reduce((sum, invoice) => sum + invoice.amount, 0);
   const mySummaryCount = collectorPaidToday.length;
 
-  const myUnpaidCount = collectorInvoices.filter(
+  const myUnpaidCount = collectorAssignedInvoices.filter(
     (invoice) => invoice.status === "unpaid" || invoice.status === "overdue"
   ).length;
 
-  const myPendingAmount = collectorInvoices
+  const myPendingAmount = collectorAssignedInvoices
     .filter((invoice) => invoice.status !== "paid")
     .reduce((sum, invoice) => sum + invoice.amount, 0);
 

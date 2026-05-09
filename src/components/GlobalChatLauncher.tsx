@@ -9,9 +9,10 @@ interface GlobalChatLauncherProps {
   records: Invoice[];
   stalls: StallRecord[];
   systemStats: DashboardStats;
+  onRequestRefresh?: () => void;
 }
 
-export const GlobalChatLauncher = ({ records, stalls, systemStats }: GlobalChatLauncherProps) => {
+export const GlobalChatLauncher = ({ records, stalls, systemStats, onRequestRefresh }: GlobalChatLauncherProps) => {
   const [open, setOpen] = useState(false);
 
   return (
@@ -37,6 +38,7 @@ export const GlobalChatLauncher = ({ records, stalls, systemStats }: GlobalChatL
               records={records}
               stalls={stalls}
               systemStats={systemStats}
+              onRequestRefresh={onRequestRefresh}
             />
           </div>
         </div>

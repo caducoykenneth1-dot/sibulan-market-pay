@@ -892,8 +892,8 @@ const handleForgotPassword = async (
         return <ActivityLog />;
       case "assistant":
         return (
-          <div className="space-y-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex min-h-0 flex-col gap-4">
+            <div className="shrink-0 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-center gap-3">
                 <Button variant="ghost" size="sm" onClick={() => setCurrentPage("dashboard")}> 
                   <ChevronLeft className="mr-2 h-4 w-4" />
@@ -905,7 +905,12 @@ const handleForgotPassword = async (
                 </div>
               </div>
             </div>
-            <PaymentChatAssistant records={allInvoices} systemStats={dashboardStats} variant="page" />
+            <PaymentChatAssistant
+              records={allInvoices}
+              systemStats={dashboardStats}
+              variant="page"
+              onRequestRefresh={refreshData}
+            />
           </div>
         );
       case "profile":
@@ -1549,6 +1554,7 @@ const handleForgotPassword = async (
         records={allInvoices}
         stalls={stalls}
         systemStats={dashboardStats}
+        onRequestRefresh={refreshData}
       />
     </div>
   );

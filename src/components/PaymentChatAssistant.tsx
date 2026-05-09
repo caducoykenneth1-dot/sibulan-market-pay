@@ -1,40 +1,51 @@
-import { useState, useEffect, useMemo, useRef } from "react";
-import { DashboardStats, type CollectorInfo, type RecentTransaction } from "@/data/dashboardStats";
-import { Invoice } from "./UnpaidDues";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { Copy, Check } from "lucide-react";
+import {
+  DashboardStats,
+  type CollectorInfo,
+  type RecentTransaction,
+} from "@/data/dashboardStats";
+import { type StallRecord } from "@/data/stalls";
+import { type Invoice } from "./UnpaidDues";
 import "./PaymentChatAssistant.css";
+
+type PaymentIntent =
+  | "unpaid"
+  | "total"
+  | "summary"
+  | "overdue"
+  | "update"
+  | "stalls"
+  | "collector_updates"
+  | "top_collector"
+  | "top_unpaid"
+  | "needs_follow_up"
+  | "dashboard_insight"
+  | "history"
+  | "my_collections"
+  | "my_unpaid"
+  | "my_assigned"
+  | "my_pending"
+  | "my_summary"
+  | "help";
 
 export interface ChatQuery {
   text: string;
   intent: "social" | "payment" | "unknown";
   socialIntent?: "greet" | "thanks" | "bye" | "ok";
-  paymentIntent?:
-    | "unpaid"
-    | "total"
-    | "summary"
-    | "overdue"
-    | "update"
-    | "stalls"
-    | "collector_updates"
-    | "top_collector"
-    | "top_unpaid"
-    | "needs_follow_up"
-    | "dashboard_insight"
-    | "history"
-    | "my_collections"
-    | "my_unpaid"
-    | "my_assigned"
-    | "my_pending"
-    | "my_summary";
+  paymentIntent?: PaymentIntent;
   status?: "paid" | "unpaid" | "overdue";
   timeframe?: "today" | "this_month";
+  confidence?: "high" | "low";
 }
 
 export interface ChatRecord {
   name: string;
   status: string;
-  amount: number;
+  amount: number | null;
   collector: string;
   date: string;
+  dateNote?: string;
 }
 
 export interface ChatResult {
@@ -42,266 +53,246 @@ export interface ChatResult {
   records: ChatRecord[];
 }
 
-const includesAny = (text: string, terms: string[]) =>
+interface PaymentChatAssistantProps {
+  records: Invoice[];
+  systemStats: DashboardStats;
+  stalls?: StallRecord[];
+  variant?: "page" | "panel";
+  onRequestRefresh?: () => void;
+}
+
+interface ChatMessageItem {
+  id: string;
+  sender: "bot" | "user";
+  text: string;
+  createdAt: Date;
+  confirmQuery?: ChatQuery;
+  examples?: string[];
+}
+
+type IntentMeta = {
+  label: string;
+  adminOnly?: boolean;
+  collectorAllowed?: boolean;
+  examples: string[];
+  requiredStats?: Array<keyof DashboardStats>;
+};
+
+const PAYMENT_INTENTS: Record<PaymentIntent, IntentMeta> = {
+  unpaid: {
+    label: "unpaid records",
+    adminOnly: true,
+    examples: ["unpaid today", "unpaid this month"],
+    requiredStats: ["unpaidCount"],
+  },
+  total: {
+    label: "collection totals",
+    adminOnly: true,
+    examples: ["total today", "total this month"],
+    requiredStats: ["totalToday", "totalMonth"],
+  },
+  summary: {
+    label: "daily summary",
+    adminOnly: true,
+    examples: ["summary today"],
+    requiredStats: ["totalToday", "paidCount", "unpaidCount", "activeVendors", "totalStalls"],
+  },
+  overdue: {
+    label: "overdue accounts",
+    adminOnly: true,
+    examples: ["overdue accounts"],
+    requiredStats: ["overdueCount"],
+  },
+  update: {
+    label: "collection update",
+    adminOnly: true,
+    examples: ["collection update"],
+    requiredStats: ["totalMonth", "paidCount", "unpaidCount", "totalStalls"],
+  },
+  stalls: {
+    label: "stall count",
+    adminOnly: true,
+    examples: ["total stalls"],
+    requiredStats: ["totalStalls", "vacantStalls"],
+  },
+  collector_updates: {
+    label: "collector performance",
+    adminOnly: true,
+    examples: ["show all collectors performance"],
+    requiredStats: ["collectors"],
+  },
+  top_collector: {
+    label: "top collector",
+    adminOnly: true,
+    examples: ["top collector"],
+    requiredStats: ["collectors"],
+  },
+  top_unpaid: {
+    label: "collector with most unpaid stalls",
+    adminOnly: true,
+    examples: ["who has the most unpaid stalls"],
+    requiredStats: ["collectors"],
+  },
+  needs_follow_up: {
+    label: "follow-up priorities",
+    adminOnly: true,
+    examples: ["who needs follow-up"],
+    requiredStats: ["collectors"],
+  },
+  dashboard_insight: {
+    label: "dashboard insight",
+    adminOnly: true,
+    examples: ["dashboard update"],
+    requiredStats: ["totalToday", "totalMonth", "unpaidCount", "overdueCount", "activeVendors", "totalStalls"],
+  },
+  history: {
+    label: "payment history",
+    adminOnly: true,
+    examples: ["payment history today"],
+  },
+  my_collections: {
+    label: "my collections",
+    collectorAllowed: true,
+    examples: ["my collections today"],
+    requiredStats: ["myCollectionsToday", "collectorName"],
+  },
+  my_unpaid: {
+    label: "my unpaid assigned stalls",
+    collectorAllowed: true,
+    examples: ["my unpaid assigned stalls"],
+    requiredStats: ["myUnpaidCount", "collectorName"],
+  },
+  my_assigned: {
+    label: "my assigned stalls",
+    collectorAllowed: true,
+    examples: ["my assigned stalls"],
+    requiredStats: ["myAssignedStallsCount", "collectorName"],
+  },
+  my_pending: {
+    label: "my pending collections",
+    collectorAllowed: true,
+    examples: ["my pending collections"],
+    requiredStats: ["myPendingAmount", "collectorName"],
+  },
+  my_summary: {
+    label: "my summary",
+    collectorAllowed: true,
+    examples: ["my summary today"],
+    requiredStats: ["mySummaryCount", "myCollectionsToday", "collectorName"],
+  },
+  help: {
+    label: "help",
+    collectorAllowed: true,
+    examples: ["help", "commands", "what can you do"],
+  },
+};
+
+const PAYMENT_PATTERNS: Array<{ intent: PaymentIntent; phrases: string[] }> = [
+  { intent: "help", phrases: ["help", "commands", "what can you do", "unsa imong mabuhat", "ano kaya mo"] },
+  { intent: "my_collections", phrases: ["my collections today", "my collection today", "collections for me", "akong nakolekta", "pila akong nakolekta"] },
+  { intent: "my_unpaid", phrases: ["my unpaid assigned stalls", "my unpaid stalls", "kinsa wala kabayad sa ako", "sino hindi nagbayad sa section ko"] },
+  { intent: "my_assigned", phrases: ["my assigned stalls", "my stalls", "assigned stalls", "akong stalls"] },
+  { intent: "my_pending", phrases: ["my pending collections", "pending collections for me", "kulang pa nako kolektahon"] },
+  { intent: "my_summary", phrases: ["my summary today", "summary for me today", "today summary for me"] },
+  { intent: "total", phrases: ["total today", "today total", "collection total today", "total this month", "monthly total", "pila ang bayad", "tag pila", "magkano total"] },
+  { intent: "unpaid", phrases: ["unpaid today", "unpaid this month", "unpaid records", "kinsa wala kabayad", "sino hindi nagbayad", "wala kabayad"] },
+  { intent: "summary", phrases: ["summary today", "today summary", "collections today"] },
+  { intent: "overdue", phrases: ["overdue accounts", "overdue records", "overdue", "past due", "lapas due", "nalapas na bayad"] },
+  { intent: "update", phrases: ["collection update", "latest collection", "latest update", "collection status"] },
+  { intent: "collector_updates", phrases: ["collector update", "collector performance", "show all collectors performance"] },
+  { intent: "top_collector", phrases: ["who collected the most today", "top collector", "highest collection today", "leaderboard"] },
+  { intent: "top_unpaid", phrases: ["who has the most unpaid stalls", "most unpaid stalls", "highest unpaid stalls"] },
+  { intent: "needs_follow_up", phrases: ["who needs follow-up", "follow-up needed", "who needs attention", "prioritize unpaid"] },
+  { intent: "dashboard_insight", phrases: ["dashboard update", "what stands out today", "current dashboard summary"] },
+  { intent: "history", phrases: ["full history of payments today", "payment history today", "today's payment history"] },
+  { intent: "stalls", phrases: ["total stalls", "stall count", "number of stalls", "total vendors", "vendor count"] },
+];
+
+const GREETING_WORDS = new Set(["hi", "hello", "hey", "maayong", "kumusta"]);
+const RUDE_WORDS = new Set(["fuck", "fck", "shit", "stupid", "idiot", "bobo", "gago", "tanga", "ulol"]);
+const SOCIAL_PATTERNS = {
+  thanks: ["thanks", "thank you", "salamat"],
+  bye: ["bye", "goodbye", "see you", "later"],
+  ok: ["okay", "ok", "alright", "sige"],
+} as const;
+
+const includesAny = (text: string, terms: readonly string[]) =>
   terms.some((term) => text.includes(term));
 
+const tokenizeWords = (text: string) => text.match(/\b[\p{L}]+\b/gu) ?? [];
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const isGreeting = (text: string) =>
+  tokenizeWords(text).some((token) => GREETING_WORDS.has(token.toLowerCase()));
+
+const isRudeMessage = (text: string) =>
+  tokenizeWords(text).some((token) => RUDE_WORDS.has(token.toLowerCase()));
+
 const extractStatus = (text: string): ChatQuery["status"] => {
-  if (includesAny(text, ["overdue", "due now", "due today"])) return "overdue";
-  if (includesAny(text, ["unpaid", "due", "not paid"])) return "unpaid";
-  if (includesAny(text, ["paid", "settled", "completed"])) return "paid";
+  if (includesAny(text, ["overdue", "past due", "lapas due", "nalapas"])) return "overdue";
+  if (includesAny(text, ["unpaid", "not paid", "wala kabayad", "hindi nagbayad"])) return "unpaid";
+  if (includesAny(text, ["paid", "settled", "completed", "kabayad", "nagbayad"])) return "paid";
   return undefined;
 };
 
 const extractTimeframe = (text: string): ChatQuery["timeframe"] => {
-  if (includesAny(text, ["today", "today's", "this day"])) return "today";
-  if (includesAny(text, ["this month", "month", "this month's", "monthly"])) return "this_month";
+  if (includesAny(text, ["today", "today's", "this day", "karon", "ngayon"])) return "today";
+  if (includesAny(text, ["this month", "month", "monthly", "buwan", "bulan"])) return "this_month";
   return undefined;
-};
-
-const GREETING_WORDS = new Set(["hi", "hello", "hey"]);
-const RUDE_WORDS = new Set(["fuck", "fck", "shit", "stupid", "idiot", "bobo", "gago", "tanga", "ulol"]);
-const PAYMENT_PATTERNS: Array<{ intent: ChatQuery["paymentIntent"]; phrases: string[] }> = [
-  {
-    intent: "my_collections",
-    phrases: ["my collections today", "my collection today", "my collections", "collections for me"],
-  },
-  {
-    intent: "my_unpaid",
-    phrases: ["my unpaid assigned stalls", "my unpaid stalls", "my unpaid records", "my unpaid invoices"],
-  },
-  {
-    intent: "my_assigned",
-    phrases: ["my assigned stalls", "my stalls", "assigned stalls", "stalls assigned to me"],
-  },
-  {
-    intent: "my_pending",
-    phrases: ["my pending collections", "pending collections for me", "my pending payments"],
-  },
-  {
-    intent: "my_summary",
-    phrases: ["my summary today", "summary for me today", "today summary for me"],
-  },
-  {
-    intent: "total",
-    phrases: [
-      "total today",
-      "today total",
-      "collection total today",
-      "today's total",
-      "total this month",
-      "this month total",
-      "collection total this month",
-      "monthly total",
-      "total for today",
-      "total for this month",
-    ],
-  },
-  {
-    intent: "unpaid",
-    phrases: [
-      "unpaid today",
-      "today unpaid",
-      "unpaid records today",
-      "today's unpaid",
-      "unpaid this month",
-      "this month unpaid",
-      "unpaid records this month",
-      "monthly unpaid",
-    ],
-  },
-  {
-    intent: "summary",
-    phrases: ["summary today", "today summary", "summary for today", "today's summary", "collections today"],
-  },
-  {
-    intent: "overdue",
-    phrases: ["overdue accounts", "overdue records", "overdue", "past due", "past due records"],
-  },
-  {
-    intent: "update",
-    phrases: ["collection update", "collection updates", "latest collection", "latest update", "update", "collection status"],
-  },
-  {
-    intent: "collector_updates",
-    phrases: [
-      "collector update",
-      "collector updates",
-      "show collector updates",
-      "collectors update",
-      "collector performance",
-      "show all collectors",
-      "show all collectors performance",
-      "collectors performance",
-      "show me all collectors",
-    ],
-  },
-  {
-    intent: "top_collector",
-    phrases: [
-      "who collected the most today",
-      "top collector",
-      "highest collection today",
-      "leaderboard",
-      "collector leaderboard",
-    ],
-  },
-  {
-    intent: "top_unpaid",
-    phrases: [
-      "who has the most unpaid stalls",
-      "most unpaid stalls",
-      "highest unpaid stalls",
-      "collector with the most unpaid",
-    ],
-  },
-  {
-    intent: "needs_follow_up",
-    phrases: [
-      "who needs follow-up",
-      "follow-up needed",
-      "who to follow up with",
-      "prioritize unpaid",
-      "who needs attention",
-    ],
-  },
-  {
-    intent: "dashboard_insight",
-    phrases: [
-      "dashboard update",
-      "what stands out today",
-      "summarize current status",
-      "what should i know today",
-      "give me the dashboard numbers",
-      "current dashboard summary",
-    ],
-  },
-  {
-    intent: "history",
-    phrases: [
-      "full history of payments today",
-      "show me full history of payments today",
-      "payment history today",
-      "today's payment history",
-    ],
-  },
-  {
-    intent: "stalls",
-    phrases: ["total stalls", "stall count", "number of stalls", "total vendors", "vendor count"],
-  },
-];
-
-const COLLECTOR_ALLOWED_INTENTS = new Set([
-  "my_collections",
-  "my_unpaid",
-  "my_assigned",
-  "my_pending",
-  "my_summary",
-]);
-
-const COLLECTOR_UNAUTHORIZED_MSG =
-  "Sorry, that information is only available to administrators. You can ask about your assigned stalls or your collections.";
-
-// Break out alphabetic tokens so we only match greetings against whole words.
-const tokenizeWords = (text: string) => {
-  return text.match(/\b[a-zA-Z]+\b/g) ?? [];
-};
-
-const isGreeting = (text: string) => {
-  const tokens = tokenizeWords(text);
-  return tokens.some((token) => GREETING_WORDS.has(token.toLowerCase()));
-};
-
-const isRudeMessage = (text: string) => {
-  const tokens = tokenizeWords(text);
-  return tokens.some((token) => RUDE_WORDS.has(token.toLowerCase()));
-};
-
-const escapeRegExp = (value: string) =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const detectPaymentIntent = (text: string): ChatQuery["paymentIntent"] | undefined => {
-  for (const pattern of PAYMENT_PATTERNS) {
-    for (const phrase of pattern.phrases) {
-      const regex = new RegExp(`\\b${escapeRegExp(phrase)}\\b`, "i");
-      if (regex.test(text)) {
-        return pattern.intent;
-      }
-    }
-  }
-  return undefined;
-};
-
-const socialPatterns: Record<Exclude<NonNullable<ChatQuery["socialIntent"]>, "greet">, string[]> = {
-  thanks: ["thanks", "thank you", "thank you!", "thankyou"],
-  bye: ["bye", "goodbye", "see you", "talk later", "later"],
-  ok: ["okay", "ok", "alright", "sure"],
 };
 
 const detectSocialIntent = (text: string): ChatQuery["socialIntent"] | undefined => {
-  for (const intent of Object.keys(socialPatterns) as Array<keyof typeof socialPatterns>) {
-    if (includesAny(text, socialPatterns[intent])) {
-      return intent;
-    }
+  if (isGreeting(text)) return "greet";
+  for (const intent of Object.keys(SOCIAL_PATTERNS) as Array<keyof typeof SOCIAL_PATTERNS>) {
+    if (includesAny(text, SOCIAL_PATTERNS[intent])) return intent;
   }
   return undefined;
 };
 
-type IntentCheckResult =
-  | { type: "payment"; paymentIntent: ChatQuery["paymentIntent"] }
-  | { type: "social"; socialIntent: ChatQuery["socialIntent"] }
-  | { type: "unknown" };
-
-// Determine the user's intent: check payments first, then greetings, then other socials.
-const detectIntent = (text: string): IntentCheckResult => {
-  const paymentIntent = detectPaymentIntent(text);
-  if (paymentIntent) {
-    return { type: "payment", paymentIntent };
+const detectPaymentIntent = (text: string): { intent?: PaymentIntent; confidence: "high" | "low" } => {
+  for (const pattern of PAYMENT_PATTERNS) {
+    for (const phrase of pattern.phrases) {
+      if (new RegExp(`\\b${escapeRegExp(phrase)}\\b`, "i").test(text)) {
+        return { intent: pattern.intent, confidence: "high" };
+      }
+    }
   }
 
-  if (isGreeting(text)) {
-    return { type: "social", socialIntent: "greet" };
+  const words = new Set(tokenizeWords(text).map((word) => word.toLowerCase()));
+  let bestIntent: PaymentIntent | undefined;
+  let bestScore = 0;
+  for (const pattern of PAYMENT_PATTERNS) {
+    const phraseWords = new Set(pattern.phrases.flatMap((phrase) => tokenizeWords(phrase.toLowerCase())));
+    const score = Array.from(phraseWords).filter((word) => words.has(word)).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIntent = pattern.intent;
+    }
   }
-
-  const socialIntent = detectSocialIntent(text);
-  if (socialIntent) {
-    return { type: "social", socialIntent };
-  }
-
-  return { type: "unknown" };
+  return { intent: bestScore > 0 ? bestIntent : undefined, confidence: "low" };
 };
 
 export const parseQuery = (input: string): ChatQuery => {
   const text = input.trim().toLowerCase();
-  const intentCheck = detectIntent(text);
+  const socialIntent = detectSocialIntent(text);
+  const detected = detectPaymentIntent(text);
 
-  if (intentCheck.type === "social") {
-    return { text, intent: "social", socialIntent: intentCheck.socialIntent };
+  if (detected.intent) {
+    const timeframe = extractTimeframe(text);
+    const normalizedTimeframe = detected.intent === "history" ? "today" : timeframe;
+    return {
+      text,
+      intent: "payment",
+      paymentIntent: detected.intent,
+      status: extractStatus(text),
+      timeframe: normalizedTimeframe,
+      confidence: detected.confidence,
+    };
   }
 
-  if (intentCheck.type !== "payment") {
-    return { text, intent: "unknown" };
-  }
-
-  const timeframe = extractTimeframe(text);
-  const status = extractStatus(text);
-  const normalizedIntentTimeframe =
-    intentCheck.paymentIntent === "history" ? ("today" as ChatQuery["timeframe"]) : timeframe;
-
-  if ((intentCheck.paymentIntent === "unpaid" || intentCheck.paymentIntent === "total") && !timeframe) {
-    return { text, intent: "unknown" };
-  }
-
-  if (intentCheck.paymentIntent === "summary" && timeframe !== "today") {
-    return { text, intent: "unknown" };
-  }
-
-  return {
-    text,
-    intent: "payment",
-    paymentIntent: intentCheck.paymentIntent,
-    status,
-    timeframe: normalizedIntentTimeframe,
-  };
+  if (socialIntent) return { text, intent: "social", socialIntent, confidence: "high" };
+  return { text, intent: "unknown", confidence: "low" };
 };
 
 const normalizeDate = (value: string | undefined | null): Date | null => {
@@ -320,37 +311,173 @@ const isSameDay = (dateA: Date, dateB: Date) =>
 const isSameMonth = (dateA: Date, dateB: Date) =>
   dateA.getFullYear() === dateB.getFullYear() && dateA.getMonth() === dateB.getMonth();
 
-const toChatRecord = (invoice: Invoice): ChatRecord => ({
-  name: invoice.vendor_name || invoice.stall_name || "Unknown",
-  status: invoice.status || "unknown",
-  amount: Number(invoice.amount) || 0,
-  collector: invoice.collector_name || "Unknown",
-  date: invoice.paid_at || invoice.due_date || "",
+const formatAmount = (value: number | null | undefined) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "amount unavailable";
+  }
+  return `PHP ${value.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const formatCount = (value: number | null | undefined) =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
+const formatTime = (date: Date) =>
+  date.toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit" });
+
+const copyTextToClipboard = async (text: string) => {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to textarea copy for older mobile/browser contexts.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+
+  const selection = document.getSelection();
+  const selectedRange =
+    selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+
+  document.body.removeChild(textarea);
+
+  if (selection) {
+    selection.removeAllRanges();
+    if (selectedRange) {
+      selection.addRange(selectedRange);
+    }
+  }
+
+  return copied;
+};
+
+const createMessageId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+const createBotMessage = (
+  text: string,
+  extra?: Pick<ChatMessageItem, "confirmQuery" | "examples">
+): ChatMessageItem => ({
+  id: createMessageId(),
+  sender: "bot",
+  text,
+  createdAt: new Date(),
+  ...extra,
 });
 
-const mergeWithContext = (query: ChatQuery, context: ChatQuery | null): ChatQuery => {
-  if (!context) return query;
+const formatRelativeMinutes = (date: Date) => {
+  const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+  return minutes <= 0 ? "just now" : `${minutes} min${minutes === 1 ? "" : "s"} ago`;
+};
 
+const getInvoiceDisplayDate = (invoice: Invoice) => {
+  if (invoice.status === "paid") {
+    if (invoice.paid_at) return { date: invoice.paid_at, note: "" };
+    if (invoice.due_date) return { date: invoice.due_date, note: "paid date missing; using due date" };
+  }
+  return { date: invoice.due_date || invoice.paid_at || "", note: "" };
+};
+
+const toChatRecord = (invoice: Invoice): ChatRecord => {
+  const amount = Number(invoice.amount);
+  const displayDate = getInvoiceDisplayDate(invoice);
+  return {
+    name: invoice.vendor_name || invoice.stall_name || "Unknown",
+    status: invoice.status || "unknown",
+    amount: Number.isFinite(amount) ? amount : null,
+    collector: invoice.collector_name || "Unknown",
+    date: displayDate.date,
+    dateNote: displayDate.note,
+  };
+};
+
+const isCollector = (stats: DashboardStats) => stats.role?.toLowerCase() === "collector";
+
+const roleExamples = (stats: DashboardStats) =>
+  isCollector(stats)
+    ? ["my collections today", "my unpaid assigned stalls", "my summary today", "my pending collections"]
+    : ["summary today", "total this month", "overdue accounts", "show all collectors performance"];
+
+const unauthorizedMessage = (stats: DashboardStats) =>
+  [
+    "Sorry, that information is only available to administrators.",
+    `You can ask: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`,
+  ].join("\n\n");
+
+const isAuthorized = (query: ChatQuery, stats: DashboardStats) => {
+  const intent = query.paymentIntent;
+  if (!intent) return true;
+  const meta = PAYMENT_INTENTS[intent];
+  if (!isCollector(stats)) return true;
+  return Boolean(meta.collectorAllowed) && !meta.adminOnly;
+};
+
+const hasRequiredStats = (intent: PaymentIntent, stats: DashboardStats) => {
+  const required = PAYMENT_INTENTS[intent].requiredStats ?? [];
+  return required.every((field) => {
+    const value = stats[field];
+    if (Array.isArray(value)) return true;
+    return value !== undefined && value !== null;
+  });
+};
+
+const mergeWithContext = (query: ChatQuery, context: ChatQuery | null): ChatQuery => {
+  if (!context || context.intent !== "payment") return query;
+  if (query.intent === "social" || query.paymentIntent === "help") return query;
+
+  const vagueTimeframeOnly = query.intent === "unknown" && extractTimeframe(query.text);
+  const vagueStatusOnly = query.intent === "unknown" && extractStatus(query.text);
+
+  if (vagueTimeframeOnly || vagueStatusOnly) {
+    return {
+      ...context,
+      text: query.text,
+      status: extractStatus(query.text) ?? context.status,
+      timeframe: extractTimeframe(query.text) ?? context.timeframe,
+      confidence: "high",
+    };
+  }
+
+  if (query.intent !== "payment") return query;
   return {
     ...query,
     status: query.status ?? context.status,
     timeframe: query.timeframe ?? context.timeframe,
-    intent: query.intent === "unknown" ? context.intent : query.intent,
   };
 };
 
 export const filterRecords = (query: ChatQuery, records: Invoice[]): ChatResult => {
   const now = new Date();
   now.setHours(0, 0, 0, 0);
+  let filtered = records.map(toChatRecord);
 
-  const mapped = records.map(toChatRecord);
-  let filtered = mapped;
-
-  if (query.status === "overdue") {
-    filtered = filtered.filter((record) => record.status === "overdue");
-  } else if (query.status === "paid") {
-    filtered = filtered.filter((record) => record.status === "paid");
-  } else if (query.status === "unpaid") {
+  if (query.status === "overdue") filtered = filtered.filter((record) => record.status === "overdue");
+  if (query.status === "paid") filtered = filtered.filter((record) => record.status === "paid");
+  if (query.status === "unpaid") {
     filtered = filtered.filter((record) => record.status === "unpaid" || record.status === "overdue");
   }
 
@@ -359,7 +486,9 @@ export const filterRecords = (query: ChatQuery, records: Invoice[]): ChatResult 
       const recordDate = normalizeDate(record.date);
       return recordDate ? isSameDay(recordDate, now) : false;
     });
-  } else if (query.timeframe === "this_month") {
+  }
+
+  if (query.timeframe === "this_month") {
     filtered = filtered.filter((record) => {
       const recordDate = normalizeDate(record.date);
       return recordDate ? isSameMonth(recordDate, now) : false;
@@ -369,640 +498,414 @@ export const filterRecords = (query: ChatQuery, records: Invoice[]): ChatResult 
   return { query, records: filtered };
 };
 
-const formatCurrency = (value: number) => `PHP ${value.toFixed(2)}`;
-
-const joinParagraphs = (...sections: Array<string | undefined>) =>
+const joinParagraphs = (...sections: Array<string | undefined | false>) =>
   sections.filter(Boolean).join("\n\n");
 
-const formatRecordLine = (record: ChatRecord, index: number) =>
-  `${index + 1}. ${record.name} • ${record.status.toUpperCase()} • ${formatCurrency(record.amount)} • ${record.date || "no date"}`;
-
-const collectorsFromStats = (stats: DashboardStats): CollectorInfo[] => stats.collectors ?? [];
-
-const formatCollectorLine = (collector: CollectorInfo) => {
-  const todayAmount = formatCurrency(collector.collectionsToday);
-  const monthAmount = formatCurrency(collector.collectedThisMonth);
-  return `* ${collector.name}${collector.section ? ` (${collector.section})` : ""} — Today ${todayAmount} · Month ${monthAmount} · Unpaid ${collector.unpaidAssignedStalls} stall${
-    collector.unpaidAssignedStalls === 1 ? "" : "s"
-  } · Assigned ${collector.assignedStalls} stall${collector.assignedStalls === 1 ? "" : "s"}`;
+const formatRecordLine = (record: ChatRecord, index: number) => {
+  const note = record.dateNote ? ` (${record.dateNote})` : "";
+  return `${index + 1}. ${record.name} - ${record.status.toUpperCase()} - ${formatAmount(record.amount)} - ${record.date || "date unavailable"}${note}`;
 };
 
-const formatRecentTransactionLine = (transaction: RecentTransaction) => {
-  const when = transaction.paidAt ? ` on ${transaction.paidAt}` : "";
-  return `* ${transaction.vendorName} (${transaction.stallName}) by ${transaction.collectorName} - ${formatCurrency(
-    transaction.amount
-  )}${when}`;
-};
+const collectorsFromStats = (stats: DashboardStats): CollectorInfo[] =>
+  Array.isArray(stats.collectors) ? stats.collectors : [];
 
-// System instructions reminder: rely on the `systemStats` object, never invent totals, and do not ask users to supply system metrics.
-const missingDataReply = "I don't have that information available right now.";
+const recentTransactionsFromStats = (stats: DashboardStats): RecentTransaction[] =>
+  Array.isArray(stats.recentTransactions) ? stats.recentTransactions : [];
 
-const hasStat = (value: number | null | undefined): value is number =>
-  typeof value === "number";
+const formatCollectorLine = (collector: CollectorInfo) =>
+  `* ${collector.name}${collector.section ? ` (${collector.section})` : ""} - Today ${formatAmount(collector.collectionsToday)} - Month ${formatAmount(
+    collector.collectedThisMonth
+  )} - Unpaid ${collector.unpaidAssignedStalls} - Assigned ${collector.assignedStalls}`;
 
-const timeframeLabel = (timeframe?: ChatQuery["timeframe"]) => {
-  if (timeframe === "today") return "today";
-  if (timeframe === "this_month") return "this month";
-  return "";
-};
+const formatRecentTransactionLine = (transaction: RecentTransaction) =>
+  `* ${transaction.vendorName} (${transaction.stallName}) by ${transaction.collectorName} - ${formatAmount(transaction.amount)}${
+    transaction.paidAt ? ` on ${transaction.paidAt}` : ""
+  }`;
 
-const getTypingDelay = (text: string) => {
-  const base = 700;
-  const perChar = 4;
-  const random = Math.random() * 300;
-  return Math.min(1800, base + text.length * perChar + random);
-};
-
-const getRoleAwareGreeting = (stats: DashboardStats): string => {
-  const role = stats.role?.toLowerCase();
-  const label = role === "admin" ? "admin" : role === "collector" ? "collector" : "user";
-  const displayName = stats.collectorName?.trim();
-  return `Hello ${label}${displayName ? ` ${displayName}` : ""}! Need a fresh update on collections, unpaid records, or stalls?`;
-};
-
-const getFallbackExamples = (stats: DashboardStats): [string, string] => {
-  const role = stats.role?.toLowerCase();
-  return role === "admin"
-    ? ["unpaid today", "show all collectors performance"]
-    : ["my collections today", "my unpaid assigned stalls"];
-};
-
-const getUnknownResponse = (text: string, stats: DashboardStats): string => {
-  const [firstExample, secondExample] = getFallbackExamples(stats);
-
-  if (isRudeMessage(text)) {
-    return joinParagraphs(
-      "I'm here to help with Market Pay tasks.",
-      `If you need something, ask me like "${firstExample}" or "${secondExample}".`
-    );
-  }
-
+const getHelpResponse = (stats: DashboardStats) => {
+  const examples = roleExamples(stats);
   return joinParagraphs(
-    "I didn't quite catch a Market Pay request there.",
-    `Try asking something like "${firstExample}" or "${secondExample}".`
+    isCollector(stats)
+      ? "Here are the collector commands I can answer for your assigned data:"
+      : "Here are the admin commands I can answer:",
+    examples.map((example) => `* ${example}`).join("\n")
   );
 };
 
-export const getSocialResponse = (
-  socialIntent: NonNullable<ChatQuery["socialIntent"]>
-): string => {
-  switch (socialIntent) {
-    case "greet":
-      return joinParagraphs(
-        "Hi! 👋 I'm your MarketPay assistant.",
-        "Ask me about collections, unpaid records, collector updates, or stall status."
-      );
-    case "thanks":
-      return joinParagraphs("You're welcome!", "Let me know if you'd like another update.");
-    case "bye":
-      return joinParagraphs("Bye! 👋 I'm here anytime you need collection updates.", "Just ping me again when you're ready.");
-    case "ok":
-      return joinParagraphs("Got it.", "Let me know if you need totals, unpaid accounts, or summaries.");
-    default:
-      return "Thanks for saying hello — I can help with payments, totals, and overdue updates whenever you need.";
+const getSocialResponse = (socialIntent: NonNullable<ChatQuery["socialIntent"]>, stats: DashboardStats) => {
+  if (socialIntent === "greet") {
+    const role = stats.role?.toLowerCase() === "admin" ? "admin" : "collector";
+    const name = stats.collectorName?.trim();
+    return `Hello ${role}${name ? ` ${name}` : ""}. Ask "help" to see what I can answer.`;
   }
+  if (socialIntent === "thanks") return "You're welcome. Ask for another update anytime.";
+  if (socialIntent === "bye") return "Bye. I'll be here when you need collection updates.";
+  return "Got it. Ask \"help\" if you want the available commands.";
 };
+
+const missingStatsResponse = "Refreshing data... Some dashboard fields are missing right now.";
 
 export const getPaymentResponse = (
   result: ChatResult,
   stats: DashboardStats,
   records: ChatRecord[]
 ): string => {
-  const { query } = result;
-  const intent = query.paymentIntent;
-  if (!intent) {
-    return "Sorry, I can help with collections, unpaid records, summaries, and stall-related information.";
-  }
+  const intent = result.query.paymentIntent;
+  if (!intent) return "I can help with collections, unpaid records, summaries, and stall information.";
+  if (intent === "help") return getHelpResponse(stats);
+  if (!isAuthorized(result.query, stats)) return unauthorizedMessage(stats);
+  if (!hasRequiredStats(intent, stats)) return missingStatsResponse;
 
-  const normalizedRole = stats.role?.toLowerCase() ?? "collector";
-  const isAdmin = normalizedRole === "admin";
-  if (!isAdmin && !COLLECTOR_ALLOWED_INTENTS.has(intent)) {
-    return COLLECTOR_UNAUTHORIZED_MSG;
-  }
-
-  const timeframeText = timeframeLabel(query.timeframe);
   const count = records.length;
-  const total = records.reduce((sum, record) => sum + record.amount, 0);
-  const collectors = isAdmin ? collectorsFromStats(stats) : [];
-  const recentTransactions = stats.recentTransactions ?? [];
+  const total = records.reduce((sum, record) => sum + (record.amount ?? 0), 0);
+  const timeframe = result.query.timeframe === "this_month" ? "this month" : "today";
+  const collectors = collectorsFromStats(stats);
+  const recent = recentTransactionsFromStats(stats);
 
   switch (intent) {
     case "total": {
-      const amount =
-        query.timeframe === "today"
-          ? stats.totalToday
-          : query.timeframe === "this_month"
-          ? stats.totalMonth
-          : null;
-      if (!hasStat(amount)) {
-        return missingDataReply;
-      }
-      return joinParagraphs(
-        "Sure, here's what I found.",
-        `Total collection for ${timeframeText} is ${formatCurrency(amount)}.`,
-        "Would you like a summary or unpaid records?"
-      );
+      const amount = result.query.timeframe === "this_month" ? stats.totalMonth : stats.totalToday;
+      return amount > 0
+        ? `Total collection for ${timeframe}: ${formatAmount(amount)}.`
+        : `No collections recorded yet ${timeframe}.`;
     }
     case "unpaid":
-      if (count === 0) {
-        return joinParagraphs(
-          `I checked, and there are no unpaid records${timeframeText ? ` ${timeframeText}` : ""}.`,
-          "Great job staying on top of collections!"
-        );
-      }
-      return joinParagraphs(
-        `There are ${count} unpaid record(s)${timeframeText ? ` ${timeframeText}` : ""}, totaling ${formatCurrency(total)}.`,
-        "Ask me for a summary or overdue accounts if you'd like."
-      );
+      return count > 0
+        ? `There are ${count} unpaid record(s), totaling ${formatAmount(total)}.`
+        : `No unpaid records found ${timeframe}.`;
     case "summary":
-      if (!hasStat(stats.totalToday) || !hasStat(stats.paidCount) || !hasStat(stats.unpaidCount)) {
-        return missingDataReply;
-      }
-      const summaryLines = [
-        `* Total collected: ${formatCurrency(stats.totalToday)}`,
-        `* Paid records: ${stats.paidCount}`,
-        `* Unpaid records: ${stats.unpaidCount}`,
-        `* Active vendors: ${stats.activeVendors} of ${stats.totalStalls} stalls`,
-      ];
       return joinParagraphs(
-        `Here’s a quick summary for ${stats.today}:`,
-        summaryLines.join("\n"),
-        "You can also ask for unpaid records or monthly totals."
+        `Summary for ${stats.today}:`,
+        [
+          `* Total collected: ${formatAmount(stats.totalToday)}`,
+          `* Paid records: ${stats.paidCount}`,
+          `* Unpaid records: ${stats.unpaidCount}`,
+          `* Active vendors: ${stats.activeVendors} of ${stats.totalStalls} stalls`,
+        ].join("\n")
       );
     case "overdue":
-      if (!hasStat(stats.overdueCount)) {
-        return missingDataReply;
-      }
-      if (stats.overdueCount === 0) {
-        return "Good news — there are no overdue accounts right now.";
-      }
-      const overdueBlock =
-        count > 0
-          ? joinParagraphs("Here are the overdue records:", records.map((record, index) => formatRecordLine(record, index)).join("\n"))
-          : undefined;
+      if (stats.overdueCount === 0) return "No overdue accounts right now - great news.";
       return joinParagraphs(
-        `There are ${stats.overdueCount} overdue account(s), totaling ${formatCurrency(total)}${timeframeText ? ` ${timeframeText}` : ""}.`,
-        overdueBlock
+        `There are ${stats.overdueCount} overdue account(s).`,
+        records.length ? records.map(formatRecordLine).join("\n") : undefined
       );
     case "update":
-      if (
-        !hasStat(stats.totalMonth) ||
-        !hasStat(stats.paidCount) ||
-        !hasStat(stats.unpaidCount) ||
-        !hasStat(stats.totalStalls)
-      ) {
-        return missingDataReply;
-      }
-      const updateSection = joinParagraphs(
+      return joinParagraphs(
         "Update snapshot:",
-        `* Total collected: ${formatCurrency(stats.totalMonth)}`,
-        `* Paid: ${stats.paidCount} | Unpaid: ${stats.unpaidCount}`,
-        `* Stalls: ${stats.totalStalls} (${stats.activeVendors} active)`
+        `* Month-to-date collected: ${formatAmount(stats.totalMonth)}
+* Paid records: ${stats.paidCount}
+* Unpaid records: ${stats.unpaidCount}
+* Active vendors: ${stats.activeVendors} of ${stats.totalStalls}`,
+        recent[0] ? `Latest: ${formatRecentTransactionLine(recent[0])}` : undefined
       );
-      const previewRecord =
-        count > 0
-          ? `Sample: ${formatRecordLine(records[0], 0)}${count > 1 ? ` ...and ${count - 1} more.` : ""}`
-          : undefined;
-      const latestTransaction =
-        recentTransactions.length > 0 ? `Latest: ${formatRecentTransactionLine(recentTransactions[0])}` : undefined;
-      return joinParagraphs(updateSection, previewRecord, latestTransaction, "Need unpaid details or today’s summary?");
     case "collector_updates":
-      if (!isAdmin) {
-        return COLLECTOR_UNAUTHORIZED_MSG;
-      }
-      if (!collectors.length) {
-        return missingDataReply;
-      }
-      const sortedCollectors = [...collectors].sort(
-        (a, b) =>
-          b.collectionsToday - a.collectionsToday ||
-          b.unpaidAssignedStalls - a.unpaidAssignedStalls
-      );
-      const collectorLines = sortedCollectors.map(formatCollectorLine).join("\n");
-      const recentBlock =
-        recentTransactions.length > 0
-          ? `Recent transactions:\n${recentTransactions
-              .slice(0, 3)
-              .map((transaction) => formatRecentTransactionLine(transaction))
-              .join("\n")}`
-          : undefined;
-      return joinParagraphs(
-        "Here’s the latest collector update:",
-        collectorLines,
-        recentBlock,
-        "You can also ask who collected the most today or who needs follow-up."
-      );
-    case "top_collector":
-      if (!isAdmin) {
-        return COLLECTOR_UNAUTHORIZED_MSG;
-      }
-      if (!collectors.length) {
-        return missingDataReply;
-      }
-      const bestCollector = collectors.reduce((prev, current) =>
-        current.collectionsToday > prev.collectionsToday ? current : prev
-      );
-      if (!hasStat(bestCollector.collectionsToday) || bestCollector.collectionsToday <= 0) {
-        return "No collections recorded for today yet.";
-      }
-      return joinParagraphs(
-        `${bestCollector.name} is leading the collections today with ${formatCurrency(bestCollector.collectionsToday)}.`,
-        `${bestCollector.unpaidAssignedStalls} unpaid stall(s) remain assigned to them.`
-      );
-    case "top_unpaid":
-      if (!isAdmin) {
-        return COLLECTOR_UNAUTHORIZED_MSG;
-      }
-      if (!collectors.length) {
-        return missingDataReply;
-      }
-      const mostUnpaid = collectors.reduce((prev, current) =>
-        current.unpaidAssignedStalls > prev.unpaidAssignedStalls ? current : prev
-      );
-      if (!hasStat(mostUnpaid.unpaidAssignedStalls) || mostUnpaid.unpaidAssignedStalls === 0) {
-        return "Great news — there are no unpaid stalls reported today.";
-      }
-      return joinParagraphs(
-        `${mostUnpaid.name} still has the most unpaid stalls (${mostUnpaid.unpaidAssignedStalls}).`,
-        `They’ve collected ${formatCurrency(mostUnpaid.collectionsToday)} so far today.`
-      );
-    case "needs_follow_up":
-      if (!isAdmin) {
-        return COLLECTOR_UNAUTHORIZED_MSG;
-      }
-      if (!collectors.length) {
-        return missingDataReply;
-      }
-      const followUpList = [...collectors]
+      return collectors.length
+        ? joinParagraphs("Latest collector update:", collectors.map(formatCollectorLine).join("\n"))
+        : "No collector records are available right now.";
+    case "top_collector": {
+      const top = [...collectors].sort((a, b) => b.collectionsToday - a.collectionsToday)[0];
+      return top && top.collectionsToday > 0
+        ? `${top.name} is leading today with ${formatAmount(top.collectionsToday)}.`
+        : "No collections recorded for any collector today yet.";
+    }
+    case "top_unpaid": {
+      const top = [...collectors].sort((a, b) => b.unpaidAssignedStalls - a.unpaidAssignedStalls)[0];
+      return top && top.unpaidAssignedStalls > 0
+        ? `${top.name} has the most unpaid assigned stalls: ${top.unpaidAssignedStalls}.`
+        : "No unpaid assigned stalls are reported right now.";
+    }
+    case "needs_follow_up": {
+      const list = [...collectors]
+        .filter((collector) => collector.unpaidAssignedStalls > 0)
         .sort((a, b) => b.unpaidAssignedStalls - a.unpaidAssignedStalls)
         .slice(0, 3);
-      if (!followUpList.length) {
-        return "Everyone is caught up today.";
-      }
-      const followUpLines = followUpList
-        .map((collector) => `${collector.name}: ${collector.unpaidAssignedStalls} unpaid stall(s)`)
-        .join("\n");
-      return joinParagraphs(
-        "These collectors may need follow-up:",
-        followUpLines,
-        "You can ask for their latest updates or the collector performance list."
-      );
+      return list.length
+        ? joinParagraphs("Follow up with:", list.map((collector) => `* ${collector.name}: ${collector.unpaidAssignedStalls} unpaid stall(s)`).join("\n"))
+        : "No follow-up priorities right now.";
+    }
     case "dashboard_insight":
-      if (!hasStat(stats.totalToday) || !hasStat(stats.totalMonth) || !hasStat(stats.unpaidCount)) {
-        return missingDataReply;
-      }
-      const insightLines = [
-        `* Today’s collection: ${formatCurrency(stats.totalToday)}`,
-        `* Month-to-date: ${formatCurrency(stats.totalMonth)}`,
-        `* Unpaid records: ${stats.unpaidCount}, Overdue: ${stats.overdueCount}`,
-        `* Active vendors: ${stats.activeVendors} / ${stats.totalStalls} stalls`,
-      ];
-      const insightRecent =
-        recentTransactions.length > 0 ? `Today’s latest payment: ${formatRecentTransactionLine(recentTransactions[0])}` : undefined;
-      const sortedByCollected = [...collectors].sort((a, b) => b.collectionsToday - a.collectionsToday);
-      const topCollectorInsight = sortedByCollected[0];
-      const topInsight =
-        topCollectorInsight && hasStat(topCollectorInsight.collectionsToday)
-          ? `Top collector: ${topCollectorInsight.name} (${formatCurrency(
-              topCollectorInsight.collectionsToday
-            )}), with ${topCollectorInsight.unpaidAssignedStalls} unpaid stall(s).`
-          : undefined;
       return joinParagraphs(
-        "Here’s what stands out today:",
-        insightLines.join("\n"),
-        topInsight,
-        insightRecent,
-        "You can also ask for a collector update or who needs follow-up."
+        "Here's what stands out today:",
+        `* Today: ${formatAmount(stats.totalToday)}
+* Month-to-date: ${formatAmount(stats.totalMonth)}
+* Unpaid: ${stats.unpaidCount}
+* Overdue: ${stats.overdueCount}
+* Active vendors: ${stats.activeVendors} of ${stats.totalStalls}`,
+        recent[0] ? `Latest payment: ${formatRecentTransactionLine(recent[0])}` : undefined
       );
     case "history":
-      if (!isAdmin) {
-        return COLLECTOR_UNAUTHORIZED_MSG;
-      }
-      if (records.length === 0) {
-        return "No recorded payments found for today.";
-      }
-      const historyLines = records.map((record, index) => formatRecordLine(record, index)).join("\n");
-      return joinParagraphs(
-        "Here’s the full recorded history of payments today (all recorded entries):",
-        historyLines,
-        "You can also request the monthly totals or collector leaderboard."
-      );
-    case "stalls":
-      if (!hasStat(stats.totalStalls) || !hasStat(stats.vacantStalls)) {
-        return missingDataReply;
-      }
+      return records.length
+        ? joinParagraphs("Recorded payment history today:", records.map(formatRecordLine).join("\n"))
+        : "No recorded payments found for today.";
+    case "stalls": {
       const occupied = stats.totalStalls - stats.vacantStalls;
-      return joinParagraphs(
-        `Sure! I currently track ${stats.totalStalls} stalls/vendors (${occupied} occupied, ${stats.vacantStalls} vacant).`,
-        "Ask me about active vendors or totals."
-      );
+      return `Tracked stalls: ${stats.totalStalls}. Occupied: ${occupied}. Vacant: ${stats.vacantStalls}.`;
+    }
     case "my_collections":
-      if (!hasStat(stats.myCollectionsToday)) {
-        return missingDataReply;
-      }
-      return joinParagraphs(
-        "Got it. Here's your collection for today:",
-        `${formatCurrency(stats.myCollectionsToday)}`,
-        "You can also check your unpaid assigned stalls or your summary."
-      );
+      return stats.myCollectionsToday && stats.myCollectionsToday > 0
+        ? `${stats.collectorName}, your collections today total ${formatAmount(stats.myCollectionsToday)}.`
+        : `${stats.collectorName ?? "Collector"}, no collections recorded yet today for your section.`;
     case "my_unpaid":
-      if (!hasStat(stats.myUnpaidCount)) {
-        return missingDataReply;
-      }
-      return joinParagraphs(
-        `Sure, you have ${stats.myUnpaidCount} unpaid assigned stall(s).`,
-        "Need me to pull up the unpaid list or your pending collections?"
-      );
+      return `${stats.collectorName ?? "Collector"}, you have ${stats.myUnpaidCount ?? 0} unpaid assigned stall(s).`;
     case "my_assigned":
-      if (!hasStat(stats.myAssignedStallsCount)) {
-        return missingDataReply;
-      }
-      return joinParagraphs(
-        `You have ${stats.myAssignedStallsCount} assigned stall(s).`,
-        "You can also ask for unpaid records or your summary today."
-      );
+      return `${stats.collectorName ?? "Collector"}, you have ${stats.myAssignedStallsCount ?? 0} assigned stall(s) in ${stats.collectorSection ?? "your section"}.`;
     case "my_pending":
-      if (!hasStat(stats.myPendingAmount)) {
-        return missingDataReply;
-      }
-      return joinParagraphs(
-        `Your pending collections total ${formatCurrency(stats.myPendingAmount)}.`,
-        "Want me to show unpaid assigned stalls or your summary?"
-      );
+      return stats.myPendingAmount && stats.myPendingAmount > 0
+        ? `${stats.collectorName ?? "Collector"}, your pending collections total ${formatAmount(stats.myPendingAmount)}.`
+        : `${stats.collectorName ?? "Collector"}, no pending collection amount is recorded for your section.`;
     case "my_summary":
-      if (!hasStat(stats.mySummaryCount) || !hasStat(stats.myCollectionsToday)) {
-        return missingDataReply;
-      }
       return joinParagraphs(
-        `Here’s your summary for ${stats.today}:`,
-        `* Payments recorded: ${stats.mySummaryCount}`,
-        `* Total collected: ${formatCurrency(stats.myCollectionsToday)}`,
-        "You can also check unpaid assigned stalls or your pending collections."
+        `Summary for ${stats.collectorName ?? "collector"} on ${stats.today}:`,
+        `* Payments recorded: ${stats.mySummaryCount ?? 0}
+* Total collected: ${formatAmount(stats.myCollectionsToday)}
+* Unpaid assigned stalls: ${stats.myUnpaidCount ?? 0}
+* Pending amount: ${formatAmount(stats.myPendingAmount)}`
       );
     default:
-      return joinParagraphs(
-        "I can help with unpaid today, total this month, summary today, overdue accounts, collector updates, or total stalls.",
-        "Try one of those phrases or ask for collector performance."
-      );
+      return getHelpResponse(stats);
   }
 };
 
 export const generateResponse = (
   result: ChatResult,
   systemStats: DashboardStats,
-  stalls: StallRecord[] = []
+  records: ChatRecord[] = []
 ): string => {
   if (result.query.intent === "social" && result.query.socialIntent) {
-    return getSocialResponse(result.query.socialIntent);
+    return getSocialResponse(result.query.socialIntent, systemStats);
   }
-  return getPaymentResponse(result, systemStats, stalls);
+  return getPaymentResponse(result, systemStats, records);
 };
-
-interface PaymentChatAssistantProps {
-  records: Invoice[];
-  systemStats: DashboardStats;
-  variant?: "page" | "panel";
-}
-
-interface ChatMessageItem {
-  sender: "bot" | "user";
-  text: string;
-}
 
 export const PaymentChatAssistant = ({
   records,
   systemStats,
   variant = "panel",
+  onRequestRefresh,
 }: PaymentChatAssistantProps) => {
-  const initialGreeting = getRoleAwareGreeting(systemStats);
-  const [messages, setMessages] = useState<ChatMessageItem[]>([{ sender: "bot", text: initialGreeting }]);
+  const initialGreeting = useMemo(() => getSocialResponse("greet", systemStats), [systemStats]);
+  const initialGreetingRef = useRef(initialGreeting);
+  const [messages, setMessages] = useState<ChatMessageItem[]>(() => [
+    createBotMessage(initialGreetingRef.current),
+  ]);
   const [inputValue, setInputValue] = useState("");
   const [context, setContext] = useState<ChatQuery | null>(null);
   const [isTyping, setIsTyping] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [navOffset, setNavOffset] = useState(0);
   const [composerHeight, setComposerHeight] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerHeight
+  );
+  const [lastDataUpdatedAt, setLastDataUpdatedAt] = useState(() => new Date());
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const normalizedRole = systemStats.role?.toLowerCase();
-  const isAdmin = normalizedRole === "admin";
   const isPageVariant = variant === "page";
-  const composerBottomOffset = keyboardInset || 0;
-  const messageListSpacerHeight = isPageVariant
-    ? composerHeight + composerBottomOffset + navOffset + 8
-    : 0;
-  const quickSuggestions = isAdmin
-    ? [
-        "unpaid today",
-        "total this month",
-        "summary today",
-        "overdue accounts",
-        "collection update",
-        "total stalls",
-        "show all collectors performance",
-        "dashboard update",
-        "show me full history of payments today",
-      ]
-    : [
-        "my collections today",
-        "my pending collections",
-        "my unpaid assigned stalls",
-        "my summary today",
-        "my assigned stalls",
-      ];
+  const isKeyboardOpen = keyboardInset > 0;
+  const pageComposerBottom = keyboardInset > 0 ? keyboardInset : navOffset;
+  const pageMessagesBottomPadding = isPageVariant
+    ? composerHeight + (isKeyboardOpen ? 0 : navOffset) + 12
+    : undefined;
+  const chatRootStyle = {
+    "--mp-chat-nav-offset": `${navOffset}px`,
+    "--mp-chat-composer-bottom": `${pageComposerBottom}px`,
+    "--mp-chat-composer-height": `${composerHeight}px`,
+    "--mp-chat-viewport-height": viewportHeight > 0 ? `${viewportHeight}px` : "100vh",
+  } as CSSProperties;
+  const quickSuggestions = roleExamples(systemStats);
+  const staleMinutes = Math.floor((nowTick - lastDataUpdatedAt.getTime()) / 60000);
+  const isDataStale = staleMinutes >= 5;
 
-  const handleSendMessage = (text: string) => {
+  useEffect(() => {
+    setLastDataUpdatedAt(new Date());
+  }, [records, systemStats]);
+
+  useEffect(() => {
+    setMessages((current) => {
+      const seenInitialGreeting = new Set<string>();
+      const deduped = current.filter((message) => {
+        const isInitialGreeting =
+          message.sender === "bot" && message.text === initialGreetingRef.current;
+        if (!isInitialGreeting) return true;
+        if (seenInitialGreeting.has(message.text)) return false;
+        seenInitialGreeting.add(message.text);
+        return true;
+      });
+      return deduped.length === current.length ? current : deduped;
+    });
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowTick(Date.now()), 60000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const addBotMessage = (text: string, extra?: Pick<ChatMessageItem, "confirmQuery" | "examples">) => {
+    setMessages((current) => [...current, createBotMessage(text, extra)]);
+  };
+
+  const runQuery = (query: ChatQuery) => {
+    if (query.intent === "payment" && query.paymentIntent) {
+      if (!isAuthorized(query, systemStats)) {
+        setContext(null);
+        return unauthorizedMessage(systemStats);
+      }
+      if (!hasRequiredStats(query.paymentIntent, systemStats)) {
+        onRequestRefresh?.();
+        return missingStatsResponse;
+      }
+      const result = filterRecords(query, records);
+      setContext(query);
+      return getPaymentResponse(result, systemStats, result.records);
+    }
+    if (query.intent === "social" && query.socialIntent) {
+      setContext(null);
+      return getSocialResponse(query.socialIntent, systemStats);
+    }
+    return getUnknownResponse(query.text, systemStats);
+  };
+
+  const handleSendMessage = (text: string, forcedQuery?: ChatQuery) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    const userMessage = { sender: "user", text: trimmed };
-    const parsedQuery = parseQuery(trimmed);
-    let botText = "";
+    const userMessage: ChatMessageItem = {
+      id: createMessageId(),
+      sender: "user",
+      text: trimmed,
+      createdAt: new Date(),
+    };
 
-    if (parsedQuery.intent === "unknown") {
-      botText = getUnknownResponse(trimmed, systemStats);
-    } else if (parsedQuery.intent === "social" && parsedQuery.socialIntent) {
-      if (parsedQuery.socialIntent === "greet") {
-        botText = getRoleAwareGreeting(systemStats);
-      } else {
-        botText = getSocialResponse(parsedQuery.socialIntent);
-      }
-    } else {
-      const effectiveQuery = mergeWithContext(parsedQuery, context);
-      if (effectiveQuery.intent === "payment" && effectiveQuery.paymentIntent) {
-        const result = filterRecords(effectiveQuery, records);
-        botText = getPaymentResponse(result, systemStats, result.records);
-        setContext(effectiveQuery);
-      } else if (effectiveQuery.intent === "unknown") {
-        botText = joinParagraphs(
-        "I'm sorry — I don’t know how to reply to that yet.",
-          "Try asking about unpaid today, total this month, summary today, overdue accounts, collector updates, or total stalls."
-        );
-      } else {
-        botText = joinParagraphs(
-          "I can help with unpaid today, total this month, summary today, overdue accounts, collector updates, or total stalls.",
-          "If you'd like, try one of those exact phrases."
-        );
-      }
-    }
-
-    if (typingTimerRef.current) {
-      clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = null;
-    }
-
+    inputRef.current?.blur();
+    const parsed = forcedQuery ?? mergeWithContext(parseQuery(trimmed), context);
     setMessages((current) => [...current, userMessage]);
     setInputValue("");
-    setIsTyping(true);
 
-    const responseDelay = getTypingDelay(botText);
+    if (parsed.intent === "payment" && parsed.confidence === "low" && parsed.paymentIntent && !forcedQuery) {
+      addBotMessage(`Did you mean: ${PAYMENT_INTENTS[parsed.paymentIntent].label}?`, {
+        confirmQuery: { ...parsed, confidence: "high" },
+      });
+      return;
+    }
+
+    const botText = runQuery(parsed);
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    setIsTyping(true);
     typingTimerRef.current = setTimeout(() => {
-      setMessages((current) => [...current, { sender: "bot", text: botText }]);
+      addBotMessage(botText, parsed.paymentIntent === "help" ? { examples: roleExamples(systemStats) } : undefined);
       setIsTyping(false);
       typingTimerRef.current = null;
-    }, responseDelay);
+    }, Math.min(1500, 450 + botText.length * 3));
   };
 
-  const handleSend = () => handleSendMessage(inputValue);
-  const handleSuggestionClick = (suggestion: string) => handleSendMessage(suggestion);
+  const handleConfirm = (query: ChatQuery) => {
+    handleSendMessage(PAYMENT_INTENTS[query.paymentIntent ?? "help"].label, query);
+  };
+
+  const copyMessage = async (message: ChatMessageItem) => {
+    const copied = await copyTextToClipboard(message.text);
+    if (!copied) return;
+    setCopiedMessageId(message.id);
+    window.setTimeout(() => setCopiedMessageId(null), 2000);
+  };
 
   useEffect(() => {
-    const scrollToBottom = () => {
+    const scrollToLatest = () => {
+      const container = messagesContainerRef.current;
+      if (container) {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: "smooth",
+        });
+        return;
+      }
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     };
 
-    requestAnimationFrame(scrollToBottom);
+    const frame = requestAnimationFrame(scrollToLatest);
+    const timer = window.setTimeout(scrollToLatest, 120);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
   }, [messages, isTyping]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
     const viewport = window.visualViewport;
     const measureLayout = () => {
-      const nextKeyboardInset = viewport
-        ? Math.max(0, Math.round(window.innerHeight - (viewport.height + viewport.offsetTop)))
-        : 0;
+      const nextViewportHeight = viewport?.height
+        ? Math.round(viewport.height)
+        : window.innerHeight;
+      setViewportHeight(nextViewportHeight);
 
-      setKeyboardInset(nextKeyboardInset > 120 ? nextKeyboardInset : 0);
-
+      const nextKeyboardInset = viewport ? Math.max(0, Math.round(window.innerHeight - (viewport.height + viewport.offsetTop))) : 0;
+      const keyboardOpen = nextKeyboardInset > 120;
+      setKeyboardInset(keyboardOpen ? nextKeyboardInset : 0);
       const navElement = document.getElementById("mobile-bottom-nav-bar");
-      if (!navElement) {
-        setNavOffset(0);
-      } else {
+      if (navElement && isPageVariant && !keyboardOpen) {
         const rect = navElement.getBoundingClientRect();
-        const visibleHeight = Math.max(0, Math.min(rect.height, window.innerHeight - rect.top));
-        setNavOffset(visibleHeight > 0 ? Math.round(visibleHeight) : 0);
+        const measuredHeight = Math.max(
+          navElement.offsetHeight,
+          rect.height,
+          navElement.parentElement?.getBoundingClientRect().height ?? 0
+        );
+        setNavOffset(Math.ceil(measuredHeight));
+      } else {
+        setNavOffset(0);
       }
-
       if (composerRef.current) {
-        setComposerHeight(Math.round(composerRef.current.getBoundingClientRect().height));
+        setComposerHeight(Math.ceil(composerRef.current.getBoundingClientRect().height));
       }
     };
-
-    const requestMeasure = () => {
-      requestAnimationFrame(measureLayout);
-    };
-
+    const requestMeasure = () => requestAnimationFrame(measureLayout);
     requestMeasure();
     viewport?.addEventListener("resize", requestMeasure);
     viewport?.addEventListener("scroll", requestMeasure);
     window.addEventListener("resize", requestMeasure);
-    window.addEventListener("scroll", requestMeasure, { passive: true });
     window.addEventListener("orientationchange", requestMeasure);
-
     const resizeObserver =
       typeof ResizeObserver !== "undefined" ? new ResizeObserver(requestMeasure) : null;
-    if (resizeObserver && composerRef.current) {
-      resizeObserver.observe(composerRef.current);
-    }
-
+    if (resizeObserver && composerRef.current) resizeObserver.observe(composerRef.current);
     const navElement = document.getElementById("mobile-bottom-nav-bar");
-    if (resizeObserver && navElement) {
-      resizeObserver.observe(navElement);
-    }
-
+    if (resizeObserver && navElement) resizeObserver.observe(navElement);
     return () => {
       viewport?.removeEventListener("resize", requestMeasure);
       viewport?.removeEventListener("scroll", requestMeasure);
       window.removeEventListener("resize", requestMeasure);
-      window.removeEventListener("scroll", requestMeasure);
       window.removeEventListener("orientationchange", requestMeasure);
       resizeObserver?.disconnect();
     };
+  }, [isPageVariant]);
+
+  useEffect(() => () => {
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
   }, []);
-
-  useEffect(() => {
-    return () => {
-      if (typingTimerRef.current) {
-        clearTimeout(typingTimerRef.current);
-      }
-    };
-  }, []);
-
-  const renderedMessages = useMemo(
-    () => (
-      <>
-        {messages.map((message, index) => {
-          const previousSender = index > 0 ? messages[index - 1].sender : null;
-          const spacingFromPrevious = index === 0 ? 0 : previousSender === message.sender ? 4 : 16;
-
-          return (
-            <div
-              key={`${message.sender}-${index}`}
-              className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
-              style={{ marginTop: spacingFromPrevious }}
-            >
-              <div
-                className={`max-w-[82%] rounded-2xl px-4 py-3.5 text-sm leading-7 shadow-sm ${
-                  message.sender === "user"
-                    ? "bg-primary text-white"
-                    : "bg-slate-100 text-slate-900"
-                }`}
-              >
-                {message.text}
-              </div>
-            </div>
-          );
-        })}
-        {isTyping && (
-          <div
-            className="flex justify-start"
-            style={{
-              marginTop:
-                messages.length > 0 && messages[messages.length - 1].sender === "bot" ? 4 : 16,
-            }}
-          >
-            <div className="typing-indicator" role="status" aria-live="polite" aria-label="Assistant is typing">
-              <span className="typing-indicator-dot" />
-              <span className="typing-indicator-dot" />
-              <span className="typing-indicator-dot" />
-            </div>
-          </div>
-        )}
-        {isPageVariant && <div style={{ height: messageListSpacerHeight }} aria-hidden="true" />}
-        <div ref={messagesEndRef} aria-hidden="true" />
-      </>
-    ),
-    [isPageVariant, isTyping, messageListSpacerHeight, messages]
-  );
 
   return (
     <div
+      style={chatRootStyle}
       className={
         isPageVariant
-          ? "flex flex-col"
-          : "flex min-h-[70dvh] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:min-h-0"
+          ? "payment-chat payment-chat--page flex flex-col overflow-hidden bg-transparent text-foreground"
+          : "payment-chat payment-chat--panel flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm"
       }
     >
       {!isPageVariant && (
         <div className="mb-4">
           <h2 className="text-lg font-semibold">SMP AI Agent</h2>
-          <p className="text-sm text-muted-foreground">
-            Ask casually: "How many unpaid invoices today?" or "Show overdue records." Follow up with "total?" and I'll keep the context.
-          </p>
+          <p className="text-sm text-muted-foreground">Ask for payment totals, unpaid records, or type "help".</p>
+        </div>
+      )}
+
+      {isDataStale && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Data may be outdated - last updated {formatRelativeMinutes(lastDataUpdatedAt)}.
         </div>
       )}
 
@@ -1010,40 +913,102 @@ export const PaymentChatAssistant = ({
         ref={messagesContainerRef}
         className={
           isPageVariant
-            ? "flex flex-col"
-            : "flex flex-1 flex-col gap-3 overflow-y-auto px-1 pb-3 md:flex-none"
+            ? "payment-chat__messages flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
+            : "payment-chat__messages flex flex-1 flex-col gap-3 overflow-y-auto px-1 pb-3"
         }
         style={{
           maxHeight: isPageVariant ? undefined : 380,
-          WebkitOverflowScrolling: isPageVariant ? undefined : "touch",
-          overscrollBehavior: isPageVariant ? undefined : "contain",
+          paddingBottom: pageMessagesBottomPadding,
+          WebkitOverflowScrolling: "touch",
         }}
       >
-        {renderedMessages}
+        {messages.map((message, index) => (
+          <div
+            key={message.id}
+            className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
+            style={{ marginTop: index === 0 ? 0 : messages[index - 1].sender === message.sender ? 4 : 16 }}
+          >
+            <div className={`group max-w-[86%] ${message.sender === "user" ? "text-right" : "text-left"}`}>
+              <div
+                className={`rounded-2xl px-4 py-3.5 text-sm leading-7 shadow-sm whitespace-pre-line ${
+                  message.sender === "user" ? "bg-primary text-white" : "bg-slate-100 text-slate-900"
+                }`}
+              >
+                {message.text}
+                {message.confirmQuery && (
+                  <button
+                    type="button"
+                    onClick={() => handleConfirm(message.confirmQuery!)}
+                    className="mt-3 block rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-white"
+                  >
+                    Yes, run this
+                  </button>
+                )}
+                {message.examples && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {message.examples.map((example) => (
+                      <button
+                        key={example}
+                        type="button"
+                        onClick={() => handleSendMessage(example)}
+                        className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-700"
+                      >
+                        {example}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {message.sender === "bot" && (
+                <div className="mt-1 flex items-center gap-2 px-2 text-[11px] text-slate-500">
+                  <span>{formatTime(message.createdAt)}</span>
+                  <button
+                    type="button"
+                    onClick={() => copyMessage(message)}
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-slate-100"
+                  >
+                    {copiedMessageId === message.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                    {copiedMessageId === message.id ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {isTyping && (
+          <div className="flex justify-start" style={{ marginTop: 16 }}>
+            <div className="typing-indicator" role="status" aria-live="polite" aria-label="Assistant is typing">
+              <span className="typing-indicator-dot" />
+              <span className="typing-indicator-dot" />
+              <span className="typing-indicator-dot" />
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} aria-hidden="true" />
       </div>
 
       <div
         ref={composerRef}
         className={
           isPageVariant
-            ? "fixed inset-x-0 bottom-0 z-[60] border-t border-slate-200 bg-background/95 pt-4 backdrop-blur md:sticky md:z-10"
+            ? "payment-chat__composer payment-chat__composer--page fixed inset-x-0 z-[70] bg-background px-4 pb-3 pt-2"
             : "sticky bottom-0 mt-5 space-y-3 border-t border-slate-100 bg-white pt-4"
         }
         style={{
-          bottom: isPageVariant ? composerBottomOffset : keyboardInset || undefined,
+          bottom: isPageVariant ? pageComposerBottom : keyboardInset || undefined,
           paddingBottom: isPageVariant
-            ? "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)"
+            ? "0.75rem"
             : "calc(env(safe-area-inset-bottom, 0px) + 0.25rem)",
         }}
       >
-        <div className={isPageVariant ? "mx-auto w-full space-y-3 px-4 md:px-0" : ""}>
+        <div className={isPageVariant ? "mx-auto w-full space-y-3" : ""}>
           <div className="-mx-1 overflow-x-auto px-1 pb-1">
             <div className="flex w-max gap-2 pr-2">
               {quickSuggestions.map((suggestion) => (
                 <button
                   key={suggestion}
                   type="button"
-                  onClick={() => handleSuggestionClick(suggestion)}
+                  onClick={() => handleSendMessage(suggestion)}
                   className="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
                 >
                   {suggestion}
@@ -1057,10 +1022,11 @@ export const PaymentChatAssistant = ({
             autoComplete="off"
             onSubmit={(event) => {
               event.preventDefault();
-              handleSend();
+              handleSendMessage(inputValue);
             }}
           >
             <input
+              ref={inputRef}
               type="search"
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
@@ -1068,14 +1034,6 @@ export const PaymentChatAssistant = ({
               autoCorrect="off"
               autoCapitalize="off"
               spellCheck={false}
-              data-form-type="other"
-              data-lpignore="true"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleSend();
-                }
-              }}
               className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               placeholder="Ask anything about payments..."
             />
@@ -1090,4 +1048,11 @@ export const PaymentChatAssistant = ({
       </div>
     </div>
   );
+};
+
+const getUnknownResponse = (text: string, stats: DashboardStats): string => {
+  if (isRudeMessage(text)) {
+    return joinParagraphs("I'm here to help with Market Pay tasks.", `Try: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`);
+  }
+  return joinParagraphs("I didn't catch a Market Pay request.", `Try: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`);
 };

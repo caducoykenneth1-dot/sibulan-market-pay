@@ -67,10 +67,17 @@ export const Navigation = ({
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNavVisible, setIsNavVisible] = useState(true);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const lastScrollY = useRef(0);
 
   useEffect(() => {
     const handleScroll = () => {
+      if (currentPage === "assistant") {
+        setIsNavVisible(!isKeyboardOpen);
+        lastScrollY.current = window.scrollY;
+        return;
+      }
+
       const currentScrollY = window.scrollY;
 
       if (currentScrollY < 10) {
@@ -89,7 +96,35 @@ export const Navigation = ({
 
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [currentPage, isKeyboardOpen]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    const measureKeyboard = () => {
+      const keyboardInset = Math.max(
+        0,
+        Math.round(window.innerHeight - (viewport.height + viewport.offsetTop))
+      );
+      const nextKeyboardOpen = keyboardInset > 120;
+      setIsKeyboardOpen(nextKeyboardOpen);
+      if (currentPage === "assistant") {
+        setIsNavVisible(!nextKeyboardOpen);
+      }
+    };
+
+    measureKeyboard();
+    viewport.addEventListener("resize", measureKeyboard);
+    viewport.addEventListener("scroll", measureKeyboard);
+    window.addEventListener("orientationchange", measureKeyboard);
+
+    return () => {
+      viewport.removeEventListener("resize", measureKeyboard);
+      viewport.removeEventListener("scroll", measureKeyboard);
+      window.removeEventListener("orientationchange", measureKeyboard);
+    };
+  }, [currentPage]);
 
   const navItems = userRole === "collector" ? collectorNav : adminNav;
 
