@@ -14,7 +14,6 @@ import {
   Users,
   Calendar,
   Bell,
-  WifiOff,
   ClipboardList,
   Signal,
   MessageCircle,
@@ -68,7 +67,6 @@ export const Navigation = ({
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNavVisible, setIsNavVisible] = useState(true);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const lastScrollY = useRef(0);
 
   useEffect(() => {
@@ -91,28 +89,6 @@ export const Navigation = ({
 
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
-
-  useEffect(() => {
-    const checkConnection = async () => {
-      try {
-        await fetch("https://www.google.com/favicon.ico", { mode: "no-cors", cache: "no-store" });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-
-    const handleStatusChange = async () => setIsOnline(navigator.onLine && (await checkConnection()));
-    
-    const interval = setInterval(handleStatusChange, 5000);
-    window.addEventListener("online", handleStatusChange);
-    window.addEventListener("offline", handleStatusChange);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("online", handleStatusChange);
-      window.removeEventListener("offline", handleStatusChange);
-    };
   }, []);
 
   const navItems = userRole === "collector" ? collectorNav : adminNav;
@@ -177,14 +153,6 @@ export const Navigation = ({
 
   return (
     <>
-      {/* Offline Banner for Collectors */}
-      {!isOnline && userRole === "collector" && (
-        <div className="fixed top-0 left-0 right-0 z-[100] bg-amber-600 text-white px-4 py-1.5 text-center text-xs font-medium flex items-center justify-center gap-2 shadow-md animate-in slide-in-from-top-1">
-          <WifiOff className="h-3.5 w-3.5" />
-          <span>You are offline. Payments will be saved locally.</span>
-        </div>
-      )}
-
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
       <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 transition-transform duration-500 ease-in-out ${isNavVisible ? "translate-y-0" : "translate-y-[160%]"}`}>
         <div

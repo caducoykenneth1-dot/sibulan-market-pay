@@ -42,6 +42,7 @@ import { Eye, EyeOff, ChevronLeft } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
+import { loadOfflineCache, saveOfflineCache } from "@/lib/offlineCache";
 
 type AccountRole = "admin" | "collector";
 
@@ -65,6 +66,9 @@ const sectionMap = new Map(STALL_TYPES.map((type) => [type.name, type.section]))
 // 👉 Your deployed Edge Function base URL
 const USER_MGMT_FN =
   "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/user-management";
+const INVOICES_CACHE_KEY = "cache_invoices";
+const STALLS_CACHE_KEY = "cache_stalls";
+const ACCOUNTS_CACHE_KEY = "cache_accounts";
 
 const Index = () => {
   const [rawStalls, setRawStalls] = useState<StallRecord[]>([]);
@@ -80,6 +84,8 @@ const Index = () => {
     if (typeof localStorage === "undefined") return null;
     return localStorage.getItem("collectorAvatarUrl");
   });
+  const [coreDataError, setCoreDataError] = useState<string | null>(null);
+  const [isCoreDataLoading, setIsCoreDataLoading] = useState(false);
 
   const [authMode, setAuthMode] = useState<
     "login" | "register" | "forgot_password" | "reset_password"
@@ -285,6 +291,112 @@ const Index = () => {
     setNewCollections(todaysPaid.length);
   }, [allInvoices]);
 
+  const mapVendorRowsToStalls = useCallback((rows: VendorRow[]) => {
+    const typeCounters = new Map<string, number>();
+
+    return rows.map((row, index) => {
+      const numericId =
+        typeof row.id === "number"
+          ? row.id
+          : Number.parseInt(String(row.id ?? ""), 10);
+      const safeId =
+        Number.isFinite(numericId) && numericId > 0
+          ? numericId
+          : Date.now() + index;
+      const { sequence: typeSequence, typeValue } = getNextTypeSequence(
+        typeCounters,
+        row.type
+      );
+      const monthlyRentValue =
+        typeof row.monthly_rent === "number"
+          ? row.monthly_rent
+          : Number.parseFloat(String(row.monthly_rent ?? 0)) || 0;
+
+      const statusValue = computeStatusFromDueDate(row.next_due, row.status);
+      const section = sectionMap.get(typeValue) ?? "N/A";
+
+      return {
+        id: `stall-${safeId}`,
+        dbId: safeId,
+        name: `Stall ${typeSequence}`,
+        vendor: row.vendor ?? "",
+        contact: row.contact ?? "",
+        type: typeValue,
+        rentAmount: monthlyRentValue,
+        rentalType: row.rental_type || "monthly",
+        lastPayment: row.last_payment ?? "",
+        nextDue: row.next_due ?? "",
+        status: statusValue,
+        occupied: statusValue !== "vacant" && statusValue !== "archived",
+        section,
+        archive_reason: row.archive_reason ?? null,
+      };
+    });
+  }, []);
+
+  const loadCoreData = useCallback(async () => {
+    setIsCoreDataLoading(true);
+    setCoreDataError(null);
+
+    let missingCriticalData = false;
+
+    const loadInvoices = async () => {
+      const { data, error } = await supabase
+        .from("invoices")
+        .select(
+          "id, vendor_id, vendor_name, stall_name, amount, due_date, status, paid_at, payment_type, collector_name, collector_id, notes, stall_type, receipt_number"
+        );
+
+      if (!error) {
+        const invoices = data || [];
+        setAllInvoices(invoices);
+        saveOfflineCache(INVOICES_CACHE_KEY, invoices);
+        return;
+      }
+
+      const cachedInvoices = loadOfflineCache<Invoice[]>(INVOICES_CACHE_KEY);
+      if (cachedInvoices?.data) {
+        setAllInvoices(cachedInvoices.data);
+        return;
+      }
+
+      missingCriticalData = true;
+    };
+
+    const loadStalls = async () => {
+      const { data, error } = await supabase
+        .from("vendors")
+        .select(
+          "id,vendor,contact,type,monthly_rent,last_payment,next_due,status,rental_type,archive_reason"
+        )
+        .order("id", { ascending: true });
+
+      if (!error) {
+        const rows = (data ?? []) as VendorRow[];
+        const mapped = mapVendorRowsToStalls(rows);
+        setRawStalls(mapped);
+        saveOfflineCache(STALLS_CACHE_KEY, rows);
+        return;
+      }
+
+      const cachedStalls = loadOfflineCache<VendorRow[]>(STALLS_CACHE_KEY);
+      if (cachedStalls?.data) {
+        setRawStalls(mapVendorRowsToStalls(cachedStalls.data));
+        return;
+      }
+
+      missingCriticalData = true;
+    };
+
+    await Promise.all([loadInvoices(), loadStalls()]);
+
+    if (missingCriticalData) {
+      setCoreDataError("Could not load data. Check your connection.");
+    }
+
+    setIsCoreDataLoading(false);
+  }, [mapVendorRowsToStalls]);
+
   // ✅ Fetch all user accounts for the admin via Edge Function (secure)
   useEffect(() => {
     const fetchAccounts = async () => {
@@ -300,6 +412,11 @@ const Index = () => {
         });
         const result = await res.json();
         if (!res.ok) {
+          const cachedAccounts = loadOfflineCache<Account[]>(ACCOUNTS_CACHE_KEY);
+          if (cachedAccounts?.data) {
+            setAccounts(cachedAccounts.data);
+            return;
+          }
           toast({
             title: "Unable to load users",
             description:
@@ -310,9 +427,16 @@ const Index = () => {
         }
         if (result?.users) {
           // Result shape: { id, email, full_name, role, created_at, last_sign_in_at }
-          setAccounts(result.users as Account[]);
+          const users = result.users as Account[];
+          setAccounts(users);
+          saveOfflineCache(ACCOUNTS_CACHE_KEY, users);
         }
       } catch (e: any) {
+        const cachedAccounts = loadOfflineCache<Account[]>(ACCOUNTS_CACHE_KEY);
+        if (cachedAccounts?.data) {
+          setAccounts(cachedAccounts.data);
+          return;
+        }
         toast({
           title: "Error fetching users",
           description: e?.message ?? "Network error",
@@ -387,19 +511,8 @@ const Index = () => {
   // ✅ Load ALL invoices for reports
   // This runs on mount and when dataVersion changes (manual refresh or vendor change)
   useEffect(() => {
-    const fetchAllInvoices = async () => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(
-          "id, vendor_id, vendor_name, stall_name, amount, due_date, status, paid_at, payment_type, collector_name, collector_id, notes, stall_type, receipt_number"
-        );
-
-      if (!error) {
-        setAllInvoices(data || []);
-      }
-    };
-    fetchAllInvoices();
-  }, [dataVersion]);
+    loadCoreData();
+  }, [dataVersion, loadCoreData]);
 
   useEffect(() => {
     if (typeof localStorage === "undefined") return;
@@ -411,88 +524,6 @@ const Index = () => {
   }, [avatarUrl]);
 
   // ✅ Load stalls
-  useEffect(() => {
-    let isCancelled = false;
-
-    const loadStalls = async () => {
-      const { data, error } = await supabase
-        .from("vendors")
-        .select(
-          "id,vendor,contact,type,monthly_rent,last_payment,next_due,status,rental_type,archive_reason"
-        )
-        .order("id", { ascending: true });
-
-      if (error) {
-        if (!isCancelled) {
-          if (!navigator.onLine) {
-            toast({
-              title: "No Internet Connection",
-              description:
-                "Could not load stalls. Please check your connection and try again.",
-              variant: "destructive",
-            });
-          } else {
-            toast({
-              title: "Failed to load stalls",
-              description: error.message,
-              variant: "destructive",
-            });
-          }
-        }
-        return;
-      }
-      if (isCancelled) return;
-
-      const rows = (data ?? []) as VendorRow[];
-      const typeCounters = new Map<string, number>();
-      const mapped: StallRecord[] = rows.map((row, index) => {
-        const numericId =
-          typeof row.id === "number"
-            ? row.id
-            : Number.parseInt(String(row.id ?? ""), 10);
-        const safeId =
-          Number.isFinite(numericId) && numericId > 0
-            ? numericId
-            : Date.now() + index;
-        const { sequence: typeSequence, typeValue } = getNextTypeSequence(
-          typeCounters,
-          row.type
-        );
-        const monthlyRentValue =
-          typeof row.monthly_rent === "number"
-            ? row.monthly_rent
-            : Number.parseFloat(String(row.monthly_rent ?? 0)) || 0;
-
-        const statusValue = computeStatusFromDueDate(row.next_due, row.status);
-        const section = sectionMap.get(typeValue) ?? "N/A";
-
-        return {
-          id: `stall-${safeId}`,
-          dbId: safeId,
-          name: `Stall ${typeSequence}`,
-          vendor: row.vendor ?? "",
-          contact: row.contact ?? "",
-          type: typeValue,
-          rentAmount: monthlyRentValue,
-          rentalType: row.rental_type || "monthly",
-          lastPayment: row.last_payment ?? "",
-          nextDue: row.next_due ?? "",
-          status: statusValue,
-          occupied: statusValue !== "vacant" && statusValue !== "archived",
-          section,
-          archive_reason: row.archive_reason ?? null,
-        };
-      });
-
-      setRawStalls(mapped);
-    };
-
-    loadStalls();
-    return () => {
-      isCancelled = true;
-    };
-  }, [dataVersion, toast]);
-
   // ✅ Filter out archived stalls using useMemo for performance
   const stalls = useMemo(() => {
     return rawStalls.filter((stall) => stall.status !== "archived");
@@ -1488,7 +1519,29 @@ const handleForgotPassword = async (
         </div>
 
         <main className="flex-1 w-full space-y-6 p-4 pt-6 with-bottom-nav">
-          {renderCurrentPage()}
+          {coreDataError ? (
+            <Card className="mx-auto mt-8 max-w-lg">
+              <CardHeader>
+                <CardTitle>Could not load data</CardTitle>
+                <CardDescription>Check your connection.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <p className="text-sm text-muted-foreground">
+                  The app could not load fresh data and no local cache was available.
+                </p>
+                <Button
+                  type="button"
+                  onClick={loadCoreData}
+                  disabled={isCoreDataLoading}
+                  className="w-full sm:w-auto"
+                >
+                  {isCoreDataLoading ? "Retrying..." : "Retry"}
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            renderCurrentPage()
+          )}
         </main>
       </div>
       {/* Map the latest dashboard metrics into the AI payload so the assistant always has real totals. */}

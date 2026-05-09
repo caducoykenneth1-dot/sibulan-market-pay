@@ -47,6 +47,7 @@ export interface QueuedPayment {
   nextDue: string | null;
   paymentMethod: 'cash' | 'gcash' | 'maycana';
   referenceNumber: string;
+  paymentPeriod?: { start: Date; end: Date };
   duration?: number;
 }
 
@@ -502,7 +503,6 @@ export const PaymentCollection = ({
         nextDue: selectedStall.nextDue,
         paymentMethod,
         referenceNumber,
-        duration: loopCount,
         paymentPeriod: paymentPeriod || undefined,
         duration: dur,
       };
