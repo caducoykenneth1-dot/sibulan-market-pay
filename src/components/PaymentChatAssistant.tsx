@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { DashboardStats, type CollectorInfo, type RecentTransaction } from "@/data/dashboardStats";
 import { Invoice } from "./UnpaidDues";
 import "./PaymentChatAssistant.css";
@@ -59,6 +59,7 @@ const extractTimeframe = (text: string): ChatQuery["timeframe"] => {
 };
 
 const GREETING_WORDS = new Set(["hi", "hello", "hey"]);
+const RUDE_WORDS = new Set(["fuck", "fck", "shit", "stupid", "idiot", "bobo", "gago", "tanga", "ulol"]);
 const PAYMENT_PATTERNS: Array<{ intent: ChatQuery["paymentIntent"]; phrases: string[] }> = [
   {
     intent: "my_collections",
@@ -208,6 +209,11 @@ const tokenizeWords = (text: string) => {
 const isGreeting = (text: string) => {
   const tokens = tokenizeWords(text);
   return tokens.some((token) => GREETING_WORDS.has(token.toLowerCase()));
+};
+
+const isRudeMessage = (text: string) => {
+  const tokens = tokenizeWords(text);
+  return tokens.some((token) => RUDE_WORDS.has(token.toLowerCase()));
 };
 
 const escapeRegExp = (value: string) =>
@@ -412,6 +418,29 @@ const getRoleAwareGreeting = (stats: DashboardStats): string => {
   const label = role === "admin" ? "admin" : role === "collector" ? "collector" : "user";
   const displayName = stats.collectorName?.trim();
   return `Hello ${label}${displayName ? ` ${displayName}` : ""}! Need a fresh update on collections, unpaid records, or stalls?`;
+};
+
+const getFallbackExamples = (stats: DashboardStats): [string, string] => {
+  const role = stats.role?.toLowerCase();
+  return role === "admin"
+    ? ["unpaid today", "show all collectors performance"]
+    : ["my collections today", "my unpaid assigned stalls"];
+};
+
+const getUnknownResponse = (text: string, stats: DashboardStats): string => {
+  const [firstExample, secondExample] = getFallbackExamples(stats);
+
+  if (isRudeMessage(text)) {
+    return joinParagraphs(
+      "I'm here to help with Market Pay tasks.",
+      `If you need something, ask me like "${firstExample}" or "${secondExample}".`
+    );
+  }
+
+  return joinParagraphs(
+    "I didn't quite catch a Market Pay request there.",
+    `Try asking something like "${firstExample}" or "${secondExample}".`
+  );
 };
 
 export const getSocialResponse = (
@@ -732,18 +761,39 @@ export const generateResponse = (
 interface PaymentChatAssistantProps {
   records: Invoice[];
   systemStats: DashboardStats;
+  variant?: "page" | "panel";
 }
 
-export const PaymentChatAssistant = ({ records, systemStats }: PaymentChatAssistantProps) => {
+interface ChatMessageItem {
+  sender: "bot" | "user";
+  text: string;
+}
+
+export const PaymentChatAssistant = ({
+  records,
+  systemStats,
+  variant = "panel",
+}: PaymentChatAssistantProps) => {
   const initialGreeting = getRoleAwareGreeting(systemStats);
-  const [messages, setMessages] = useState([{ sender: "bot", text: initialGreeting }]);
+  const [messages, setMessages] = useState<ChatMessageItem[]>([{ sender: "bot", text: initialGreeting }]);
   const [inputValue, setInputValue] = useState("");
   const [context, setContext] = useState<ChatQuery | null>(null);
   const [isTyping, setIsTyping] = useState(false);
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [navOffset, setNavOffset] = useState(0);
+  const [composerHeight, setComposerHeight] = useState(0);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLDivElement | null>(null);
 
   const normalizedRole = systemStats.role?.toLowerCase();
   const isAdmin = normalizedRole === "admin";
+  const isPageVariant = variant === "page";
+  const composerBottomOffset = keyboardInset || 0;
+  const messageListSpacerHeight = isPageVariant
+    ? composerHeight + composerBottomOffset + navOffset + 8
+    : 0;
   const quickSuggestions = isAdmin
     ? [
         "unpaid today",
@@ -772,7 +822,9 @@ export const PaymentChatAssistant = ({ records, systemStats }: PaymentChatAssist
     const parsedQuery = parseQuery(trimmed);
     let botText = "";
 
-    if (parsedQuery.intent === "social" && parsedQuery.socialIntent) {
+    if (parsedQuery.intent === "unknown") {
+      botText = getUnknownResponse(trimmed, systemStats);
+    } else if (parsedQuery.intent === "social" && parsedQuery.socialIntent) {
       if (parsedQuery.socialIntent === "greet") {
         botText = getRoleAwareGreeting(systemStats);
       } else {
@@ -818,6 +870,71 @@ export const PaymentChatAssistant = ({ records, systemStats }: PaymentChatAssist
   const handleSuggestionClick = (suggestion: string) => handleSendMessage(suggestion);
 
   useEffect(() => {
+    const scrollToBottom = () => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    };
+
+    requestAnimationFrame(scrollToBottom);
+  }, [messages, isTyping]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const viewport = window.visualViewport;
+    const measureLayout = () => {
+      const nextKeyboardInset = viewport
+        ? Math.max(0, Math.round(window.innerHeight - (viewport.height + viewport.offsetTop)))
+        : 0;
+
+      setKeyboardInset(nextKeyboardInset > 120 ? nextKeyboardInset : 0);
+
+      const navElement = document.getElementById("mobile-bottom-nav-bar");
+      if (!navElement) {
+        setNavOffset(0);
+      } else {
+        const rect = navElement.getBoundingClientRect();
+        const visibleHeight = Math.max(0, Math.min(rect.height, window.innerHeight - rect.top));
+        setNavOffset(visibleHeight > 0 ? Math.round(visibleHeight) : 0);
+      }
+
+      if (composerRef.current) {
+        setComposerHeight(Math.round(composerRef.current.getBoundingClientRect().height));
+      }
+    };
+
+    const requestMeasure = () => {
+      requestAnimationFrame(measureLayout);
+    };
+
+    requestMeasure();
+    viewport?.addEventListener("resize", requestMeasure);
+    viewport?.addEventListener("scroll", requestMeasure);
+    window.addEventListener("resize", requestMeasure);
+    window.addEventListener("scroll", requestMeasure, { passive: true });
+    window.addEventListener("orientationchange", requestMeasure);
+
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(requestMeasure) : null;
+    if (resizeObserver && composerRef.current) {
+      resizeObserver.observe(composerRef.current);
+    }
+
+    const navElement = document.getElementById("mobile-bottom-nav-bar");
+    if (resizeObserver && navElement) {
+      resizeObserver.observe(navElement);
+    }
+
+    return () => {
+      viewport?.removeEventListener("resize", requestMeasure);
+      viewport?.removeEventListener("scroll", requestMeasure);
+      window.removeEventListener("resize", requestMeasure);
+      window.removeEventListener("scroll", requestMeasure);
+      window.removeEventListener("orientationchange", requestMeasure);
+      resizeObserver?.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (typingTimerRef.current) {
         clearTimeout(typingTimerRef.current);
@@ -825,34 +942,39 @@ export const PaymentChatAssistant = ({ records, systemStats }: PaymentChatAssist
     };
   }, []);
 
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold">SMP AI Agent</h2>
-        <p className="text-sm text-muted-foreground">
-          Ask casually: "How many unpaid invoices today?" or "Show overdue records." Follow up with "total?" and I'll keep the context.
-        </p>
-      </div>
+  const renderedMessages = useMemo(
+    () => (
+      <>
+        {messages.map((message, index) => {
+          const previousSender = index > 0 ? messages[index - 1].sender : null;
+          const spacingFromPrevious = index === 0 ? 0 : previousSender === message.sender ? 4 : 16;
 
-      <div className="flex flex-col gap-3 overflow-y-auto pb-2" style={{ maxHeight: 380 }}>
-        {messages.map((message, index) => (
-          <div
-            key={`${message.sender}-${index}`}
-            className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
-          >
+          return (
             <div
-              className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                message.sender === "user"
-                  ? "bg-primary text-white"
-                  : "bg-slate-100 text-slate-900"
-              }`}
+              key={`${message.sender}-${index}`}
+              className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
+              style={{ marginTop: spacingFromPrevious }}
             >
-              {message.text}
+              <div
+                className={`max-w-[82%] rounded-2xl px-4 py-3.5 text-sm leading-7 shadow-sm ${
+                  message.sender === "user"
+                    ? "bg-primary text-white"
+                    : "bg-slate-100 text-slate-900"
+                }`}
+              >
+                {message.text}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {isTyping && (
-          <div className="flex justify-start">
+          <div
+            className="flex justify-start"
+            style={{
+              marginTop:
+                messages.length > 0 && messages[messages.length - 1].sender === "bot" ? 4 : 16,
+            }}
+          >
             <div className="typing-indicator" role="status" aria-live="polite" aria-label="Assistant is typing">
               <span className="typing-indicator-dot" />
               <span className="typing-indicator-dot" />
@@ -860,41 +982,111 @@ export const PaymentChatAssistant = ({ records, systemStats }: PaymentChatAssist
             </div>
           </div>
         )}
+        {isPageVariant && <div style={{ height: messageListSpacerHeight }} aria-hidden="true" />}
+        <div ref={messagesEndRef} aria-hidden="true" />
+      </>
+    ),
+    [isPageVariant, isTyping, messageListSpacerHeight, messages]
+  );
+
+  return (
+    <div
+      className={
+        isPageVariant
+          ? "flex flex-col"
+          : "flex min-h-[70dvh] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:min-h-0"
+      }
+    >
+      {!isPageVariant && (
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold">SMP AI Agent</h2>
+          <p className="text-sm text-muted-foreground">
+            Ask casually: "How many unpaid invoices today?" or "Show overdue records." Follow up with "total?" and I'll keep the context.
+          </p>
+        </div>
+      )}
+
+      <div
+        ref={messagesContainerRef}
+        className={
+          isPageVariant
+            ? "flex flex-col"
+            : "flex flex-1 flex-col gap-3 overflow-y-auto px-1 pb-3 md:flex-none"
+        }
+        style={{
+          maxHeight: isPageVariant ? undefined : 380,
+          WebkitOverflowScrolling: isPageVariant ? undefined : "touch",
+          overscrollBehavior: isPageVariant ? undefined : "contain",
+        }}
+      >
+        {renderedMessages}
       </div>
 
-      <div className="mb-3 flex flex-wrap gap-2">
-        {quickSuggestions.map((suggestion) => (
-          <button
-            key={suggestion}
-            type="button"
-            onClick={() => handleSuggestionClick(suggestion)}
-            className="rounded-full border border-slate-300 bg-slate-100 px-3 py-1.5 text-xs text-slate-700 transition hover:bg-slate-200"
-          >
-            {suggestion}
-          </button>
-        ))}
-      </div>
+      <div
+        ref={composerRef}
+        className={
+          isPageVariant
+            ? "fixed inset-x-0 bottom-0 z-[60] border-t border-slate-200 bg-background/95 pt-4 backdrop-blur md:sticky md:z-10"
+            : "sticky bottom-0 mt-5 space-y-3 border-t border-slate-100 bg-white pt-4"
+        }
+        style={{
+          bottom: isPageVariant ? composerBottomOffset : keyboardInset || undefined,
+          paddingBottom: isPageVariant
+            ? "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)"
+            : "calc(env(safe-area-inset-bottom, 0px) + 0.25rem)",
+        }}
+      >
+        <div className={isPageVariant ? "mx-auto w-full space-y-3 px-4 md:px-0" : ""}>
+          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+            <div className="flex w-max gap-2 pr-2">
+              {quickSuggestions.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  onClick={() => handleSuggestionClick(suggestion)}
+                  className="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div className="mt-4 flex gap-2">
-        <input
-          value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
+          <form
+            className="flex gap-2"
+            autoComplete="off"
+            onSubmit={(event) => {
               event.preventDefault();
               handleSend();
-            }
-          }}
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-          placeholder="Ask anything about payments..."
-        />
-        <button
-          type="button"
-          onClick={handleSend}
-          className="inline-flex items-center rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary/90"
-        >
-          Send
-        </button>
+            }}
+          >
+            <input
+              type="search"
+              value={inputValue}
+              onChange={(event) => setInputValue(event.target.value)}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-form-type="other"
+              data-lpignore="true"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleSend();
+                }
+              }}
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              placeholder="Ask anything about payments..."
+            />
+            <button
+              type="submit"
+              className="inline-flex items-center rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary/90"
+            >
+              Send
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

@@ -187,15 +187,20 @@ export const Navigation = ({
 
       {/* ✅ Mobile Bottom Navigation (Single Row, Icon Beside Text) */}
       <div className={`md:hidden fixed bottom-0 left-0 right-0 z-50 transition-transform duration-500 ease-in-out ${isNavVisible ? "translate-y-0" : "translate-y-[160%]"}`}>
-        <div className="relative border-t bg-background/80 backdrop-blur-xl shadow-lg">
-          <button
-            type="button"
-            onClick={() => handleMobileNav("assistant")}
-            className="absolute -top-10 right-4 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-xl shadow-primary/30 transition hover:bg-primary/90"
-            aria-label="Open AI assistant"
-          >
-            <MessageCircle className="h-7 w-7" />
-          </button>
+        <div
+          id="mobile-bottom-nav-bar"
+          className="relative border-t bg-background/80 backdrop-blur-xl shadow-lg"
+        >
+          {currentPage !== "assistant" && (
+            <button
+              type="button"
+              onClick={() => handleMobileNav("assistant")}
+              className="absolute -top-10 right-4 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-xl shadow-primary/30 transition hover:bg-primary/90"
+              aria-label="Open AI assistant"
+            >
+              <MessageCircle className="h-7 w-7" />
+            </button>
+          )}
 
           <div className="grid grid-cols-5 items-end gap-1 px-2 pb-3 pt-6">
             {(

@@ -512,6 +512,7 @@ const Index = () => {
     [
       stalls,
       allInvoices,
+      accounts,
       user?.user_metadata?.role,
       user?.user_metadata?.full_name,
       user?.id,
@@ -873,7 +874,7 @@ const handleForgotPassword = async (
                 </div>
               </div>
             </div>
-            <PaymentChatAssistant records={allInvoices} systemStats={dashboardStats} />
+            <PaymentChatAssistant records={allInvoices} systemStats={dashboardStats} variant="page" />
           </div>
         );
       case "profile":
