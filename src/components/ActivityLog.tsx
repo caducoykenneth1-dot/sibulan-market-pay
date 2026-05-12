@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -10,12 +10,11 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabaseClient";
 import { format } from "date-fns";
 import { Loader2, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
-interface ActivityLogEntry {
+export interface ActivityLogEntry {
   id: number;
   user_name: string;
   action: string;
@@ -23,72 +22,58 @@ interface ActivityLogEntry {
   created_at: string;
 }
 
+interface ActivityLogProps {
+  logs?: ActivityLogEntry[];
+  newEntryAt?: number | null;
+}
+
 const ITEMS_PER_PAGE = 10;
 
-export const ActivityLog = () => {
-  const [logs, setLogs] = useState<ActivityLogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+export const ActivityLog = ({ logs = [], newEntryAt }: ActivityLogProps) => {
+  const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [highlightLatest, setHighlightLatest] = useState(false);
 
-  // Debounce search to prevent excessive API calls
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setDebouncedSearch(searchTerm);
-      setCurrentPage(1); // Reset to page 1 on new search
+      setCurrentPage(1);
     }, 500);
-    return () => clearTimeout(timer);
+    return () => window.clearTimeout(timer);
   }, [searchTerm]);
 
-  const fetchLogs = async () => {
-    setLoading(true);
-    const from = (currentPage - 1) * ITEMS_PER_PAGE;
-    const to = from + ITEMS_PER_PAGE - 1;
-
-    let query = supabase
-      .from("activity_logs")
-      .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(from, to);
-
-    if (debouncedSearch) {
-      query = query.or(`user_name.ilike.%${debouncedSearch}%,action.ilike.%${debouncedSearch}%,details.ilike.%${debouncedSearch}%`);
-    }
-
-    const { data, count, error } = await query;
-
-    if (!error && data) {
-      setLogs(data);
-      setTotalCount(count || 0);
-    }
+  useEffect(() => {
     setLoading(false);
-  };
+  }, [logs]);
 
   useEffect(() => {
-    fetchLogs();
+    if (!newEntryAt) return;
+    setHighlightLatest(true);
+    const timer = window.setTimeout(() => setHighlightLatest(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [newEntryAt]);
 
-    const subscription = supabase
-      .channel("activity_logs_changes")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "activity_logs" },
-        () => {
-          // Only refresh automatically if on the first page and not searching
-          if (currentPage === 1 && !debouncedSearch) {
-            fetchLogs();
-          }
-        }
+  const filteredLogs = useMemo(() => {
+    const normalized = debouncedSearch.trim().toLowerCase();
+    const sorted = [...logs].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    if (!normalized) return sorted;
+    return sorted.filter((log) =>
+      [log.user_name, log.action, log.details].some((value) =>
+        value?.toLowerCase().includes(normalized)
       )
-      .subscribe();
+    );
+  }, [logs, debouncedSearch]);
 
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [currentPage, debouncedSearch]);
-
+  const totalCount = filteredLogs.length;
   const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
+  const pagedLogs = filteredLogs.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
   return (
     <div className="space-y-6">
@@ -108,7 +93,7 @@ export const ActivityLog = () => {
               <Input
                 placeholder="Search logs..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(event) => setSearchTerm(event.target.value)}
                 className="pl-8"
               />
             </div>
@@ -132,15 +117,18 @@ export const ActivityLog = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {logs.length === 0 ? (
+                    {pagedLogs.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
                           No activity logs found.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      logs.map((log) => (
-                        <TableRow key={log.id}>
+                      pagedLogs.map((log, index) => (
+                        <TableRow
+                          key={log.id}
+                          className={index === 0 && highlightLatest ? "bg-emerald-50 transition-colors" : undefined}
+                        >
                           <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                             {format(new Date(log.created_at), "MMM d, h:mm a")}
                           </TableCell>
@@ -158,16 +146,15 @@ export const ActivityLog = () => {
                 </Table>
               </div>
 
-              {/* Pagination Controls */}
               <div className="flex items-center justify-between">
                 <div className="text-sm text-muted-foreground">
-                  Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1} to {Math.min(currentPage * ITEMS_PER_PAGE, totalCount)} of {totalCount} entries
+                  Showing {totalCount === 0 ? 0 : (currentPage - 1) * ITEMS_PER_PAGE + 1} to {Math.min(currentPage * ITEMS_PER_PAGE, totalCount)} of {totalCount} entries
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
                     disabled={currentPage === 1 || loading}
                   >
                     <ChevronLeft className="h-4 w-4" />
@@ -179,8 +166,8 @@ export const ActivityLog = () => {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages || loading}
+                    onClick={() => setCurrentPage((page) => Math.min(totalPages || 1, page + 1))}
+                    disabled={currentPage >= (totalPages || 1) || loading}
                   >
                     Next
                     <ChevronRight className="h-4 w-4" />

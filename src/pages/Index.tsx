@@ -13,7 +13,7 @@ import { UnpaidDues } from "@/components/UnpaidDues";
 import { NotificationsPanel } from "@/components/NotificationsPanel";
 import { type Invoice } from "@/components/UnpaidDues";
 import { CollectorProfile } from "@/components/CollectorProfile";
-import { ActivityLog } from "@/components/ActivityLog";
+import { ActivityLog, type ActivityLogEntry } from "@/components/ActivityLog";
 import {
   computeStatusFromDueDate,
   getNextTypeSequence,
@@ -85,8 +85,17 @@ type ErrorWithMessage = {
 };
 
 type RealtimeInvoiceRecord = {
+  id?: number | string | null;
   status?: string | null;
   vendor_name?: string | null;
+  stall_name?: string | null;
+  amount?: number | string | null;
+  collector_name?: string | null;
+};
+
+type PresenceMeta = {
+  user_id?: string;
+  online_at?: string;
 };
 
 const getErrorMessage = (error: unknown, fallback: string) => {
@@ -112,6 +121,7 @@ const USER_MGMT_FN =
 const INVOICES_CACHE_KEY = "cache_invoices";
 const STALLS_CACHE_KEY = "cache_stalls";
 const ACCOUNTS_CACHE_KEY = "cache_accounts";
+const ACTIVITY_LOGS_CACHE_KEY = "cache_activity_logs";
 const OFFLINE_ALLOWED_PAGES: Record<AccountRole, Set<string>> = {
   collector: new Set(["dashboard", "collect", "history", "unpaid", "assistant"]),
   admin: new Set(["dashboard", "history", "unpaid", "assistant"]),
@@ -122,10 +132,18 @@ const canUsePageOffline = (role: string | undefined, page: string) => {
   return OFFLINE_ALLOWED_PAGES[normalizedRole].has(page);
 };
 
+const formatPeso = (value: number | string | null | undefined) => {
+  const amount = typeof value === "number" ? value : Number(value ?? 0);
+  return `PHP ${Number.isFinite(amount) ? amount.toLocaleString("en-PH") : "0"}`;
+};
+
 const Index = () => {
   const [rawStalls, setRawStalls] = useState<StallRecord[]>([]);
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
+  const [activityUpdatedAt, setActivityUpdatedAt] = useState<number | null>(null);
+  const [onlineCollectorIds, setOnlineCollectorIds] = useState<string[]>([]);
   const [dataVersion, setDataVersion] = useState(0);
   const [currentPage, setCurrentPage] = useState("dashboard");
   const [user, setUser] = useState<AppUser | null>(null);
@@ -171,6 +189,7 @@ const Index = () => {
   const { toast } = useToast();
   const { isOnline } = useOnlineStatus();
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const activityLogIdsRef = useRef<Set<number>>(new Set());
 
   // ✅ Check for active session
   useEffect(() => {
@@ -265,7 +284,19 @@ const Index = () => {
           table: "notifications",
           filter: `user_id=eq.${user.id}`,
         },
-        () => {
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const notification = payload.new as { message?: string | null; type?: string | null };
+            toast({
+              title: "New notification",
+              description: notification.message || "You have a new notification.",
+            });
+            if (notification.type === "assignment") {
+              supabase.auth.getUser().then(({ data }) => {
+                if (data.user) setUser(data.user);
+              });
+            }
+          }
           fetchUnreadCount();
         }
       )
@@ -536,6 +567,30 @@ const Index = () => {
 
   const refreshData = useCallback(() => setDataVersion((v) => v + 1), []);
 
+  const loadActivityLogs = useCallback(async () => {
+    if (!isOnline) {
+      const cachedLogs = loadOfflineCache<ActivityLogEntry[]>(ACTIVITY_LOGS_CACHE_KEY);
+      if (cachedLogs?.data) {
+        setActivityLogs(cachedLogs.data);
+        activityLogIdsRef.current = new Set(cachedLogs.data.map((log) => log.id));
+      }
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .select("id,user_name,action,details,created_at")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (!error && data) {
+      const logs = data as ActivityLogEntry[];
+      setActivityLogs(logs);
+      activityLogIdsRef.current = new Set(logs.map((log) => log.id));
+      saveOfflineCache(ACTIVITY_LOGS_CACHE_KEY, logs);
+    }
+  }, [isOnline]);
+
   useEffect(() => {
     const handleOnline = () => {
       toast({
@@ -562,21 +617,24 @@ const Index = () => {
     }
     refreshTimeoutRef.current = setTimeout(() => {
       refreshData();
-    }, 500);
+    }, 300);
   }, [refreshData]);
 
   // ✅ Real-time Data Sync
   useEffect(() => {
     if (!user?.id || !isOnline || user.isOfflineSession) return;
 
+    const handleTableChange = () => {
+      debouncedRefresh();
+    };
+
     const channel = supabase
-      .channel("global-db-changes")
+      .channel("global-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "invoices" },
         (payload) => {
-          console.log("🔔 Realtime Invoice Update:", payload);
-          debouncedRefresh();
+          handleTableChange();
 
           // Notify Admin when a payment is marked as PAID
           if (user?.user_metadata?.role === "admin") {
@@ -590,8 +648,7 @@ const Index = () => {
 
             if (isNewPayment) {
               toast({
-                title: "New Collection",
-                description: `Payment received from ${newRecord?.vendor_name || "a vendor"}.`,
+                title: `💰 New payment collected by ${newRecord.collector_name || "Unknown collector"} — ${newRecord.stall_name || "Unknown stall"} — ${formatPeso(newRecord.amount)}`,
               });
             }
           }
@@ -600,26 +657,101 @@ const Index = () => {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "vendors" },
+        handleTableChange
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "activity_logs" },
         (payload) => {
-          console.log("🔔 Realtime Vendor Update:", payload);
-          debouncedRefresh();
+          handleTableChange();
+          if (payload.eventType === "INSERT") {
+            const newLog = payload.new as ActivityLogEntry;
+            setActivityLogs((current) => {
+              if (activityLogIdsRef.current.has(newLog.id)) return current;
+              activityLogIdsRef.current.add(newLog.id);
+              const next = [newLog, ...current].sort(
+                (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              );
+              saveOfflineCache(ACTIVITY_LOGS_CACHE_KEY, next);
+              return next;
+            });
+            setActivityUpdatedAt(Date.now());
+            if (user.user_metadata?.role === "admin" && currentPage === "activity") {
+              toast({ title: "New activity", description: newLog.details || newLog.action });
+            }
+          }
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "pending_stall_creations" },
+        handleTableChange
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "pending_archives" },
+        handleTableChange
+      )
       .subscribe((status) => {
-        console.log("📡 Realtime Status:", status);
         setRealtimeStatus(status);
       });
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, user?.isOfflineSession, isOnline, toast, debouncedRefresh]);
+  }, [
+    currentPage,
+    user?.id,
+    user?.isOfflineSession,
+    user?.user_metadata?.role,
+    isOnline,
+    toast,
+    debouncedRefresh,
+  ]);
 
   // ✅ Load ALL invoices for reports
   // This runs on mount and when dataVersion changes (manual refresh or vendor change)
   useEffect(() => {
     loadCoreData();
   }, [dataVersion, loadCoreData]);
+
+  useEffect(() => {
+    loadActivityLogs();
+  }, [dataVersion, loadActivityLogs]);
+
+  useEffect(() => {
+    if (!user?.id || !isOnline || user.isOfflineSession) return;
+
+    const channel = supabase.channel("online-collectors", {
+      config: { presence: { key: user.id } },
+    });
+
+    const syncPresence = () => {
+      const state = channel.presenceState<PresenceMeta>();
+      const ids = Object.values(state)
+        .flat()
+        .map((presence) => presence.user_id)
+        .filter((id): id is string => Boolean(id));
+      setOnlineCollectorIds(Array.from(new Set(ids)));
+    };
+
+    channel
+      .on("presence", { event: "sync" }, syncPresence)
+      .on("presence", { event: "join" }, syncPresence)
+      .on("presence", { event: "leave" }, syncPresence)
+      .subscribe(async (status) => {
+        if (status !== "SUBSCRIBED") return;
+        await channel.track({
+          user_id: user.id,
+          online_at: new Date().toISOString(),
+        } satisfies PresenceMeta);
+      });
+
+    return () => {
+      channel.untrack();
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, user?.isOfflineSession, isOnline]);
 
   useEffect(() => {
     if (typeof localStorage === "undefined") return;
@@ -1011,6 +1143,9 @@ const handleForgotPassword = async (
             userName={user?.user_metadata?.full_name ?? ""}
             userUsername={user?.email?.split("@")[0] ?? ""}
             avatarUrl={avatarUrl}
+            activityLogs={activityLogs}
+            onlineCollectorIds={onlineCollectorIds}
+            collectors={accounts}
           />
         );
       case "collect":
@@ -1063,7 +1198,7 @@ const handleForgotPassword = async (
       case "notifications":
         return <NotificationsPanel userId={user?.id} />;
       case "activity":
-        return <ActivityLog />;
+        return <ActivityLog logs={activityLogs} newEntryAt={activityUpdatedAt} />;
       case "assistant":
         return (
           <div className="flex min-h-0 flex-col gap-4">
@@ -1109,6 +1244,9 @@ const handleForgotPassword = async (
             userName={user?.user_metadata?.full_name ?? ""}
             userUsername={user?.email?.split("@")[0] ?? ""}
             avatarUrl={avatarUrl}
+            activityLogs={activityLogs}
+            onlineCollectorIds={onlineCollectorIds}
+            collectors={accounts}
           />
         );
     }

@@ -1198,9 +1198,11 @@ export const PaymentChatAssistant = ({
     typeof window === "undefined" ? 0 : window.innerHeight
   );
   const [lastDataUpdatedAt, setLastDataUpdatedAt] = useState(() => new Date());
+  const [dataJustUpdated, setDataJustUpdated] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasMountedDataRef = useRef(false);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
@@ -1227,6 +1229,13 @@ export const PaymentChatAssistant = ({
   }, [language]);
 
   useEffect(() => {
+    if (hasMountedDataRef.current) {
+      setDataJustUpdated(true);
+      const timer = window.setTimeout(() => setDataJustUpdated(false), 2200);
+      setLastDataUpdatedAt(new Date());
+      return () => window.clearTimeout(timer);
+    }
+    hasMountedDataRef.current = true;
     setLastDataUpdatedAt(new Date());
   }, [records, systemStats]);
 
@@ -1429,6 +1438,12 @@ export const PaymentChatAssistant = ({
       {isDataStale && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           {getResponse("staleData", language, { time: formatRelativeMinutes(lastDataUpdatedAt) })}
+        </div>
+      )}
+
+      {dataJustUpdated && (
+        <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+          Data just updated
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -14,11 +14,25 @@ import {
   PieChart,
   ClipboardList
 } from "lucide-react";
+import { type LucideIcon } from "lucide-react";
 import { type StallRecord } from "@/data/stalls";
 import { type Invoice } from "./UnpaidDues";
 import { MonthlyCollections } from "./MonthlyCollections";
-import { supabase } from "@/lib/supabaseClient";
 import { calculateDashboardStats } from "@/data/dashboardStats";
+import { type ActivityLogEntry } from "./ActivityLog";
+import { type Account } from "./UserManagement";
+
+type DashboardStatCard = {
+  title: string;
+  value: string;
+  change: string;
+  icon: LucideIcon;
+  className?: string;
+};
+
+type GroupedPayment = Invoice & {
+  amount: number;
+};
 
 interface DashboardProps {
   onPageChange: (page: string) => void;
@@ -28,6 +42,9 @@ interface DashboardProps {
   userName: string;
   userUsername: string;
   avatarUrl?: string | null;
+  activityLogs?: ActivityLogEntry[];
+  onlineCollectorIds?: string[];
+  collectors?: Account[];
 }
 
 const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
@@ -44,23 +61,46 @@ const buildDisplayNameMap = (stalls: StallRecord[]): Map<string, string> => {
   return names;
 };
 
-export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, userName, userUsername, avatarUrl }: DashboardProps) => {
+export const Dashboard = ({
+  onPageChange,
+  stalls,
+  userRole,
+  unpaidInvoices,
+  userName,
+  userUsername,
+  avatarUrl,
+  activityLogs = [],
+  onlineCollectorIds = [],
+  collectors = [],
+}: DashboardProps) => {
   const [showMonthlyCollections, setShowMonthlyCollections] = useState(false);
-  const [recentLogs, setRecentLogs] = useState<any[]>([]);
+  const onlineCollectorSet = useMemo(() => new Set(onlineCollectorIds), [onlineCollectorIds]);
+  const recentLogs = useMemo(
+    () =>
+      [...activityLogs]
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 5),
+    [activityLogs]
+  );
 
-  useEffect(() => {
-    if (userRole === 'admin') {
-      const fetchLogs = async () => {
-        const { data } = await supabase
-          .from("activity_logs")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(5);
-        if (data) setRecentLogs(data);
-      };
-      fetchLogs();
-    }
-  }, [userRole]);
+  const collectorPresence = useMemo(
+    () =>
+      collectors
+        .filter((account) => {
+          const meta = account.user_metadata || account.raw_user_meta_data || {};
+          return meta.role === "collector";
+        })
+        .map((account) => {
+          const meta = account.user_metadata || account.raw_user_meta_data || {};
+          return {
+            id: account.id,
+            name: meta.full_name || account.email?.split("@")[0] || "Collector",
+            online: onlineCollectorSet.has(account.id),
+          };
+        })
+        .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name)),
+    [collectors, onlineCollectorSet]
+  );
 
   // ✅ Filter paid invoices: If collector, show only their own. If admin, show all.
   const relevantPaidInvoices = useMemo(() => {
@@ -125,7 +165,7 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
     return (userUsername?.slice(0, 2) || "SM").toUpperCase();
   }, [userName, userUsername]);
 
-  const stats: Array<{ title: string; value: string; change: string; icon: any; className?: string }> = [
+  const stats: DashboardStatCard[] = [
     {
       title: "Today's Collections",
       value: `PHP ${totalToday.toLocaleString()}`,
@@ -166,7 +206,7 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
   const recentPayments = useMemo(() => {
     // ✅ Use the filtered list of invoices to find the most recent PAID transactions.
     // Group by receipt number to show bulk payments as one
-    const grouped = new Map<string, any>();
+    const grouped = new Map<string, GroupedPayment>();
     
     relevantPaidInvoices.forEach(inv => {
       const baseReceipt = inv.receipt_number 
@@ -179,7 +219,9 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
         grouped.set(key, { ...inv, amount: inv.amount });
       } else {
         const existing = grouped.get(key);
-        existing.amount += inv.amount;
+        if (existing) {
+          existing.amount += inv.amount;
+        }
       }
     });
 
@@ -301,6 +343,36 @@ export const Dashboard = ({ onPageChange, stalls, userRole, unpaidInvoices, user
       </div>
 
       {/* Shortcuts */}
+      {userRole?.toLowerCase() === "admin" && collectorPresence.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center justify-between">
+              Online Collectors
+              <span className="text-sm font-normal text-muted-foreground">
+                {collectorPresence.filter((collector) => collector.online).length} online
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {collectorPresence.map((collector) => (
+                <span
+                  key={collector.id}
+                  className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs font-medium"
+                >
+                  <span
+                    className={`h-2.5 w-2.5 rounded-full ${
+                      collector.online ? "bg-emerald-500" : "bg-muted-foreground/30"
+                    }`}
+                  />
+                  {collector.name}
+                </span>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between">
