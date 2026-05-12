@@ -42,9 +42,30 @@ import { Eye, EyeOff, ChevronLeft } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
-import { loadOfflineCache, saveOfflineCache } from "@/lib/offlineCache";
+import {
+  loadOfflineCache,
+  loadOfflineSession,
+  saveOfflineCache,
+  saveOfflineSession,
+  verifyOfflinePassword,
+} from "@/lib/offlineCache";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 
 type AccountRole = "admin" | "collector";
+
+type AppUser = {
+  id: string;
+  email?: string;
+  user_metadata?: {
+    full_name?: string;
+    role?: string;
+    market_section?: string | null;
+    section?: string | null;
+    phone?: string;
+    address?: string;
+  };
+  isOfflineSession?: boolean;
+};
 
 type VendorRow = {
   id: number | string | null;
@@ -59,6 +80,28 @@ type VendorRow = {
   archive_reason?: string | null;
 };
 
+type ErrorWithMessage = {
+  message: string;
+};
+
+type RealtimeInvoiceRecord = {
+  status?: string | null;
+  vendor_name?: string | null;
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as ErrorWithMessage).message === "string"
+  ) {
+    return (error as ErrorWithMessage).message;
+  }
+  return fallback;
+};
+
 // A dummy domain to append to usernames to make them valid for Supabase Auth.
 const DUMMY_EMAIL_DOMAIN = "@example.com";
 const sectionMap = new Map(STALL_TYPES.map((type) => [type.name, type.section]));
@@ -69,6 +112,15 @@ const USER_MGMT_FN =
 const INVOICES_CACHE_KEY = "cache_invoices";
 const STALLS_CACHE_KEY = "cache_stalls";
 const ACCOUNTS_CACHE_KEY = "cache_accounts";
+const OFFLINE_ALLOWED_PAGES: Record<AccountRole, Set<string>> = {
+  collector: new Set(["dashboard", "collect", "history", "unpaid", "assistant"]),
+  admin: new Set(["dashboard", "history", "unpaid", "assistant"]),
+};
+
+const canUsePageOffline = (role: string | undefined, page: string) => {
+  const normalizedRole: AccountRole = role === "collector" ? "collector" : "admin";
+  return OFFLINE_ALLOWED_PAGES[normalizedRole].has(page);
+};
 
 const Index = () => {
   const [rawStalls, setRawStalls] = useState<StallRecord[]>([]);
@@ -76,7 +128,7 @@ const Index = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [dataVersion, setDataVersion] = useState(0);
   const [currentPage, setCurrentPage] = useState("dashboard");
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [newCollections, setNewCollections] = useState(0);
   const [realtimeStatus, setRealtimeStatus] = useState<string>("CONNECTING");
@@ -117,10 +169,13 @@ const Index = () => {
   const [registerPasswordVisible, setRegisterPasswordVisible] = useState(false);
   const [registerConfirmVisible, setRegisterConfirmVisible] = useState(false);
   const { toast } = useToast();
+  const { isOnline } = useOnlineStatus();
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // ✅ Check for active session
   useEffect(() => {
+    if (!isOnline) return;
+
     const checkUser = async () => {
       const { data } = await supabase.auth.getUser();
       setUser(data.user);
@@ -139,11 +194,11 @@ const Index = () => {
     );
 
     return () => authListener.subscription.unsubscribe();
-  }, []);
+  }, [isOnline]);
 
   // ✅ Poll for user updates (Real-time unassignment check)
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isOnline || user.isOfflineSession) return;
 
     const interval = setInterval(async () => {
       // Fetch latest user data from Supabase Auth
@@ -175,11 +230,11 @@ const Index = () => {
     }, 3000); // Check every 3 seconds for responsiveness
 
     return () => clearInterval(interval);
-  }, [user, toast]);
+  }, [user, toast, isOnline]);
 
   // ✅ Fetch unread notifications badge count
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !isOnline || user.isOfflineSession) return;
 
     const fetchUnreadCount = async () => {
       try {
@@ -219,7 +274,7 @@ const Index = () => {
     return () => {
       subscription.unsubscribe();
     };
-  }, [user?.id]);
+  }, [user?.id, user?.isOfflineSession, isOnline]);
 
   const unpaidInvoices = useMemo(() => {
     return allInvoices.filter((inv) => inv.status === "unpaid");
@@ -227,7 +282,7 @@ const Index = () => {
 
   // ✅ Mark notifications as read when user opens notifications page
   useEffect(() => {
-    if (currentPage === "notifications" && user?.id) {
+    if (currentPage === "notifications" && user?.id && isOnline && !user.isOfflineSession) {
       const markAsRead = async () => {
         try {
           console.log("🔔 Marking all unread notifications as read...");
@@ -275,7 +330,7 @@ const Index = () => {
       };
       markAsRead();
     }
-  }, [currentPage, user?.id]);
+  }, [currentPage, user?.id, user?.isOfflineSession, isOnline]);
 
   // ✅ Clear collections badge when user opens history page
   useEffect(() => {
@@ -340,6 +395,30 @@ const Index = () => {
 
     let missingCriticalData = false;
 
+    if (!isOnline) {
+      const cachedInvoices = loadOfflineCache<Invoice[]>(INVOICES_CACHE_KEY);
+      const cachedStalls = loadOfflineCache<VendorRow[]>(STALLS_CACHE_KEY);
+
+      if (cachedInvoices?.data) {
+        setAllInvoices(cachedInvoices.data);
+      } else {
+        missingCriticalData = true;
+      }
+
+      if (cachedStalls?.data) {
+        setRawStalls(mapVendorRowsToStalls(cachedStalls.data));
+      } else {
+        missingCriticalData = true;
+      }
+
+      if (missingCriticalData) {
+        setCoreDataError("Could not load data. Check your connection.");
+      }
+
+      setIsCoreDataLoading(false);
+      return;
+    }
+
     const loadInvoices = async () => {
       const { data, error } = await supabase
         .from("invoices")
@@ -395,12 +474,20 @@ const Index = () => {
     }
 
     setIsCoreDataLoading(false);
-  }, [mapVendorRowsToStalls]);
+  }, [mapVendorRowsToStalls, isOnline]);
 
   // ✅ Fetch all user accounts for the admin via Edge Function (secure)
   useEffect(() => {
     const fetchAccounts = async () => {
       if (user?.user_metadata?.role !== "admin") return;
+
+      if (!isOnline || user.isOfflineSession) {
+        const cachedAccounts = loadOfflineCache<Account[]>(ACCOUNTS_CACHE_KEY);
+        if (cachedAccounts?.data) {
+          setAccounts(cachedAccounts.data);
+        }
+        return;
+      }
 
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
@@ -431,7 +518,7 @@ const Index = () => {
           setAccounts(users);
           saveOfflineCache(ACCOUNTS_CACHE_KEY, users);
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         const cachedAccounts = loadOfflineCache<Account[]>(ACCOUNTS_CACHE_KEY);
         if (cachedAccounts?.data) {
           setAccounts(cachedAccounts.data);
@@ -439,15 +526,35 @@ const Index = () => {
         }
         toast({
           title: "Error fetching users",
-          description: e?.message ?? "Network error",
+          description: getErrorMessage(e, "Network error"),
           variant: "destructive",
         });
       }
     };
     fetchAccounts();
-  }, [user, dataVersion, toast]);
+  }, [user, dataVersion, toast, isOnline]);
 
   const refreshData = useCallback(() => setDataVersion((v) => v + 1), []);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      toast({
+        title: "✅ You are back online. Syncing data...",
+      });
+      refreshData();
+    };
+
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [refreshData, toast]);
+
+  useEffect(() => {
+    if (!user || isOnline || canUsePageOffline(user.user_metadata?.role, currentPage)) {
+      return;
+    }
+
+    setCurrentPage("dashboard");
+  }, [currentPage, isOnline, user]);
 
   const debouncedRefresh = useCallback(() => {
     if (refreshTimeoutRef.current) {
@@ -460,7 +567,7 @@ const Index = () => {
 
   // ✅ Real-time Data Sync
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !isOnline || user.isOfflineSession) return;
 
     const channel = supabase
       .channel("global-db-changes")
@@ -473,8 +580,8 @@ const Index = () => {
 
           // Notify Admin when a payment is marked as PAID
           if (user?.user_metadata?.role === "admin") {
-            const newRecord = payload.new as any;
-            const oldRecord = payload.old as any;
+            const newRecord = payload.new as RealtimeInvoiceRecord;
+            const oldRecord = payload.old as RealtimeInvoiceRecord;
             
             // Check for INSERT of paid invoice OR UPDATE to paid status
             const isNewPayment = 
@@ -506,7 +613,7 @@ const Index = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, toast, debouncedRefresh]);
+  }, [user?.id, user?.isOfflineSession, isOnline, toast, debouncedRefresh]);
 
   // ✅ Load ALL invoices for reports
   // This runs on mount and when dataVersion changes (manual refresh or vendor change)
@@ -569,6 +676,53 @@ const Index = () => {
       return;
     }
 
+    if (!isOnline) {
+      const offlineSession = loadOfflineSession();
+
+      if (offlineSession.status === "missing") {
+        setAuthError("No offline session found. Please connect to the internet to log in");
+        return;
+      }
+
+      if (offlineSession.status !== "found") {
+        setAuthError("Cannot verify credentials while offline");
+        return;
+      }
+
+      const session = offlineSession.session.data;
+      const usernameMatches =
+        session.username.trim().toLowerCase() === username.toLowerCase();
+      const passwordMatches = await verifyOfflinePassword(
+        password,
+        session.passwordHash
+      );
+
+      if (!usernameMatches || !passwordMatches) {
+        setAuthError("Cannot verify credentials while offline");
+        return;
+      }
+
+      setUser({
+        id: `offline-${session.username}`,
+        email: `${session.username}${DUMMY_EMAIL_DOMAIN}`,
+        user_metadata: {
+          full_name: session.full_name,
+          role: session.role,
+          market_section: session.market_section,
+          section: session.market_section,
+        },
+        isOfflineSession: true,
+      });
+      setLoginForm({ username: "", password: "" });
+      setCurrentPage("dashboard");
+      refreshData();
+      toast({
+        title: "Offline login successful",
+        description: "Showing cached data until internet returns.",
+      });
+      return;
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email: `${username}${DUMMY_EMAIL_DOMAIN}`,
       password,
@@ -581,9 +735,29 @@ const Index = () => {
 
     // Log the login activity
     if (data.user) {
+      const metadata = data.user.user_metadata as Record<string, unknown>;
+      const role =
+        typeof metadata.role === "string" ? metadata.role : "collector";
+      const fullName =
+        typeof metadata.full_name === "string" ? metadata.full_name : username;
+      const marketSection =
+        typeof metadata.market_section === "string"
+          ? metadata.market_section
+          : typeof metadata.section === "string"
+          ? metadata.section
+          : null;
+
+      await saveOfflineSession({
+        username,
+        role,
+        full_name: fullName,
+        market_section: marketSection,
+        password,
+      });
+
       await supabase.from("activity_logs").insert({
         user_id: data.user.id,
-        user_name: data.user.user_metadata.full_name || username,
+        user_name: fullName,
         action: "LOGIN",
         details: "User logged in successfully"
       });
@@ -702,8 +876,8 @@ const handleForgotPassword = async (
       "If this number is registered, an SMS with a code has been sent."
     );
     setForgotStage("verify");
-  } catch (e: any) {
-    setAuthError(e?.message ?? "Network error sending SMS.");
+  } catch (e: unknown) {
+    setAuthError(getErrorMessage(e, "Network error sending SMS."));
   }
 };
 
@@ -763,8 +937,8 @@ const handleForgotPassword = async (
     setForgotStage("request");
     setForgotPasswordForm({ phone: "", code: "" });
     setResetPasswordForm({ password: "", confirmPassword: "" });
-  } catch (e: any) {
-    setAuthError(e?.message ?? "Network error verifying code.");
+  } catch (e: unknown) {
+    setAuthError(getErrorMessage(e, "Network error verifying code."));
   }
 };
 
@@ -1508,6 +1682,11 @@ const handleForgotPassword = async (
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary/10 via-secondary/30 to-background">
+      {!isOnline && user && (
+        <div className="sticky top-0 z-[80] border-b border-yellow-300 bg-yellow-100 px-4 py-2 text-center text-sm font-medium text-yellow-900">
+          ⚠️ You are offline — showing cached data
+        </div>
+      )}
       <div className="flex w-full flex-col gap-4 px-2 md:flex-row md:gap-0 md:px-0">
         <div className="md:sticky md:top-0 md:w-80 md:flex-shrink-0 md:h-screen">
           <Navigation
@@ -1520,6 +1699,7 @@ const handleForgotPassword = async (
             unreadNotifications={unreadNotifications}
             newCollections={newCollections}
             realtimeStatus={realtimeStatus}
+            isOnline={isOnline}
           />
         </div>
 

@@ -17,8 +17,10 @@ import {
   ClipboardList,
   Signal,
   MessageCircle,
+  WifiOff,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface NavigationProps {
   currentPage?: string;
@@ -30,9 +32,22 @@ interface NavigationProps {
   unreadNotifications?: number;
   newCollections?: number;
   realtimeStatus?: string;
+  isOnline?: boolean;
 }
 
-const collectorNav = [
+type NavItem = {
+  id: string;
+  label: string;
+  icon: typeof Home;
+  badge?: number;
+};
+
+const offlineAllowedPages: Record<"admin" | "collector", Set<string>> = {
+  collector: new Set(["dashboard", "collect", "history", "unpaid", "assistant"]),
+  admin: new Set(["dashboard", "history", "unpaid", "assistant"]),
+};
+
+const collectorNav: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: Home },
   // { id: "scheduled", label: "Scheduled Collections", icon: Calendar },
   { id: "collect", label: "Collect", icon: Receipt },
@@ -43,7 +58,7 @@ const collectorNav = [
   { id: "archived", label: "Archived", icon: Archive },
 ];
 
-const adminNav = [
+const adminNav: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: Home },
   { id: "history", label: "History", icon: History },
   { id: "stalls", label: "Stalls", icon: Building2 },
@@ -64,11 +79,13 @@ export const Navigation = ({
   unreadNotifications = 0,
   newCollections = 0,
   realtimeStatus,
+  isOnline = true,
 }: NavigationProps) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isNavVisible, setIsNavVisible] = useState(true);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const lastScrollY = useRef(0);
+  const { toast } = useToast();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -128,7 +145,31 @@ export const Navigation = ({
 
   const navItems = userRole === "collector" ? collectorNav : adminNav;
 
+  const isPageBlockedOffline = (page: string) => {
+    if (isOnline) return false;
+    const role = userRole === "collector" ? "collector" : "admin";
+    return !offlineAllowedPages[role].has(page);
+  };
+
+  const getPageLabel = (page: string) => {
+    const item =
+      navItems.find((navItem) => navItem.id === page) ??
+      (page === "assistant"
+        ? { label: "AI Assistant" }
+        : undefined);
+    return item?.label ?? page;
+  };
+
   const handleMobileNav = (page: string) => {
+    if (isPageBlockedOffline(page)) {
+      toast({
+        title: `This page requires internet. Please connect to access ${getPageLabel(page)}.`,
+        variant: "destructive",
+      });
+      setIsMenuOpen(false);
+      return;
+    }
+
     onPageChange?.(page);
     setIsMenuOpen(false);
   };
@@ -224,7 +265,8 @@ export const Navigation = ({
                   ]
             ).map((item) => {
               const Icon = item.icon;
-              const active = currentPage === item.id;
+              const blockedOffline = isPageBlockedOffline(item.id);
+              const active = currentPage === item.id && !blockedOffline;
               const badgeCount = item.badge || 0;
               const isCenterButton = item.id === "collect" || (userRole === "admin" && item.id === "dashboard");
 
@@ -234,7 +276,9 @@ export const Navigation = ({
                     <button
                       onClick={() => handleMobileNav(item.id)}
                       className={`flex h-14 w-14 items-center justify-center rounded-full border-4 border-background shadow-xl transition-all ${
-                        active
+                        blockedOffline
+                          ? "bg-muted text-muted-foreground opacity-60"
+                          : active
                           ? "bg-primary text-primary-foreground scale-110"
                           : "bg-primary text-primary-foreground hover:bg-primary/90"
                       }`}
@@ -250,7 +294,9 @@ export const Navigation = ({
                   key={item.id}
                   onClick={() => handleMobileNav(item.id)}
                   className={`group flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium transition-all relative ${
-                    active
+                    blockedOffline
+                      ? "cursor-not-allowed text-muted-foreground/50 opacity-70"
+                      : active
                       ? "text-primary-foreground bg-primary shadow-sm"
                       : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
                   }`}
@@ -258,18 +304,23 @@ export const Navigation = ({
                   <div className="relative">
                     <Icon
                       className={`h-5 w-5 transition-transform duration-200 ${
-                        active
+                        active || blockedOffline
                           ? ""
                           : "group-hover:scale-110"
                       }`}
                     />
+                    {blockedOffline && (
+                      <WifiOff className="absolute -bottom-1 -right-2 h-3 w-3 text-muted-foreground" />
+                    )}
                     {badgeCount > 0 && (
                       <div className={`absolute -top-1.5 -right-1.5 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[9px] font-bold ${active ? "bg-background text-primary" : "bg-destructive text-white"}`}>
                         {badgeCount > 9 ? '9+' : badgeCount}
                       </div>
                     )}
                   </div>
-                  <span className="truncate max-w-full leading-none">{item.label}</span>
+                  <span className="flex max-w-full items-center gap-1 truncate leading-none">
+                    {item.label}
+                  </span>
                 </button>
               );
             })}
@@ -335,7 +386,8 @@ export const Navigation = ({
             <nav className="space-y-1">
               {navItems.map((item) => {
                 const Icon = item.icon;
-                const isActive = currentPage === item.id;
+                const blockedOffline = isPageBlockedOffline(item.id);
+                const isActive = currentPage === item.id && !blockedOffline;
                 let badgeCount = 0;
                 
                 if (item.id === "notifications") {
@@ -349,7 +401,9 @@ export const Navigation = ({
                     key={item.id}
                     variant="ghost"
                     className={`group w-full justify-start items-center gap-3 text-sm font-medium px-3 py-3 h-auto relative transition-all duration-200 rounded-xl ${
-                      isActive
+                      blockedOffline
+                        ? "cursor-not-allowed text-muted-foreground/50 hover:bg-transparent hover:text-muted-foreground/50"
+                        : isActive
                         ? "bg-primary text-primary-foreground shadow-md hover:bg-primary/90"
                         : "text-muted-foreground hover:text-foreground hover:bg-muted"
                     }`}
@@ -359,10 +413,11 @@ export const Navigation = ({
                   >
                     <Icon
                       className={`h-5 w-5 shrink-0 transition-transform duration-200 ${
-                        isActive ? "" : "group-hover:scale-110"
+                        isActive || blockedOffline ? "" : "group-hover:scale-110"
                       }`}
                     />
                     <span className="flex-1 truncate">{item.label}</span>
+                    {blockedOffline && <WifiOff className="h-4 w-4 shrink-0" />}
                     {badgeCount > 0 && (
                       <span className={`flex h-5 min-w-[1.25rem] px-1 items-center justify-center rounded-full text-[10px] font-bold shadow-sm ${
                         isActive ? "bg-background text-foreground" : "bg-destructive text-white"
