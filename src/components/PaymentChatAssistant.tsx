@@ -16,6 +16,7 @@ type PaymentIntent =
   | "overdue"
   | "update"
   | "stalls"
+  | "stall_lookup"
   | "collector_updates"
   | "top_collector"
   | "top_unpaid"
@@ -27,7 +28,10 @@ type PaymentIntent =
   | "my_assigned"
   | "my_pending"
   | "my_summary"
+  | "my_route"
   | "help";
+
+type Language = "en" | "bsy" | "tgl";
 
 export interface ChatQuery {
   text: string;
@@ -36,6 +40,9 @@ export interface ChatQuery {
   paymentIntent?: PaymentIntent;
   status?: "paid" | "unpaid" | "overdue";
   timeframe?: "today" | "this_month";
+  collectorName?: string;
+  stallQuery?: string;
+  showMore?: boolean;
   confidence?: "high" | "low";
 }
 
@@ -69,6 +76,295 @@ interface ChatMessageItem {
   confirmQuery?: ChatQuery;
   examples?: string[];
 }
+
+type ResponseKey =
+  | "greeting"
+  | "thanks"
+  | "bye"
+  | "ok"
+  | "unknown"
+  | "rude"
+  | "unauthorized"
+  | "missingStats"
+  | "baseHelp"
+  | "helpIntro"
+  | "total"
+  | "noCollections"
+  | "unpaid"
+  | "noUnpaid"
+  | "summaryTitle"
+  | "noOverdue"
+  | "overdue"
+  | "updateTitle"
+  | "collectorUpdate"
+  | "noCollectors"
+  | "topCollector"
+  | "noTopCollector"
+  | "topUnpaid"
+  | "noTopUnpaid"
+  | "followUp"
+  | "noFollowUp"
+  | "dashboardInsight"
+  | "historyTitle"
+  | "noHistory"
+  | "stalls"
+  | "noVacant"
+  | "myCollections"
+  | "myNoCollections"
+  | "myUnpaid"
+  | "myNoUnpaid"
+  | "myAssigned"
+  | "myPending"
+  | "myNoPending"
+  | "mySummaryTitle"
+  | "stallNotFound"
+  | "stallRestricted"
+  | "stallTitle"
+  | "myRouteTitle"
+  | "myRouteEmpty"
+  | "didYouMean"
+  | "yesRun"
+  | "copied"
+  | "copy"
+  | "staleData"
+  | "inputPlaceholder"
+  | "send";
+
+type ResponseTemplateSet = Record<ResponseKey, string>;
+
+const CHAT_LANGUAGE_KEY = "chat_language";
+
+const responses: Record<Language, ResponseTemplateSet> = {
+  en: {
+    greeting: "Hello {role} {name}! Ask 'help' to see what I can answer.",
+    thanks: "You're welcome. Ask for another update anytime.",
+    bye: "Bye. I'll be here when you need collection updates.",
+    ok: "Got it. Ask 'help' if you want the available commands.",
+    unknown: "I didn't catch a Market Pay request.",
+    rude: "I'm here to help with Market Pay tasks.",
+    unauthorized: "Sorry, that information is only available to administrators.",
+    missingStats: "Refreshing data... Some dashboard fields are missing right now.",
+    baseHelp: "I can help with collections, unpaid records, summaries, and stall information.",
+    helpIntro: "Here's what you can ask me:",
+    total: "Total collection for {timeframe}: {amount}.",
+    noCollections: "No collections recorded yet today.",
+    unpaid: "There are {count} unpaid record(s), totaling {amount}.",
+    noUnpaid: "No unpaid records found {timeframe}.",
+    summaryTitle: "Summary for {today}:",
+    noOverdue: "Good news - there are no overdue accounts right now.",
+    overdue: "There are {count} overdue account(s).",
+    updateTitle: "Update snapshot:",
+    collectorUpdate: "Latest collector update:",
+    noCollectors: "No collector records are available right now.",
+    topCollector: "{name} is leading today with {amount}.",
+    noTopCollector: "No collections recorded for any collector today yet.",
+    topUnpaid: "{name} has the most unpaid assigned stalls: {count}.",
+    noTopUnpaid: "No unpaid assigned stalls are reported right now.",
+    followUp: "Follow up with:",
+    noFollowUp: "No follow-up priorities right now.",
+    dashboardInsight: "Here's what stands out today:",
+    historyTitle: "Recorded payment history today:",
+    noHistory: "No recorded payments found for today.",
+    stalls: "Tracked stalls: {total}. Occupied: {occupied}. Vacant: {vacant}.",
+    noVacant: "All stalls are full.",
+    myCollections: "{name}, your collections today total {amount}.",
+    myNoCollections: "No collections recorded yet today.",
+    myUnpaid: "{name}, you have {count} unpaid assigned stall(s).",
+    myNoUnpaid: "All stalls in your section are paid.",
+    myAssigned: "{name}, you have {count} assigned stall(s) in {section}.",
+    myPending: "{name}, your pending collections total {amount}.",
+    myNoPending: "{name}, no pending collection amount is recorded for your section.",
+    mySummaryTitle: "Summary for {name} on {today}:",
+    stallNotFound: "I couldn't find that stall.",
+    stallRestricted: "That stall is outside your assigned section.",
+    stallTitle: "Stall lookup:",
+    myRouteTitle: "Your route today:",
+    myRouteEmpty: "All stalls in your section are paid.",
+    didYouMean: "Did you mean: {command}?",
+    yesRun: "Yes, run this",
+    copied: "Copied!",
+    copy: "Copy",
+    staleData: "Data may be outdated - last updated {time}.",
+    inputPlaceholder: "Ask anything about payments...",
+    send: "Send",
+  },
+  bsy: {
+    greeting: "Kumusta {role} {name}! I-type ang 'tabang' para makita ang akong mahimo.",
+    thanks: "Walay sapayan. Pangutana lang usab kung kinahanglan nimo ug update.",
+    bye: "Sige, naa ra ko kung kinahanglan nimo ug collection updates.",
+    ok: "Sige. I-type ang 'tabang' kung gusto nimo makita ang mga command.",
+    unknown: "Wala nako nasabtan ang Market Pay request.",
+    rude: "Naa ko diri para motabang sa Market Pay tasks.",
+    unauthorized: "Pasayloa, pang-admin ra kana nga impormasyon.",
+    missingStats: "Nag-refresh sa data... Naay kulang nga dashboard fields karon.",
+    baseHelp: "Makatabang ko sa collections, unpaid records, summaries, ug stall information.",
+    helpIntro: "Mao ni imong pwede ipangutana:",
+    total: "Total collection sa {timeframe}: {amount}.",
+    noCollections: "Wala pay nakolekta karon.",
+    unpaid: "Naay {count} unpaid record(s), total {amount}.",
+    noUnpaid: "Walay unpaid records nga nakita sa {timeframe}.",
+    summaryTitle: "Summary sa {today}:",
+    noOverdue: "Maayo! Walay overdue accounts karon.",
+    overdue: "Naay {count} overdue account(s).",
+    updateTitle: "Update snapshot:",
+    collectorUpdate: "Pinakabag-ong collector update:",
+    noCollectors: "Walay collector records nga available karon.",
+    topCollector: "{name} ang nanguna karon gamit ang {amount}.",
+    noTopCollector: "Wala pay nakolekta ang collectors karon.",
+    topUnpaid: "{name} ang naay pinakadaghan unpaid assigned stalls: {count}.",
+    noTopUnpaid: "Walay unpaid assigned stalls nga nareport karon.",
+    followUp: "I-follow up ni:",
+    noFollowUp: "Walay follow-up priorities karon.",
+    dashboardInsight: "Mao ni ang importante karon:",
+    historyTitle: "Payment history karon:",
+    noHistory: "Walay recorded payments karon.",
+    stalls: "Tracked stalls: {total}. Occupied: {occupied}. Vacant: {vacant}.",
+    noVacant: "Puno na ang tanan nga stalls!",
+    myCollections: "{name}, imong collections karon total {amount}.",
+    myNoCollections: "Wala pay nakolekta karon.",
+    myUnpaid: "{name}, naa kay {count} unpaid assigned stall(s).",
+    myNoUnpaid: "Tanan nabayran na sa imong section!",
+    myAssigned: "{name}, naa kay {count} assigned stall(s) sa {section}.",
+    myPending: "{name}, imong pending collections total {amount}.",
+    myNoPending: "{name}, walay pending collection amount sa imong section.",
+    mySummaryTitle: "Summary para kang {name} sa {today}:",
+    stallNotFound: "Wala nako nakit-i kana nga stall.",
+    stallRestricted: "Kana nga stall gawas sa imong assigned section.",
+    stallTitle: "Stall lookup:",
+    myRouteTitle: "Imong route karon:",
+    myRouteEmpty: "Tanan nabayran na sa imong section!",
+    didYouMean: "Mao ba ni imong pasabot: {command}?",
+    yesRun: "Oo, ipadayon",
+    copied: "Nakopya!",
+    copy: "Copy",
+    staleData: "Basin karaan na ang data - last updated {time}.",
+    inputPlaceholder: "Pangutana bahin sa payments...",
+    send: "Send",
+  },
+  tgl: {
+    greeting: "Kumusta {role} {name}! I-type ang 'tulong' para makita kung ano ang kaya kong sagutin.",
+    thanks: "Walang anuman. Magtanong ka lang ulit para sa bagong update.",
+    bye: "Sige. Nandito lang ako kapag kailangan mo ng collection updates.",
+    ok: "Sige. I-type ang 'tulong' kung gusto mong makita ang commands.",
+    unknown: "Hindi ko nakuha ang Market Pay request.",
+    rude: "Nandito ako para tumulong sa Market Pay tasks.",
+    unauthorized: "Paumanhin, pang-admin lang ang impormasyong iyon.",
+    missingStats: "Nagre-refresh ng data... May kulang na dashboard fields ngayon.",
+    baseHelp: "Makakatulong ako sa collections, unpaid records, summaries, at stall information.",
+    helpIntro: "Ito ang pwede mong itanong:",
+    total: "Total collection para sa {timeframe}: {amount}.",
+    noCollections: "Wala pang nakolekta ngayon.",
+    unpaid: "May {count} unpaid record(s), total {amount}.",
+    noUnpaid: "Walang unpaid records na nakita sa {timeframe}.",
+    summaryTitle: "Summary para sa {today}:",
+    noOverdue: "Magaling! Walang overdue accounts ngayon.",
+    overdue: "May {count} overdue account(s).",
+    updateTitle: "Update snapshot:",
+    collectorUpdate: "Pinakabagong collector update:",
+    noCollectors: "Walang collector records na available ngayon.",
+    topCollector: "{name} ang nangunguna ngayon na may {amount}.",
+    noTopCollector: "Wala pang collections ang kahit sinong collector ngayon.",
+    topUnpaid: "{name} ang may pinakamaraming unpaid assigned stalls: {count}.",
+    noTopUnpaid: "Walang unpaid assigned stalls na nai-report ngayon.",
+    followUp: "I-follow up ito:",
+    noFollowUp: "Walang follow-up priorities ngayon.",
+    dashboardInsight: "Ito ang mahalaga ngayon:",
+    historyTitle: "Payment history ngayon:",
+    noHistory: "Walang recorded payments ngayon.",
+    stalls: "Tracked stalls: {total}. Occupied: {occupied}. Vacant: {vacant}.",
+    noVacant: "Puno na ang lahat ng stalls!",
+    myCollections: "{name}, ang collections mo ngayon ay {amount}.",
+    myNoCollections: "Wala pang nakolekta ngayon.",
+    myUnpaid: "{name}, mayroon kang {count} unpaid assigned stall(s).",
+    myNoUnpaid: "Lahat bayad na sa iyong section!",
+    myAssigned: "{name}, mayroon kang {count} assigned stall(s) sa {section}.",
+    myPending: "{name}, ang pending collections mo ay {amount}.",
+    myNoPending: "{name}, walang pending collection amount sa section mo.",
+    mySummaryTitle: "Summary para kay {name} sa {today}:",
+    stallNotFound: "Hindi ko mahanap ang stall na iyon.",
+    stallRestricted: "Ang stall na iyon ay labas sa assigned section mo.",
+    stallTitle: "Stall lookup:",
+    myRouteTitle: "Route mo ngayon:",
+    myRouteEmpty: "Lahat bayad na sa iyong section!",
+    didYouMean: "Ito ba ang ibig mong sabihin: {command}?",
+    yesRun: "Oo, ituloy",
+    copied: "Nakopya!",
+    copy: "Copy",
+    staleData: "Maaaring luma na ang data - last updated {time}.",
+    inputPlaceholder: "Magtanong tungkol sa payments...",
+    send: "Send",
+  },
+};
+
+const getResponse = (
+  key: ResponseKey,
+  lang: Language,
+  vars: Record<string, string> = {}
+) =>
+  Object.entries(vars).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    responses[lang][key]
+  );
+
+const metricLabels: Record<Language, Record<string, string>> = {
+  en: {
+    totalCollected: "Total collected",
+    paidRecords: "Paid records",
+    unpaidRecords: "Unpaid records",
+    activeVendors: "Active vendors",
+    monthToDate: "Month-to-date collected",
+    unpaid: "Unpaid",
+    overdue: "Overdue",
+    latest: "Latest",
+    latestPayment: "Latest payment",
+    vendor: "Vendor",
+    status: "Status",
+    lastPayment: "Last payment",
+    nextDue: "Next due",
+    amount: "Amount",
+    paymentsRecorded: "Payments recorded",
+    pendingAmount: "Pending amount",
+  },
+  bsy: {
+    totalCollected: "Total nakolekta",
+    paidRecords: "Paid records",
+    unpaidRecords: "Unpaid records",
+    activeVendors: "Active vendors",
+    monthToDate: "Nakolekta niining bulana",
+    unpaid: "Unpaid",
+    overdue: "Overdue",
+    latest: "Pinakabag-o",
+    latestPayment: "Pinakabag-ong bayad",
+    vendor: "Vendor",
+    status: "Status",
+    lastPayment: "Katapusang bayad",
+    nextDue: "Sunod due",
+    amount: "Amount",
+    paymentsRecorded: "Recorded payments",
+    pendingAmount: "Pending amount",
+  },
+  tgl: {
+    totalCollected: "Total nakolekta",
+    paidRecords: "Paid records",
+    unpaidRecords: "Unpaid records",
+    activeVendors: "Active vendors",
+    monthToDate: "Nakolekta ngayong buwan",
+    unpaid: "Unpaid",
+    overdue: "Overdue",
+    latest: "Pinakabago",
+    latestPayment: "Pinakabagong bayad",
+    vendor: "Vendor",
+    status: "Status",
+    lastPayment: "Huling bayad",
+    nextDue: "Susunod na due",
+    amount: "Amount",
+    paymentsRecorded: "Recorded payments",
+    pendingAmount: "Pending amount",
+  },
+};
+
+const label = (language: Language, key: keyof typeof metricLabels.en) =>
+  metricLabels[language][key];
 
 type IntentMeta = {
   label: string;
@@ -114,6 +410,11 @@ const PAYMENT_INTENTS: Record<PaymentIntent, IntentMeta> = {
     adminOnly: true,
     examples: ["total stalls"],
     requiredStats: ["totalStalls", "vacantStalls"],
+  },
+  stall_lookup: {
+    label: "stall lookup",
+    collectorAllowed: true,
+    examples: ["stall 12", "status of stall 12"],
   },
   collector_updates: {
     label: "collector performance",
@@ -180,6 +481,12 @@ const PAYMENT_INTENTS: Record<PaymentIntent, IntentMeta> = {
     examples: ["my summary today"],
     requiredStats: ["mySummaryCount", "myCollectionsToday", "collectorName"],
   },
+  my_route: {
+    label: "my route today",
+    collectorAllowed: true,
+    examples: ["my route today", "who should I visit"],
+    requiredStats: ["collectorSection", "collectorName"],
+  },
   help: {
     label: "help",
     collectorAllowed: true,
@@ -188,32 +495,34 @@ const PAYMENT_INTENTS: Record<PaymentIntent, IntentMeta> = {
 };
 
 const PAYMENT_PATTERNS: Array<{ intent: PaymentIntent; phrases: string[] }> = [
-  { intent: "help", phrases: ["help", "commands", "what can you do", "unsa imong mabuhat", "ano kaya mo"] },
-  { intent: "my_collections", phrases: ["my collections today", "my collection today", "collections for me", "akong nakolekta", "pila akong nakolekta"] },
-  { intent: "my_unpaid", phrases: ["my unpaid assigned stalls", "my unpaid stalls", "kinsa wala kabayad sa ako", "sino hindi nagbayad sa section ko"] },
+  { intent: "help", phrases: ["help", "commands", "what can you do", "tabang", "tulong", "unsa imong mabuhat", "ano kaya mo"] },
+  { intent: "my_collections", phrases: ["my collections today", "my collection today", "collections for me", "akong collections", "akong nakolekta", "pila akong nakolekta", "aking collections", "aking nakolekta"] },
+  { intent: "my_unpaid", phrases: ["my unpaid assigned stalls", "my unpaid stalls", "akong unpaid stalls", "kinsa wala kabayad sa ako", "sino hindi nagbayad sa section ko"] },
   { intent: "my_assigned", phrases: ["my assigned stalls", "my stalls", "assigned stalls", "akong stalls"] },
   { intent: "my_pending", phrases: ["my pending collections", "pending collections for me", "kulang pa nako kolektahon"] },
-  { intent: "my_summary", phrases: ["my summary today", "summary for me today", "today summary for me"] },
-  { intent: "total", phrases: ["total today", "today total", "collection total today", "total this month", "monthly total", "pila ang bayad", "tag pila", "magkano total"] },
-  { intent: "unpaid", phrases: ["unpaid today", "unpaid this month", "unpaid records", "kinsa wala kabayad", "sino hindi nagbayad", "wala kabayad"] },
-  { intent: "summary", phrases: ["summary today", "today summary", "collections today"] },
-  { intent: "overdue", phrases: ["overdue accounts", "overdue records", "overdue", "past due", "lapas due", "nalapas na bayad"] },
+  { intent: "my_summary", phrases: ["my summary today", "summary for me today", "today summary for me", "akong summary karon"] },
+  { intent: "my_route", phrases: ["my route today", "who should i visit", "akong route karon", "sino puntahan ko ngayon"] },
+  { intent: "total", phrases: ["total today", "today total", "collection total today", "total this month", "monthly total", "pila ang nakolekta", "pila nakolekta karon", "magkano nakolekta", "magkano ang nakolekta ngayon", "pila ang bayad", "tag pila", "magkano total"] },
+  { intent: "unpaid", phrases: ["unpaid today", "unpaid this month", "unpaid records", "pila ang bayad", "pila ang utang", "magkano ang bayad", "magkano ang utang", "sino ang may utang"] },
+  { intent: "summary", phrases: ["summary today", "today summary", "collections today", "unsay summary karon", "unsay nahitabo karon", "ano ang summary ngayon", "ano ang nangyari ngayon"] },
+  { intent: "overdue", phrases: ["overdue accounts", "overdue records", "overdue", "past due", "lapas due", "nalapas na bayad", "kinsa wala kabayad", "kinsa wala pa kabayad", "sino hindi nagbayad", "sino ang may utang", "wala kabayad"] },
   { intent: "update", phrases: ["collection update", "latest collection", "latest update", "collection status"] },
   { intent: "collector_updates", phrases: ["collector update", "collector performance", "show all collectors performance"] },
-  { intent: "top_collector", phrases: ["who collected the most today", "top collector", "highest collection today", "leaderboard"] },
+  { intent: "top_collector", phrases: ["who collected the most today", "top collector", "highest collection today", "leaderboard", "kinsa nag-una", "kinsa pinaka daghan nakolekta", "sino nangunguna", "sino pinaka maraming nakolekta"] },
   { intent: "top_unpaid", phrases: ["who has the most unpaid stalls", "most unpaid stalls", "highest unpaid stalls"] },
-  { intent: "needs_follow_up", phrases: ["who needs follow-up", "follow-up needed", "who needs attention", "prioritize unpaid"] },
+  { intent: "needs_follow_up", phrases: ["who needs follow-up", "follow-up needed", "who needs attention", "prioritize unpaid", "kinsa nagkulang", "kinsa wala makolektahan", "sino kulang", "sino hindi pa nakakolekta"] },
   { intent: "dashboard_insight", phrases: ["dashboard update", "what stands out today", "current dashboard summary"] },
   { intent: "history", phrases: ["full history of payments today", "payment history today", "today's payment history"] },
-  { intent: "stalls", phrases: ["total stalls", "stall count", "number of stalls", "total vendors", "vendor count"] },
+  { intent: "stall_lookup", phrases: ["status of stall", "last payment of stall", "unsa ang stall", "ano ang stall"] },
+  { intent: "stalls", phrases: ["total stalls", "stall count", "number of stalls", "total vendors", "vendor count", "pila ang stalls", "pila ang vendors", "ilang stalls", "ilang vendors"] },
 ];
 
 const GREETING_WORDS = new Set(["hi", "hello", "hey", "maayong", "kumusta"]);
 const RUDE_WORDS = new Set(["fuck", "fck", "shit", "stupid", "idiot", "bobo", "gago", "tanga", "ulol"]);
 const SOCIAL_PATTERNS = {
-  thanks: ["thanks", "thank you", "salamat"],
-  bye: ["bye", "goodbye", "see you", "later"],
-  ok: ["okay", "ok", "alright", "sige"],
+  thanks: ["thanks", "thank you", "salamat", "daghang salamat", "maraming salamat"],
+  bye: ["bye", "goodbye", "see you", "later", "paalam", "amping"],
+  ok: ["okay", "ok", "alright", "sige", "cge"],
 } as const;
 
 const includesAny = (text: string, terms: readonly string[]) =>
@@ -230,8 +539,8 @@ const isRudeMessage = (text: string) =>
   tokenizeWords(text).some((token) => RUDE_WORDS.has(token.toLowerCase()));
 
 const extractStatus = (text: string): ChatQuery["status"] => {
-  if (includesAny(text, ["overdue", "past due", "lapas due", "nalapas"])) return "overdue";
-  if (includesAny(text, ["unpaid", "not paid", "wala kabayad", "hindi nagbayad"])) return "unpaid";
+  if (includesAny(text, ["overdue", "past due", "lapas due", "nalapas", "nagkulang", "kulang"])) return "overdue";
+  if (includesAny(text, ["unpaid", "not paid", "wala kabayad", "wala pa kabayad", "hindi nagbayad", "may utang", "utang"])) return "unpaid";
   if (includesAny(text, ["paid", "settled", "completed", "kabayad", "nagbayad"])) return "paid";
   return undefined;
 };
@@ -249,6 +558,25 @@ const detectSocialIntent = (text: string): ChatQuery["socialIntent"] | undefined
   }
   return undefined;
 };
+
+const extractCollectorName = (text: string) => {
+  const match = text.match(/\b(?:collector|kolektor)\s+([\p{L}\s.'-]+)$/iu);
+  return match?.[1]?.trim();
+};
+
+const extractStallQuery = (text: string) => {
+  const match =
+    text.match(/\b(?:status of stall|last payment of stall|unsa ang stall|ano ang stall|stall)\s+([\p{L}\p{N}\s.'#-]+)$/iu);
+  const value = match?.[1]?.trim();
+  if (!value || includesAny(value.toLowerCase(), ["count", "counts", "total", "pila", "ilang"])) return undefined;
+  return value;
+};
+
+const isShowMoreRequest = (text: string) =>
+  includesAny(text, ["show me more", "show more", "taas pa", "ipakita pa", "pakita pa", "ipa-ita pa"]);
+
+const isBalancePhrase = (text: string) =>
+  includesAny(text, ["pila ang bayad", "pila ang utang", "magkano ang bayad", "magkano ang utang"]);
 
 const detectPaymentIntent = (text: string): { intent?: PaymentIntent; confidence: "high" | "low" } => {
   for (const pattern of PAYMENT_PATTERNS) {
@@ -270,12 +598,38 @@ const detectPaymentIntent = (text: string): { intent?: PaymentIntent; confidence
       bestIntent = pattern.intent;
     }
   }
-  return { intent: bestScore > 0 ? bestIntent : undefined, confidence: "low" };
+  return { intent: bestScore >= 2 ? bestIntent : undefined, confidence: "low" };
 };
 
 export const parseQuery = (input: string): ChatQuery => {
   const text = input.trim().toLowerCase();
   const socialIntent = detectSocialIntent(text);
+
+  const stallQuery = extractStallQuery(text);
+  if (stallQuery) {
+    return {
+      text,
+      intent: "payment",
+      paymentIntent: "stall_lookup",
+      stallQuery,
+      confidence: "high",
+    };
+  }
+
+  if (isBalancePhrase(text)) {
+    return {
+      text,
+      intent: "payment",
+      paymentIntent: "unpaid",
+      status: "unpaid",
+      confidence: "high",
+    };
+  }
+
+  if (isShowMoreRequest(text)) {
+    return { text, intent: "unknown", showMore: true, confidence: "high" };
+  }
+
   const detected = detectPaymentIntent(text);
 
   if (detected.intent) {
@@ -287,12 +641,13 @@ export const parseQuery = (input: string): ChatQuery => {
       paymentIntent: detected.intent,
       status: extractStatus(text),
       timeframe: normalizedTimeframe,
+      collectorName: extractCollectorName(text),
       confidence: detected.confidence,
     };
   }
 
   if (socialIntent) return { text, intent: "social", socialIntent, confidence: "high" };
-  return { text, intent: "unknown", confidence: "low" };
+  return { text, intent: "unknown", collectorName: extractCollectorName(text), confidence: "low" };
 };
 
 const normalizeDate = (value: string | undefined | null): Date | null => {
@@ -316,6 +671,26 @@ const formatAmount = (value: number | null | undefined) => {
     return "amount unavailable";
   }
   return `PHP ${value.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const statusIndicator = (status: string | undefined | null) => {
+  const normalized = status?.toLowerCase();
+  if (normalized === "overdue") return "🔴";
+  if (normalized === "due" || normalized === "unpaid") return "🟡";
+  if (normalized === "paid" || normalized === "current") return "🟢";
+  if (normalized === "vacant") return "⚪";
+  return "⚪";
+};
+
+const formatTimeframe = (timeframe: ChatQuery["timeframe"], lang: Language) => {
+  if (timeframe === "this_month") {
+    if (lang === "bsy") return "niining bulana";
+    if (lang === "tgl") return "buwang ito";
+    return "this month";
+  }
+  if (lang === "bsy") return "karon";
+  if (lang === "tgl") return "ngayon";
+  return "today";
 };
 
 const formatCount = (value: number | null | undefined) =>
@@ -419,12 +794,30 @@ const isCollector = (stats: DashboardStats) => stats.role?.toLowerCase() === "co
 
 const roleExamples = (stats: DashboardStats) =>
   isCollector(stats)
-    ? ["my collections today", "my unpaid assigned stalls", "my summary today", "my pending collections"]
-    : ["summary today", "total this month", "overdue accounts", "show all collectors performance"];
+    ? [
+        "my collections today / akong collections",
+        "my unpaid assigned stalls / akong unpaid stalls",
+        "my summary today / akong summary karon",
+        "my pending collections",
+        "my assigned stalls",
+        "my route today / akong route karon",
+        "stall [name or number]",
+        "help",
+      ]
+    : [
+        "unpaid today / total this month",
+        "summary today / overdue accounts",
+        "show all collectors performance",
+        "top collector / who needs follow up",
+        "dashboard update",
+        "full history of payments today",
+        "stall [name or number]",
+        "help",
+      ];
 
-const unauthorizedMessage = (stats: DashboardStats) =>
+const unauthorizedMessage = (stats: DashboardStats, language: Language) =>
   [
-    "Sorry, that information is only available to administrators.",
+    getResponse("unauthorized", language),
     `You can ask: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`,
   ].join("\n\n");
 
@@ -451,13 +844,17 @@ const mergeWithContext = (query: ChatQuery, context: ChatQuery | null): ChatQuer
 
   const vagueTimeframeOnly = query.intent === "unknown" && extractTimeframe(query.text);
   const vagueStatusOnly = query.intent === "unknown" && extractStatus(query.text);
+  const collectorFollowUp = query.intent === "unknown" && query.collectorName;
+  const showMoreFollowUp = query.intent === "unknown" && query.showMore;
 
-  if (vagueTimeframeOnly || vagueStatusOnly) {
+  if (vagueTimeframeOnly || vagueStatusOnly || collectorFollowUp || showMoreFollowUp) {
     return {
       ...context,
       text: query.text,
       status: extractStatus(query.text) ?? context.status,
       timeframe: extractTimeframe(query.text) ?? context.timeframe,
+      collectorName: query.collectorName ?? context.collectorName,
+      showMore: query.showMore ?? context.showMore,
       confidence: "high",
     };
   }
@@ -467,6 +864,7 @@ const mergeWithContext = (query: ChatQuery, context: ChatQuery | null): ChatQuer
     ...query,
     status: query.status ?? context.status,
     timeframe: query.timeframe ?? context.timeframe,
+    collectorName: query.collectorName ?? context.collectorName,
   };
 };
 
@@ -479,6 +877,11 @@ export const filterRecords = (query: ChatQuery, records: Invoice[]): ChatResult 
   if (query.status === "paid") filtered = filtered.filter((record) => record.status === "paid");
   if (query.status === "unpaid") {
     filtered = filtered.filter((record) => record.status === "unpaid" || record.status === "overdue");
+  }
+
+  if (query.collectorName) {
+    const collectorName = query.collectorName.toLowerCase();
+    filtered = filtered.filter((record) => record.collector.toLowerCase().includes(collectorName));
   }
 
   if (query.timeframe === "today") {
@@ -503,7 +906,7 @@ const joinParagraphs = (...sections: Array<string | undefined | false>) =>
 
 const formatRecordLine = (record: ChatRecord, index: number) => {
   const note = record.dateNote ? ` (${record.dateNote})` : "";
-  return `${index + 1}. ${record.name} - ${record.status.toUpperCase()} - ${formatAmount(record.amount)} - ${record.date || "date unavailable"}${note}`;
+  return `${statusIndicator(record.status)} ${index + 1}. ${record.name} - ${record.status.toUpperCase()} - ${formatAmount(record.amount)} - ${record.date || "date unavailable"}${note}`;
 };
 
 const collectorsFromStats = (stats: DashboardStats): CollectorInfo[] =>
@@ -522,168 +925,265 @@ const formatRecentTransactionLine = (transaction: RecentTransaction) =>
     transaction.paidAt ? ` on ${transaction.paidAt}` : ""
   }`;
 
-const getHelpResponse = (stats: DashboardStats) => {
+const getHelpResponse = (stats: DashboardStats, language: Language) => {
   const examples = roleExamples(stats);
   return joinParagraphs(
-    isCollector(stats)
-      ? "Here are the collector commands I can answer for your assigned data:"
-      : "Here are the admin commands I can answer:",
-    examples.map((example) => `* ${example}`).join("\n")
+    getResponse("helpIntro", language),
+    examples.map((example) => `• ${example}`).join("\n")
   );
 };
 
-const getSocialResponse = (socialIntent: NonNullable<ChatQuery["socialIntent"]>, stats: DashboardStats) => {
+const getSocialResponse = (
+  socialIntent: NonNullable<ChatQuery["socialIntent"]>,
+  stats: DashboardStats,
+  language: Language
+) => {
   if (socialIntent === "greet") {
     const role = stats.role?.toLowerCase() === "admin" ? "admin" : "collector";
-    const name = stats.collectorName?.trim();
-    return `Hello ${role}${name ? ` ${name}` : ""}. Ask "help" to see what I can answer.`;
+    const name = stats.collectorName?.trim() ?? "";
+    return getResponse("greeting", language, { role, name });
   }
-  if (socialIntent === "thanks") return "You're welcome. Ask for another update anytime.";
-  if (socialIntent === "bye") return "Bye. I'll be here when you need collection updates.";
-  return "Got it. Ask \"help\" if you want the available commands.";
+  if (socialIntent === "thanks") return getResponse("thanks", language);
+  if (socialIntent === "bye") return getResponse("bye", language);
+  return getResponse("ok", language);
 };
 
-const missingStatsResponse = "Refreshing data... Some dashboard fields are missing right now.";
+const missingStatsResponse = (language: Language) => getResponse("missingStats", language);
+
+const canSeeStall = (stall: StallRecord, stats: DashboardStats) => {
+  if (!isCollector(stats)) return true;
+  return stall.section === stats.collectorSection;
+};
+
+const findStall = (stalls: StallRecord[], query: string) => {
+  const normalized = query.toLowerCase().replace(/^#/, "").trim();
+  return stalls.find((stall) => {
+    const id = String(stall.dbId);
+    return (
+      id === normalized ||
+      stall.name.toLowerCase() === normalized ||
+      stall.name.toLowerCase().includes(normalized) ||
+      stall.vendor.toLowerCase().includes(normalized)
+    );
+  });
+};
+
+const formatStallLine = (stall: StallRecord) =>
+  `${statusIndicator(stall.status)} ${stall.name} - ${stall.vendor || "Vacant"} - ${formatAmount(stall.rentAmount)} - ${stall.status.toUpperCase()}`;
+
+const getStallLookupResponse = (
+  query: ChatQuery,
+  stats: DashboardStats,
+  stalls: StallRecord[],
+  language: Language
+) => {
+  const stallQuery = query.stallQuery?.trim();
+  if (!stallQuery) return getResponse("stallNotFound", language);
+  const stall = findStall(stalls, stallQuery);
+  if (!stall) return getResponse("stallNotFound", language);
+  if (!canSeeStall(stall, stats)) return getResponse("stallRestricted", language);
+
+  return joinParagraphs(
+    getResponse("stallTitle", language),
+    [
+      `${statusIndicator(stall.status)} ${stall.name}`,
+      `${label(language, "vendor")}: ${stall.vendor || "Vacant"}`,
+      `${label(language, "status")}: ${stall.status.toUpperCase()}`,
+      `${label(language, "lastPayment")}: ${stall.lastPayment || "date unavailable"}`,
+      `${label(language, "nextDue")}: ${stall.nextDue || "date unavailable"}`,
+      `${label(language, "amount")}: ${formatAmount(stall.rentAmount)}`,
+    ].join("\n")
+  );
+};
+
+const getMyRouteResponse = (
+  stats: DashboardStats,
+  stalls: StallRecord[],
+  language: Language
+) => {
+  if (!isCollector(stats)) return unauthorizedMessage(stats, language);
+  const section = stats.collectorSection;
+  const routeStalls = stalls
+    .filter((stall) => stall.section === section && (stall.status === "overdue" || stall.status === "due"))
+    .sort((a, b) => {
+      const priority = (status: string) => (status === "overdue" ? 0 : 1);
+      return priority(a.status) - priority(b.status);
+    });
+
+  if (!routeStalls.length) return getResponse("myRouteEmpty", language);
+  return joinParagraphs(
+    getResponse("myRouteTitle", language),
+    routeStalls.map(formatStallLine).join("\n")
+  );
+};
 
 export const getPaymentResponse = (
   result: ChatResult,
   stats: DashboardStats,
-  records: ChatRecord[]
+  records: ChatRecord[],
+  language: Language = "en",
+  stalls: StallRecord[] = []
 ): string => {
   const intent = result.query.paymentIntent;
-  if (!intent) return "I can help with collections, unpaid records, summaries, and stall information.";
-  if (intent === "help") return getHelpResponse(stats);
-  if (!isAuthorized(result.query, stats)) return unauthorizedMessage(stats);
-  if (!hasRequiredStats(intent, stats)) return missingStatsResponse;
+  if (!intent) return getResponse("baseHelp", language);
+  if (intent === "help") return getHelpResponse(stats, language);
+  if (!isAuthorized(result.query, stats)) return unauthorizedMessage(stats, language);
+  if (!hasRequiredStats(intent, stats)) return missingStatsResponse(language);
 
   const count = records.length;
   const total = records.reduce((sum, record) => sum + (record.amount ?? 0), 0);
-  const timeframe = result.query.timeframe === "this_month" ? "this month" : "today";
+  const timeframe = formatTimeframe(result.query.timeframe, language);
   const collectors = collectorsFromStats(stats);
   const recent = recentTransactionsFromStats(stats);
 
   switch (intent) {
+    case "stall_lookup":
+      return getStallLookupResponse(result.query, stats, stalls, language);
+    case "my_route":
+      return getMyRouteResponse(stats, stalls, language);
     case "total": {
       const amount = result.query.timeframe === "this_month" ? stats.totalMonth : stats.totalToday;
       return amount > 0
-        ? `Total collection for ${timeframe}: ${formatAmount(amount)}.`
-        : `No collections recorded yet ${timeframe}.`;
+        ? getResponse("total", language, { timeframe, amount: formatAmount(amount) })
+        : getResponse("noCollections", language);
     }
     case "unpaid":
       return count > 0
-        ? `There are ${count} unpaid record(s), totaling ${formatAmount(total)}.`
-        : `No unpaid records found ${timeframe}.`;
+        ? joinParagraphs(
+            getResponse("unpaid", language, { count: String(count), amount: formatAmount(total) }),
+            records.map(formatRecordLine).join("\n")
+          )
+        : getResponse("noUnpaid", language, { timeframe });
     case "summary":
       return joinParagraphs(
-        `Summary for ${stats.today}:`,
+        getResponse("summaryTitle", language, { today: stats.today }),
         [
-          `* Total collected: ${formatAmount(stats.totalToday)}`,
-          `* Paid records: ${stats.paidCount}`,
-          `* Unpaid records: ${stats.unpaidCount}`,
-          `* Active vendors: ${stats.activeVendors} of ${stats.totalStalls} stalls`,
+          `* ${label(language, "totalCollected")}: ${formatAmount(stats.totalToday)}`,
+          `* ${label(language, "paidRecords")}: ${stats.paidCount}`,
+          `* ${label(language, "unpaidRecords")}: ${stats.unpaidCount}`,
+          `* ${label(language, "activeVendors")}: ${stats.activeVendors} of ${stats.totalStalls} stalls`,
         ].join("\n")
       );
     case "overdue":
-      if (stats.overdueCount === 0) return "No overdue accounts right now - great news.";
+      if (stats.overdueCount === 0) return getResponse("noOverdue", language);
       return joinParagraphs(
-        `There are ${stats.overdueCount} overdue account(s).`,
+        getResponse("overdue", language, { count: String(stats.overdueCount) }),
         records.length ? records.map(formatRecordLine).join("\n") : undefined
       );
     case "update":
       return joinParagraphs(
-        "Update snapshot:",
-        `* Month-to-date collected: ${formatAmount(stats.totalMonth)}
-* Paid records: ${stats.paidCount}
-* Unpaid records: ${stats.unpaidCount}
-* Active vendors: ${stats.activeVendors} of ${stats.totalStalls}`,
-        recent[0] ? `Latest: ${formatRecentTransactionLine(recent[0])}` : undefined
+        getResponse("updateTitle", language),
+        `* ${label(language, "monthToDate")}: ${formatAmount(stats.totalMonth)}
+* ${label(language, "paidRecords")}: ${stats.paidCount}
+* ${label(language, "unpaidRecords")}: ${stats.unpaidCount}
+* ${label(language, "activeVendors")}: ${stats.activeVendors} of ${stats.totalStalls}`,
+        recent[0] ? `${label(language, "latest")}: ${formatRecentTransactionLine(recent[0])}` : undefined
       );
     case "collector_updates":
       return collectors.length
-        ? joinParagraphs("Latest collector update:", collectors.map(formatCollectorLine).join("\n"))
-        : "No collector records are available right now.";
+        ? joinParagraphs(getResponse("collectorUpdate", language), collectors.map(formatCollectorLine).join("\n"))
+        : getResponse("noCollectors", language);
     case "top_collector": {
       const top = [...collectors].sort((a, b) => b.collectionsToday - a.collectionsToday)[0];
       return top && top.collectionsToday > 0
-        ? `${top.name} is leading today with ${formatAmount(top.collectionsToday)}.`
-        : "No collections recorded for any collector today yet.";
+        ? getResponse("topCollector", language, { name: top.name, amount: formatAmount(top.collectionsToday) })
+        : getResponse("noTopCollector", language);
     }
     case "top_unpaid": {
       const top = [...collectors].sort((a, b) => b.unpaidAssignedStalls - a.unpaidAssignedStalls)[0];
       return top && top.unpaidAssignedStalls > 0
-        ? `${top.name} has the most unpaid assigned stalls: ${top.unpaidAssignedStalls}.`
-        : "No unpaid assigned stalls are reported right now.";
+        ? getResponse("topUnpaid", language, { name: top.name, count: String(top.unpaidAssignedStalls) })
+        : getResponse("noTopUnpaid", language);
     }
     case "needs_follow_up": {
       const list = [...collectors]
         .filter((collector) => collector.unpaidAssignedStalls > 0)
         .sort((a, b) => b.unpaidAssignedStalls - a.unpaidAssignedStalls)
-        .slice(0, 3);
+        .slice(0, result.query.showMore ? undefined : 3);
       return list.length
-        ? joinParagraphs("Follow up with:", list.map((collector) => `* ${collector.name}: ${collector.unpaidAssignedStalls} unpaid stall(s)`).join("\n"))
-        : "No follow-up priorities right now.";
+        ? joinParagraphs(getResponse("followUp", language), list.map((collector) => `* ${collector.name}: ${collector.unpaidAssignedStalls} unpaid stall(s)`).join("\n"))
+        : getResponse("noFollowUp", language);
     }
     case "dashboard_insight":
       return joinParagraphs(
-        "Here's what stands out today:",
+        getResponse("dashboardInsight", language),
         `* Today: ${formatAmount(stats.totalToday)}
-* Month-to-date: ${formatAmount(stats.totalMonth)}
-* Unpaid: ${stats.unpaidCount}
-* Overdue: ${stats.overdueCount}
-* Active vendors: ${stats.activeVendors} of ${stats.totalStalls}`,
-        recent[0] ? `Latest payment: ${formatRecentTransactionLine(recent[0])}` : undefined
+* ${label(language, "monthToDate")}: ${formatAmount(stats.totalMonth)}
+* ${label(language, "unpaid")}: ${stats.unpaidCount}
+* ${label(language, "overdue")}: ${stats.overdueCount}
+* ${label(language, "activeVendors")}: ${stats.activeVendors} of ${stats.totalStalls}`,
+        recent[0] ? `${label(language, "latestPayment")}: ${formatRecentTransactionLine(recent[0])}` : undefined
       );
     case "history":
       return records.length
-        ? joinParagraphs("Recorded payment history today:", records.map(formatRecordLine).join("\n"))
-        : "No recorded payments found for today.";
+        ? joinParagraphs(getResponse("historyTitle", language), records.map(formatRecordLine).join("\n"))
+        : getResponse("noHistory", language);
     case "stalls": {
       const occupied = stats.totalStalls - stats.vacantStalls;
-      return `Tracked stalls: ${stats.totalStalls}. Occupied: ${occupied}. Vacant: ${stats.vacantStalls}.`;
+      if (stats.vacantStalls === 0) return getResponse("noVacant", language);
+      return getResponse("stalls", language, {
+        total: String(stats.totalStalls),
+        occupied: String(occupied),
+        vacant: String(stats.vacantStalls),
+      });
     }
     case "my_collections":
       return stats.myCollectionsToday && stats.myCollectionsToday > 0
-        ? `${stats.collectorName}, your collections today total ${formatAmount(stats.myCollectionsToday)}.`
-        : `${stats.collectorName ?? "Collector"}, no collections recorded yet today for your section.`;
+        ? getResponse("myCollections", language, { name: stats.collectorName ?? "Collector", amount: formatAmount(stats.myCollectionsToday) })
+        : getResponse("myNoCollections", language);
     case "my_unpaid":
-      return `${stats.collectorName ?? "Collector"}, you have ${stats.myUnpaidCount ?? 0} unpaid assigned stall(s).`;
+      return (stats.myUnpaidCount ?? 0) > 0
+        ? getResponse("myUnpaid", language, { name: stats.collectorName ?? "Collector", count: String(stats.myUnpaidCount ?? 0) })
+        : getResponse("myNoUnpaid", language);
     case "my_assigned":
-      return `${stats.collectorName ?? "Collector"}, you have ${stats.myAssignedStallsCount ?? 0} assigned stall(s) in ${stats.collectorSection ?? "your section"}.`;
+      return getResponse("myAssigned", language, {
+        name: stats.collectorName ?? "Collector",
+        count: String(stats.myAssignedStallsCount ?? 0),
+        section: stats.collectorSection ?? "your section",
+      });
     case "my_pending":
       return stats.myPendingAmount && stats.myPendingAmount > 0
-        ? `${stats.collectorName ?? "Collector"}, your pending collections total ${formatAmount(stats.myPendingAmount)}.`
-        : `${stats.collectorName ?? "Collector"}, no pending collection amount is recorded for your section.`;
+        ? getResponse("myPending", language, { name: stats.collectorName ?? "Collector", amount: formatAmount(stats.myPendingAmount) })
+        : getResponse("myNoPending", language, { name: stats.collectorName ?? "Collector" });
     case "my_summary":
       return joinParagraphs(
-        `Summary for ${stats.collectorName ?? "collector"} on ${stats.today}:`,
-        `* Payments recorded: ${stats.mySummaryCount ?? 0}
-* Total collected: ${formatAmount(stats.myCollectionsToday)}
-* Unpaid assigned stalls: ${stats.myUnpaidCount ?? 0}
-* Pending amount: ${formatAmount(stats.myPendingAmount)}`
+        getResponse("mySummaryTitle", language, { name: stats.collectorName ?? "collector", today: stats.today }),
+        `* ${label(language, "paymentsRecorded")}: ${stats.mySummaryCount ?? 0}
+* ${label(language, "totalCollected")}: ${formatAmount(stats.myCollectionsToday)}
+* ${label(language, "unpaidRecords")}: ${stats.myUnpaidCount ?? 0}
+* ${label(language, "pendingAmount")}: ${formatAmount(stats.myPendingAmount)}`
       );
     default:
-      return getHelpResponse(stats);
+      return getHelpResponse(stats, language);
   }
 };
 
 export const generateResponse = (
   result: ChatResult,
   systemStats: DashboardStats,
-  records: ChatRecord[] = []
+  records: ChatRecord[] = [],
+  language: Language = "en",
+  stalls: StallRecord[] = []
 ): string => {
   if (result.query.intent === "social" && result.query.socialIntent) {
-    return getSocialResponse(result.query.socialIntent, systemStats);
+    return getSocialResponse(result.query.socialIntent, systemStats, language);
   }
-  return getPaymentResponse(result, systemStats, records);
+  return getPaymentResponse(result, systemStats, records, language, stalls);
 };
 
 export const PaymentChatAssistant = ({
   records,
   systemStats,
+  stalls = [],
   variant = "panel",
   onRequestRefresh,
 }: PaymentChatAssistantProps) => {
-  const initialGreeting = useMemo(() => getSocialResponse("greet", systemStats), [systemStats]);
+  const [language, setLanguage] = useState<Language>(() => {
+    if (typeof localStorage === "undefined") return "en";
+    const saved = localStorage.getItem(CHAT_LANGUAGE_KEY);
+    return saved === "bsy" || saved === "tgl" || saved === "en" ? saved : "en";
+  });
+  const initialGreeting = useMemo(() => getSocialResponse("greet", systemStats, language), [systemStats, language]);
   const initialGreetingRef = useRef(initialGreeting);
   const [messages, setMessages] = useState<ChatMessageItem[]>(() => [
     createBotMessage(initialGreetingRef.current),
@@ -723,6 +1223,10 @@ export const PaymentChatAssistant = ({
   const isDataStale = staleMinutes >= 5;
 
   useEffect(() => {
+    localStorage.setItem(CHAT_LANGUAGE_KEY, language);
+  }, [language]);
+
+  useEffect(() => {
     setLastDataUpdatedAt(new Date());
   }, [records, systemStats]);
 
@@ -754,21 +1258,21 @@ export const PaymentChatAssistant = ({
     if (query.intent === "payment" && query.paymentIntent) {
       if (!isAuthorized(query, systemStats)) {
         setContext(null);
-        return unauthorizedMessage(systemStats);
+        return unauthorizedMessage(systemStats, language);
       }
       if (!hasRequiredStats(query.paymentIntent, systemStats)) {
         onRequestRefresh?.();
-        return missingStatsResponse;
+        return missingStatsResponse(language);
       }
       const result = filterRecords(query, records);
       setContext(query);
-      return getPaymentResponse(result, systemStats, result.records);
+      return getPaymentResponse(result, systemStats, result.records, language, stalls);
     }
     if (query.intent === "social" && query.socialIntent) {
       setContext(null);
-      return getSocialResponse(query.socialIntent, systemStats);
+      return getSocialResponse(query.socialIntent, systemStats, language);
     }
-    return getUnknownResponse(query.text, systemStats);
+    return getUnknownResponse(query.text, systemStats, language);
   };
 
   const handleSendMessage = (text: string, forcedQuery?: ChatQuery) => {
@@ -788,7 +1292,7 @@ export const PaymentChatAssistant = ({
     setInputValue("");
 
     if (parsed.intent === "payment" && parsed.confidence === "low" && parsed.paymentIntent && !forcedQuery) {
-      addBotMessage(`Did you mean: ${PAYMENT_INTENTS[parsed.paymentIntent].label}?`, {
+      addBotMessage(getResponse("didYouMean", language, { command: PAYMENT_INTENTS[parsed.paymentIntent].label }), {
         confirmQuery: { ...parsed, confidence: "high" },
       });
       return;
@@ -797,11 +1301,12 @@ export const PaymentChatAssistant = ({
     const botText = runQuery(parsed);
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     setIsTyping(true);
+    const delay = Math.min(1500, botText.length < 120 ? 450 + botText.length * 2 : 800 + botText.length * 2);
     typingTimerRef.current = setTimeout(() => {
       addBotMessage(botText, parsed.paymentIntent === "help" ? { examples: roleExamples(systemStats) } : undefined);
       setIsTyping(false);
       typingTimerRef.current = null;
-    }, Math.min(1500, 450 + botText.length * 3));
+    }, delay);
   };
 
   const handleConfirm = (query: ChatQuery) => {
@@ -903,9 +1408,27 @@ export const PaymentChatAssistant = ({
         </div>
       )}
 
+      <div className="mb-3 flex items-center justify-end gap-1">
+        {(["en", "bsy", "tgl"] as const).map((lang) => (
+          <button
+            key={lang}
+            type="button"
+            onClick={() => setLanguage(lang)}
+            className={`min-h-9 rounded-full px-3 text-xs font-semibold transition ${
+              language === lang
+                ? "bg-primary text-white"
+                : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+            aria-pressed={language === lang}
+          >
+            {lang === "en" ? "EN" : lang === "bsy" ? "BSY" : "TGL"}
+          </button>
+        ))}
+      </div>
+
       {isDataStale && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          Data may be outdated - last updated {formatRelativeMinutes(lastDataUpdatedAt)}.
+          {getResponse("staleData", language, { time: formatRelativeMinutes(lastDataUpdatedAt) })}
         </div>
       )}
 
@@ -941,7 +1464,7 @@ export const PaymentChatAssistant = ({
                     onClick={() => handleConfirm(message.confirmQuery!)}
                     className="mt-3 block rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-white"
                   >
-                    Yes, run this
+                    {getResponse("yesRun", language)}
                   </button>
                 )}
                 {message.examples && (
@@ -968,7 +1491,7 @@ export const PaymentChatAssistant = ({
                     className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-slate-100"
                   >
                     {copiedMessageId === message.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                    {copiedMessageId === message.id ? "Copied!" : "Copy"}
+                    {copiedMessageId === message.id ? getResponse("copied", language) : getResponse("copy", language)}
                   </button>
                 </div>
               )}
@@ -1035,13 +1558,13 @@ export const PaymentChatAssistant = ({
               autoCapitalize="off"
               spellCheck={false}
               className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-              placeholder="Ask anything about payments..."
+              placeholder={getResponse("inputPlaceholder", language)}
             />
             <button
               type="submit"
               className="inline-flex items-center rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary/90"
             >
-              Send
+              {getResponse("send", language)}
             </button>
           </form>
         </div>
@@ -1050,9 +1573,9 @@ export const PaymentChatAssistant = ({
   );
 };
 
-const getUnknownResponse = (text: string, stats: DashboardStats): string => {
+const getUnknownResponse = (text: string, stats: DashboardStats, language: Language): string => {
   if (isRudeMessage(text)) {
-    return joinParagraphs("I'm here to help with Market Pay tasks.", `Try: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`);
+    return joinParagraphs(getResponse("rude", language), `Try: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`);
   }
-  return joinParagraphs("I didn't catch a Market Pay request.", `Try: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`);
+  return joinParagraphs(getResponse("unknown", language), `Try: ${roleExamples(stats).map((example) => `"${example}"`).join(", ")}.`);
 };
