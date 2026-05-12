@@ -634,49 +634,115 @@ const Index = () => {
         "postgres_changes",
         { event: "*", schema: "public", table: "invoices" },
         (payload) => {
-          handleTableChange();
-
-          // Notify Admin when a payment is marked as PAID
-          if (user?.user_metadata?.role === "admin") {
-            const newRecord = payload.new as RealtimeInvoiceRecord;
-            const oldRecord = payload.old as RealtimeInvoiceRecord;
-            
-            // Check for INSERT of paid invoice OR UPDATE to paid status
-            const isNewPayment = 
-              (payload.eventType === "INSERT" && newRecord?.status === "paid") ||
-              (payload.eventType === "UPDATE" && newRecord?.status === "paid" && oldRecord?.status !== "paid");
-
-            if (isNewPayment) {
+          if (payload.eventType === "INSERT") {
+            const newInvoice = payload.new as Invoice;
+            setAllInvoices((prev) => {
+              if (prev.some((inv) => inv.id === newInvoice.id)) return prev;
+              return [newInvoice, ...prev];
+            });
+            if (user?.user_metadata?.role === "admin" && newInvoice.status === "paid") {
               toast({
-                title: `💰 New payment collected by ${newRecord.collector_name || "Unknown collector"} — ${newRecord.stall_name || "Unknown stall"} — ${formatPeso(newRecord.amount)}`,
+                title: `💰 New payment by ${newInvoice.collector_name || "Unknown"} — ${newInvoice.stall_name || "Unknown"} — ${formatPeso(newInvoice.amount)}`,
               });
             }
           }
+          if (payload.eventType === "UPDATE") {
+            const updated = payload.new as Invoice;
+            setAllInvoices((prev) =>
+              prev.map((inv) => (inv.id === updated.id ? updated : inv))
+            );
+            if (
+              user?.user_metadata?.role === "admin" &&
+              updated.status === "paid" &&
+              (payload.old as Invoice)?.status !== "paid"
+            ) {
+              toast({
+                title: `💰 Payment updated by ${updated.collector_name || "Unknown"} — ${updated.stall_name || "Unknown"} — ${formatPeso(updated.amount)}`,
+              });
+            }
+          }
+          if (payload.eventType === "DELETE") {
+            const deleted = payload.old as Invoice;
+            setAllInvoices((prev) => prev.filter((inv) => inv.id !== deleted.id));
+          }
+
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "vendors" },
-        handleTableChange
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const newRow = payload.new as VendorRow;
+            setRawStalls((prev) => {
+              const typeCounters = new Map<string, number>();
+              prev.forEach((s) => {
+                const count = typeCounters.get(s.type) ?? 0;
+                typeCounters.set(s.type, count + 1);
+              });
+              const { sequence, typeValue } = getNextTypeSequence(typeCounters, newRow.type);
+              const mapped = {
+                id: `stall-${newRow.id}`,
+                dbId: Number(newRow.id),
+                name: `Stall ${sequence}`,
+                vendor: newRow.vendor ?? "",
+                contact: newRow.contact ?? "",
+                type: typeValue,
+                rentAmount: Number(newRow.monthly_rent ?? 0),
+                rentalType: newRow.rental_type || "monthly",
+                lastPayment: newRow.last_payment ?? "",
+                nextDue: newRow.next_due ?? "",
+                status: computeStatusFromDueDate(newRow.next_due, newRow.status),
+                occupied: computeStatusFromDueDate(newRow.next_due, newRow.status) !== "vacant",
+                section: sectionMap.get(typeValue) ?? "N/A",
+                archive_reason: newRow.archive_reason ?? null,
+              } satisfies StallRecord;
+              return [...prev, mapped];
+            });
+          }
+          if (payload.eventType === "UPDATE") {
+            const updatedRow = payload.new as VendorRow;
+            setRawStalls((prev) =>
+              prev.map((stall) => {
+                if (stall.dbId !== Number(updatedRow.id)) return stall;
+                return {
+                  ...stall,
+                  vendor: updatedRow.vendor ?? stall.vendor,
+                  contact: updatedRow.contact ?? stall.contact,
+                  rentAmount: Number(updatedRow.monthly_rent ?? stall.rentAmount),
+                  rentalType: updatedRow.rental_type || stall.rentalType,
+                  lastPayment: updatedRow.last_payment ?? stall.lastPayment,
+                  nextDue: updatedRow.next_due ?? stall.nextDue,
+                  status: computeStatusFromDueDate(updatedRow.next_due, updatedRow.status),
+                  occupied: computeStatusFromDueDate(updatedRow.next_due, updatedRow.status) !== "vacant",
+                  archive_reason: updatedRow.archive_reason ?? null,
+                };
+              })
+            );
+          }
+          if (payload.eventType === "DELETE") {
+            const deletedRow = payload.old as VendorRow;
+            setRawStalls((prev) =>
+              prev.filter((stall) => stall.dbId !== Number(deletedRow.id))
+            );
+          }
+        }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "activity_logs" },
         (payload) => {
-          handleTableChange();
           if (payload.eventType === "INSERT") {
             const newLog = payload.new as ActivityLogEntry;
             setActivityLogs((current) => {
               if (activityLogIdsRef.current.has(newLog.id)) return current;
               activityLogIdsRef.current.add(newLog.id);
-              const next = [newLog, ...current].sort(
-                (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-              );
+              const next = [newLog, ...current];
               saveOfflineCache(ACTIVITY_LOGS_CACHE_KEY, next);
               return next;
             });
             setActivityUpdatedAt(Date.now());
-            if (user.user_metadata?.role === "admin" && currentPage === "activity") {
+            if (user?.user_metadata?.role === "admin" && currentPage === "activity") {
               toast({ title: "New activity", description: newLog.details || newLog.action });
             }
           }
@@ -685,12 +751,12 @@ const Index = () => {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "pending_stall_creations" },
-        handleTableChange
+        () => debouncedRefresh()
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "pending_archives" },
-        handleTableChange
+        () => debouncedRefresh()
       )
       .subscribe((status) => {
         setRealtimeStatus(status);
