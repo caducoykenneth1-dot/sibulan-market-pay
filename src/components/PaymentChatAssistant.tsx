@@ -5,6 +5,7 @@ import {
   type CollectorInfo,
   type RecentTransaction,
 } from "@/data/dashboardStats";
+import { supabase } from "@/lib/supabaseClient";
 import { type StallRecord } from "@/data/stalls";
 import { type Invoice } from "./UnpaidDues";
 import "./PaymentChatAssistant.css";
@@ -66,6 +67,7 @@ interface PaymentChatAssistantProps {
   stalls?: StallRecord[];
   variant?: "page" | "panel";
   onRequestRefresh?: () => void;
+  isOnline?: boolean;
 }
 
 interface ChatMessageItem {
@@ -76,6 +78,17 @@ interface ChatMessageItem {
   confirmQuery?: ChatQuery;
   examples?: string[];
 }
+
+type EdgeAssistantResponse = {
+  reply?: string;
+  message?: string;
+  fallback?: boolean;
+};
+
+type EdgeAssistantHistoryItem = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 type ResponseKey =
   | "greeting"
@@ -133,6 +146,59 @@ type ResponseKey =
 type ResponseTemplateSet = Record<ResponseKey, string>;
 
 const CHAT_LANGUAGE_KEY = "chat_language";
+const CHAT_ASSISTANT_URL =
+  "https://idokfqcmophowhtdjymi.supabase.co/functions/v1/chat-assistant";
+
+const detectLanguageSwitch = (text: string): Language | null => {
+  const lower = text.toLowerCase().trim();
+  const englishTriggers = [
+    "speak english",
+    "english please",
+    "mag english",
+    "english na",
+    "in english",
+    "english only",
+    "use english",
+    "talk english",
+  ];
+  const bisayaTriggers = [
+    "speak bisaya",
+    "bisaya lang",
+    "mag bisaya",
+    "bisaya please",
+    "in bisaya",
+    "bisaya na",
+    "use bisaya",
+    "talk bisaya",
+    "mag cebuano",
+    "cebuano please",
+    "speak cebuano",
+  ];
+  const tagalogTriggers = [
+    "speak tagalog",
+    "tagalog please",
+    "mag tagalog",
+    "tagalog lang",
+    "in tagalog",
+    "tagalog na",
+    "use tagalog",
+    "talk tagalog",
+    "mag filipino",
+    "filipino please",
+    "speak filipino",
+  ];
+
+  if (englishTriggers.some((trigger) => lower.includes(trigger))) return "en";
+  if (bisayaTriggers.some((trigger) => lower.includes(trigger))) return "bsy";
+  if (tagalogTriggers.some((trigger) => lower.includes(trigger))) return "tgl";
+  return null;
+};
+
+const getLanguageSwitchConfirmation = (nextLanguage: Language) => {
+  if (nextLanguage === "bsy") return "Okay, mag-Bisaya na ko!";
+  if (nextLanguage === "tgl") return "Sige, magta-Tagalog na ako mula ngayon!";
+  return "Got it! I'll speak English from now on.";
+};
 
 const responses: Record<Language, ResponseTemplateSet> = {
   en: {
@@ -925,6 +991,63 @@ const formatRecentTransactionLine = (transaction: RecentTransaction) =>
     transaction.paidAt ? ` on ${transaction.paidAt}` : ""
   }`;
 
+const fetchEdgeAssistantResponse = async (
+  message: string,
+  stats: DashboardStats,
+  language: Language,
+  history: EdgeAssistantHistoryItem[]
+): Promise<string> => {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) {
+    console.warn("Missing Supabase auth token. Using scripted assistant fallback.");
+    throw new Error("Missing Supabase auth token.");
+  }
+
+  const role = stats.role?.toLowerCase() === "admin" ? "admin" : "collector";
+  const userId = stats.collectorId ?? "";
+  if (!userId) {
+    console.warn("Missing user id for chat assistant request. Using scripted assistant fallback.");
+    throw new Error("Missing user id.");
+  }
+
+  const response = await fetch(CHAT_ASSISTANT_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      message,
+      history: history.slice(-5),
+      role,
+      full_name: stats.collectorName ?? "Unknown user",
+      market_section: role === "admin" ? "all" : stats.collectorSection ?? "unassigned",
+      user_id: userId,
+      language,
+    }),
+  });
+
+  let responseBody: EdgeAssistantResponse | null = null;
+  try {
+    responseBody = (await response.json()) as EdgeAssistantResponse;
+  } catch {
+    responseBody = null;
+  }
+
+  if (!response.ok) {
+    console.warn("Chat assistant function failed", response.status, responseBody);
+    throw new Error("Chat assistant request failed.");
+  }
+
+  if (responseBody?.fallback || !responseBody?.reply) {
+    console.warn("Chat assistant requested scripted fallback", responseBody?.message);
+    throw new Error("Chat assistant fallback requested.");
+  }
+
+  return responseBody.reply.trim();
+};
+
 const getHelpResponse = (stats: DashboardStats, language: Language) => {
   const examples = roleExamples(stats);
   return joinParagraphs(
@@ -1177,6 +1300,7 @@ export const PaymentChatAssistant = ({
   stalls = [],
   variant = "panel",
   onRequestRefresh,
+  isOnline,
 }: PaymentChatAssistantProps) => {
   const [language, setLanguage] = useState<Language>(() => {
     if (typeof localStorage === "undefined") return "en";
@@ -1191,6 +1315,11 @@ export const PaymentChatAssistant = ({
   const [inputValue, setInputValue] = useState("");
   const [context, setContext] = useState<ChatQuery | null>(null);
   const [isTyping, setIsTyping] = useState(false);
+  const [isUsingBasicAssistant, setIsUsingBasicAssistant] = useState(() =>
+    isOnline === undefined
+      ? typeof navigator !== "undefined" && !navigator.onLine
+      : !isOnline
+  );
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [navOffset, setNavOffset] = useState(0);
   const [composerHeight, setComposerHeight] = useState(0);
@@ -1223,10 +1352,17 @@ export const PaymentChatAssistant = ({
   const quickSuggestions = roleExamples(systemStats);
   const staleMinutes = Math.floor((nowTick - lastDataUpdatedAt.getTime()) / 60000);
   const isDataStale = staleMinutes >= 5;
+  const effectiveIsOnline =
+    isOnline ?? (typeof navigator === "undefined" ? true : navigator.onLine);
+  const assistantMode = effectiveIsOnline && !isUsingBasicAssistant ? "ai" : "basic";
 
   useEffect(() => {
     localStorage.setItem(CHAT_LANGUAGE_KEY, language);
   }, [language]);
+
+  useEffect(() => {
+    setIsUsingBasicAssistant(!effectiveIsOnline);
+  }, [effectiveIsOnline]);
 
   useEffect(() => {
     if (hasMountedDataRef.current) {
@@ -1263,30 +1399,36 @@ export const PaymentChatAssistant = ({
     setMessages((current) => [...current, createBotMessage(text, extra)]);
   };
 
-  const runQuery = (query: ChatQuery) => {
+  const runQuery = (query: ChatQuery, responseLanguage: Language = language) => {
     if (query.intent === "payment" && query.paymentIntent) {
       if (!isAuthorized(query, systemStats)) {
         setContext(null);
-        return unauthorizedMessage(systemStats, language);
+        return unauthorizedMessage(systemStats, responseLanguage);
       }
       if (!hasRequiredStats(query.paymentIntent, systemStats)) {
         onRequestRefresh?.();
-        return missingStatsResponse(language);
+        return missingStatsResponse(responseLanguage);
       }
       const result = filterRecords(query, records);
       setContext(query);
-      return getPaymentResponse(result, systemStats, result.records, language, stalls);
+      return getPaymentResponse(result, systemStats, result.records, responseLanguage, stalls);
     }
     if (query.intent === "social" && query.socialIntent) {
       setContext(null);
-      return getSocialResponse(query.socialIntent, systemStats, language);
+      return getSocialResponse(query.socialIntent, systemStats, responseLanguage);
     }
-    return getUnknownResponse(query.text, systemStats, language);
+    return getUnknownResponse(query.text, systemStats, responseLanguage);
   };
 
-  const handleSendMessage = (text: string, forcedQuery?: ChatQuery) => {
+  const handleSendMessage = async (text: string, forcedQuery?: ChatQuery) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    const switchedLanguage = detectLanguageSwitch(trimmed);
+    const activeLanguage = switchedLanguage ?? language;
+    if (switchedLanguage) {
+      setLanguage(switchedLanguage);
+      localStorage.setItem(CHAT_LANGUAGE_KEY, switchedLanguage);
+    }
 
     const userMessage: ChatMessageItem = {
       id: createMessageId(),
@@ -1296,22 +1438,52 @@ export const PaymentChatAssistant = ({
     };
 
     inputRef.current?.blur();
-    const parsed = forcedQuery ?? mergeWithContext(parseQuery(trimmed), context);
+    const edgeHistory: EdgeAssistantHistoryItem[] = messages.slice(-5).map((message) => ({
+      role: message.sender === "user" ? "user" : "assistant",
+      content: message.text,
+    }));
     setMessages((current) => [...current, userMessage]);
     setInputValue("");
 
-    if (parsed.intent === "payment" && parsed.confidence === "low" && parsed.paymentIntent && !forcedQuery) {
-      addBotMessage(getResponse("didYouMean", language, { command: PAYMENT_INTENTS[parsed.paymentIntent].label }), {
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    setIsTyping(true);
+
+    if (effectiveIsOnline) {
+      try {
+        const assistantText = await fetchEdgeAssistantResponse(
+          trimmed,
+          systemStats,
+          activeLanguage,
+          edgeHistory
+        );
+        setContext(null);
+        setIsUsingBasicAssistant(false);
+        addBotMessage(assistantText);
+        setIsTyping(false);
+        return;
+      } catch {
+        setIsUsingBasicAssistant(true);
+      }
+    }
+
+    const parsed = forcedQuery ?? mergeWithContext(parseQuery(trimmed), context);
+    if (
+      parsed.intent === "payment" &&
+      parsed.confidence === "low" &&
+      parsed.paymentIntent &&
+      !forcedQuery &&
+      !switchedLanguage
+    ) {
+      addBotMessage(getResponse("didYouMean", activeLanguage, { command: PAYMENT_INTENTS[parsed.paymentIntent].label }), {
         confirmQuery: { ...parsed, confidence: "high" },
       });
+      setIsTyping(false);
       return;
     }
 
-    const botText = runQuery(parsed);
-    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    setIsTyping(true);
+    const botText = switchedLanguage ? getLanguageSwitchConfirmation(activeLanguage) : runQuery(parsed, activeLanguage);
     const delay = Math.min(1500, botText.length < 120 ? 450 + botText.length * 2 : 800 + botText.length * 2);
-    typingTimerRef.current = setTimeout(() => {
+    typingTimerRef.current = window.setTimeout(() => {
       addBotMessage(botText, parsed.paymentIntent === "help" ? { examples: roleExamples(systemStats) } : undefined);
       setIsTyping(false);
       typingTimerRef.current = null;
@@ -1412,8 +1584,23 @@ export const PaymentChatAssistant = ({
     >
       {!isPageVariant && (
         <div className="mb-4">
-          <h2 className="text-lg font-semibold">SMP AI Agent</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">SMP AI Agent</h2>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+              <span className={`h-2 w-2 rounded-full ${assistantMode === "ai" ? "bg-emerald-500" : "bg-slate-400"}`} />
+              {assistantMode === "ai" ? "AI" : "Basic"}
+            </span>
+          </div>
           <p className="text-sm text-muted-foreground">Ask for payment totals, unpaid records, or type "help".</p>
+        </div>
+      )}
+
+      {isPageVariant && (
+        <div className="mb-3 flex justify-end">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+            <span className={`h-2 w-2 rounded-full ${assistantMode === "ai" ? "bg-emerald-500" : "bg-slate-400"}`} />
+            {assistantMode === "ai" ? "AI" : "Basic"}
+          </span>
         </div>
       )}
 
@@ -1423,7 +1610,7 @@ export const PaymentChatAssistant = ({
             key={lang}
             type="button"
             onClick={() => setLanguage(lang)}
-            className={`min-h-9 rounded-full px-3 text-xs font-semibold transition ${
+            className={`min-h-11 min-w-11 rounded-full px-3 text-xs font-semibold transition ${
               language === lang
                 ? "bg-primary text-white"
                 : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
@@ -1438,6 +1625,12 @@ export const PaymentChatAssistant = ({
       {isDataStale && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           {getResponse("staleData", language, { time: formatRelativeMinutes(lastDataUpdatedAt) })}
+        </div>
+      )}
+
+      {!effectiveIsOnline && (
+        <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          Using basic assistant — you are offline
         </div>
       )}
 
