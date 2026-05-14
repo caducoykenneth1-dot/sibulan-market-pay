@@ -33,6 +33,7 @@ type InvoiceRow = {
   status?: string | null;
   paid_at?: string | null;
   collector_name?: string | null;
+  collector_id?: string | null;
 };
 
 type VendorRow = {
@@ -125,15 +126,6 @@ const formatDate = (value: string | null | undefined) => value?.split("T")[0] ??
 
 const estimateTokens = (text: string) => Math.floor(text.length / 4);
 
-const isSameMonth = (dateValue: string, reference: Date) => {
-  const date = new Date(dateValue);
-  return (
-    !Number.isNaN(date.getTime()) &&
-    date.getFullYear() === reference.getFullYear() &&
-    date.getMonth() === reference.getMonth()
-  );
-};
-
 const filterVendorsForSection = (vendors: VendorRow[], role: string, section: string) => {
   if (role !== "collector" || section === "all") return vendors;
   return vendors.filter((vendor) => {
@@ -143,14 +135,12 @@ const filterVendorsForSection = (vendors: VendorRow[], role: string, section: st
   });
 };
 
-const calculateStats = (invoices: InvoiceRow[], vendors: VendorRow[]) => {
-  const today = new Date();
-  const todayKey = today.toISOString().split("T")[0];
+const calculateStats = (invoices: InvoiceRow[], vendors: VendorRow[], request: ChatRequest) => {
+  const todayKey = new Date().toISOString().split("T")[0];
+  const thisMonthKey = new Date().toISOString().slice(0, 7);
   const paid = invoices.filter((invoice) => invoice.status === "paid");
   const paidToday = paid.filter((invoice) => invoice.paid_at?.startsWith(todayKey));
-  const paidThisMonth = paid.filter((invoice) =>
-    invoice.paid_at ? isSameMonth(invoice.paid_at, today) : false
-  );
+  const paidThisMonth = paid.filter((invoice) => invoice.paid_at?.startsWith(thisMonthKey));
 
   const collectorTotals = new Map<string, number>();
   paidToday.forEach((invoice) => {
@@ -160,7 +150,12 @@ const calculateStats = (invoices: InvoiceRow[], vendors: VendorRow[]) => {
 
   const topCollector = Array.from(collectorTotals.entries())
     .sort((a, b) => b[1] - a[1])
-    .map(([name, amount]) => `${name} (${formatPeso(amount)})`)[0] ?? "None";
+    .map(([name, amount]) => `${name} - PHP ${formatPeso(amount)}`)[0] ?? "None";
+
+  const myInvoices =
+    request.role === "collector"
+      ? invoices.filter((invoice) => invoice.collector_id === request.user_id)
+      : [];
 
   return {
     totalToday: paidToday.reduce((sum, invoice) => sum + toNumber(invoice.amount), 0),
@@ -171,6 +166,16 @@ const calculateStats = (invoices: InvoiceRow[], vendors: VendorRow[]) => {
     totalStalls: vendors.length,
     vacantStalls: vendors.filter((vendor) => vendor.status === "vacant").length,
     topCollector,
+    myTotalToday:
+      request.role === "collector"
+        ? myInvoices
+            .filter((invoice) => invoice.status === "paid" && invoice.paid_at?.startsWith(todayKey))
+            .reduce((sum, invoice) => sum + toNumber(invoice.amount), 0)
+        : null,
+    myUnpaidCount:
+      request.role === "collector"
+        ? myInvoices.filter((invoice) => invoice.status !== "paid").length
+        : null,
   };
 };
 
@@ -198,21 +203,54 @@ const formatVendorLines = (vendors: VendorRow[]) =>
         .join("\n")
     : "- none";
 
+const fetchAllInvoicesForStats = async (supabaseAdmin: ReturnType<typeof createClient>) => {
+  const pageSize = 1000;
+  const invoices: InvoiceRow[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabaseAdmin
+      .from("invoices")
+      .select(
+        "id, vendor_name, stall_name, amount, status, paid_at, due_date, collector_name, collector_id"
+      )
+      .range(from, to);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const page = (data ?? []) as InvoiceRow[];
+    invoices.push(...page);
+
+    if (page.length < pageSize) {
+      return { data: invoices, error: null };
+    }
+  }
+};
+
 const buildSystemPrompt = (
   request: ChatRequest,
-  invoices: InvoiceRow[],
+  allInvoices: InvoiceRow[],
+  recentInvoices: InvoiceRow[],
   vendors: VendorRow[],
-  invoiceLimit = 30,
+  invoiceLimit = 20,
   vendorLimit = 20
 ) => {
-  const stats = calculateStats(invoices, vendors);
+  const stats = calculateStats(allInvoices, vendors, request);
   const date = new Date().toLocaleDateString("en-PH", {
     year: "numeric",
     month: "long",
     day: "numeric",
   });
-  const invoiceLines = formatInvoiceLines(invoices.slice(0, invoiceLimit));
+  const invoiceLines = formatInvoiceLines(recentInvoices.slice(0, invoiceLimit));
   const vendorLines = formatVendorLines(vendors.slice(0, vendorLimit));
+  const collectorStats =
+    request.role === "collector"
+      ? `- Your total today: PHP ${formatPeso(stats.myTotalToday ?? 0)}
+- Your unpaid assigned: ${stats.myUnpaidCount ?? 0}
+`
+      : "";
 
   return `You are the Sibulan Market Pay assistant.
 
@@ -225,20 +263,24 @@ LANGUAGE: ${request.language} (${languageLabel(request.language)}).
 - bsy: reply only in Bisaya/Cebuano.
 - tgl: reply only in Tagalog/Filipino.
 
-STATS:
-- Today: PHP ${formatPeso(stats.totalToday)}
-- This month: PHP ${formatPeso(stats.totalMonth)}
-- Paid: ${stats.paidCount}
-- Unpaid: ${stats.unpaidCount}
-- Overdue: ${stats.overdueCount}
+ACCURATE PRE-CALCULATED STATS (use these numbers - they are 100% correct):
+- Total collected today: PHP ${formatPeso(stats.totalToday)}
+- Total collected this month: PHP ${formatPeso(stats.totalMonth)}
+- Paid invoices: ${stats.paidCount}
+- Unpaid invoices: ${stats.unpaidCount}
+- Overdue invoices: ${stats.overdueCount}
 - Vacant stalls: ${stats.vacantStalls}
 - Top collector today: ${stats.topCollector}
+${collectorStats}
 
-RECENT INVOICES:
+RECENT ${invoiceLimit} INVOICES FOR CONTEXT (sample only - not complete):
 ${invoiceLines}
 
-ACTIVE VENDORS:
+ACTIVE VENDORS FOR STALL STATUS CONTEXT (limited sample):
 ${vendorLines}
+
+IMPORTANT: Always use the pre-calculated stats above for any total or count questions.
+Never calculate totals yourself from the sample invoices - they are incomplete.
 
 RULES: Answer only market payment questions. Use only the data above; never invent numbers. If collector, answer only for section ${request.market_section}. Keep it concise. Format money as PHP X,XXX.XX.`;
 
@@ -341,34 +383,40 @@ serve(async (req: Request) => {
       return jsonResponse({ message: "User mismatch", fallback: true }, 403);
     }
 
-    const [{ data: invoiceData, error: invoiceError }, { data: vendorData, error: vendorError }] =
-      await Promise.all([
-        supabaseAdmin
-          .from("invoices")
-          .select(
-            "id, vendor_name, stall_name, amount, status, paid_at, due_date, collector_name"
-          )
-          .order("created_at", { ascending: false })
-          .limit(30),
-        supabaseAdmin
-          .from("vendors")
-          .select(
-            "id, vendor, type, status, next_due, monthly_rent"
-          )
-          .neq("status", "archived")
-          .limit(20),
-      ]);
+    const [
+      allInvoicesResult,
+      { data: recentInvoiceData, error: recentInvoiceError },
+      { data: vendorData, error: vendorError },
+    ] = await Promise.all([
+      fetchAllInvoicesForStats(supabaseAdmin),
+      supabaseAdmin
+        .from("invoices")
+        .select(
+          "id, vendor_name, stall_name, amount, status, paid_at, due_date, collector_name"
+        )
+        .order("created_at", { ascending: false })
+        .limit(20),
+      supabaseAdmin
+        .from("vendors")
+        .select(
+          "id, vendor, type, status, next_due, monthly_rent"
+        )
+        .neq("status", "archived")
+        .limit(20),
+    ]);
 
-    if (invoiceError || vendorError) {
-      console.error("Database query failed", { invoiceError, vendorError });
+    const { data: allInvoiceData, error: allInvoiceError } = allInvoicesResult;
+
+    if (allInvoiceError || recentInvoiceError || vendorError) {
+      console.error("Database query failed", { allInvoiceError, recentInvoiceError, vendorError });
       return jsonResponse({
         message: "Unable to load live data",
         fallback: true,
       });
     }
 
-    const allInvoices = (invoiceData ?? []) as InvoiceRow[];
-    const collectorInvoices = allInvoices;
+    const allInvoices = (allInvoiceData ?? []) as InvoiceRow[];
+    const recentInvoices = (recentInvoiceData ?? []) as InvoiceRow[];
     const visibleVendors = filterVendorsForSection(
       (vendorData ?? []) as VendorRow[],
       body.role,
@@ -386,14 +434,14 @@ serve(async (req: Request) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
     const recentHistory = body.history.slice(-3);
-    let systemPrompt = buildSystemPrompt(body, collectorInvoices, visibleVendors, 30, 20);
+    let systemPrompt = buildSystemPrompt(body, allInvoices, recentInvoices, visibleVendors, 20, 20);
     const fullPrompt = [
       systemPrompt,
       ...recentHistory.map((message) => `${message.role}: ${message.content}`),
       `user: ${body.message}`,
     ].join("\n");
     if (estimateTokens(fullPrompt) > 4500) {
-      systemPrompt = buildSystemPrompt(body, collectorInvoices, visibleVendors, 15, 10);
+      systemPrompt = buildSystemPrompt(body, allInvoices, recentInvoices, visibleVendors, 10, 10);
     }
 
     const groqMessages: GroqMessage[] = [
